@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+BACKEND_DIR = ROOT_DIR / "backend"
+FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
+
+load_dotenv(ROOT_DIR / ".env")
+load_dotenv(BACKEND_DIR / ".env")
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+@dataclass(frozen=True)
+class Settings:
+    openai_api_key: str = _env("OPENAI_API_KEY")
+    band_user_api_key: str = _env("BAND_USER_API_KEY")
+    master_agent_name: str = _env("MASTER_AGENT_NAME", "Master")
+    band_rest_url: str = _env("BAND_REST_URL", "https://app.band.ai")
+    band_ws_url: str = _env("BAND_WS_URL", "wss://app.band.ai/api/v1/socket/websocket")
+    app_secret: str = _env("APP_SECRET", "dev-secret-change-me")
+    database_url: str = _env("DATABASE_URL", f"sqlite:///{(BACKEND_DIR / 'band_slack.db').as_posix()}")
+    default_model: str = _env("DEFAULT_MODEL", "gpt-6-luna")
+    documents_path: str = _env("DOCUMENTS_PATH", str(BACKEND_DIR / "documents"))
+    checkpoint_path: str = _env("AGENT_CHECKPOINT_PATH", str(BACKEND_DIR / "agent_checkpoints.db"))
+    task_timeout: float = float(_env("AGENT_TASK_TIMEOUT", "900"))
+    task_recursion_limit: int = int(_env("AGENT_RECURSION_LIMIT", "100"))
+    worker_concurrency: int = max(1, int(_env("WORKER_CONCURRENCY", "4")))
+    default_timezone: str = _env("DEFAULT_TIMEZONE", "UTC")
+    mcp_config_path: str = _env("MCP_CONFIG_PATH", str(BACKEND_DIR / "mcp_servers.json"))
+    max_agent_teammates: int = int(_env("MAX_AGENT_TEAMMATES", "10"))
+    fast_code_execution: bool = _env("FAST_CODE_EXECUTION", "on").lower() not in ("0", "off", "false", "no")
+    exa_api_key: str = _env("EXA_API_KEY")
+    composio_api_key: str = _env("COMPOSIO_API_KEY")
+    e2b_api_key: str = _env("E2B_API_KEY")
+    e2b_template: str = _env("E2B_DESKTOP_TEMPLATE", "desktop")
+    e2b_timeout: int = max(60, min(3600, int(_env("E2B_TIMEOUT_SECONDS", "1200"))))
+    app_preview_base_url: str = _env("APP_PREVIEW_BASE_URL", "http://localhost:8000")
+    poll_seconds: float = float(_env("BAND_POLL_SECONDS", "5"))
+    # JSON of USD per million tokens. Empty means prices are unknown, never free.
+    model_prices: str = _env("MODEL_PRICES")
+
+
+settings = Settings()
+
+MODELS = [
+    {"id": "gpt-6-astra", "label": "GPT-6 Astra"},
+    {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol"},
+    {"id": "gpt-6-luna", "label": "GPT-6 Luna"},
+]

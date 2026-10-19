@@ -1,0 +1,41 @@
+[project]
+name = "band-bots-backend"
+version = "0.1.0"
+description = "A shared workspace for people and persistent AI teammates, powered by Band"
+requires-python = ">=3.12"
+dependencies = [
+    "band-sdk>=5.1.0",
+    "bcrypt>=5.0.0",
+    "cryptography>=50.0.2",
+    "deepagents>=0.7.26",
+    "e2b>=2.56.0",
+    "fastapi>=0.143.1",
+    "httpx>=0.28.1",
+    "itsdangerous>=2.2.0",
+    "jsonschema>=4.26.0",
+    "langchain>=1.4.6",
+    "langchain-core>=1.6.11",
+    "langchain-mcp-adapters>=0.3.2",
+    "langchain-openai>=1.7.2",
+    "langgraph>=1.2.15",
+    "langgraph-checkpoint-sqlite>=3.1.2",
+    "openai>=3.35.1",
+    "openpyxl>=3.1.5",
+    "pillow>=12.0.0",
+    "pypdfium2>=5.14.0",
+    "python-docx>=1.2.0",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "sqlmodel>=0.0.48",
+    "tzdata>=2026.5",
+    "uvicorn[standard]>=0.54.0",
+    "websockets>=15.0.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

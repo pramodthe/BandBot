@@ -1,0 +1,17 @@
+{
+  "servers": {
+    "github": {
+      "transport": "streamable_http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"},
+      "approval": "writes",
+      "agents": ["Master", "Coder"]
+    },
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${MCP_SHARED_DIR}"],
+      "approval": "writes"
+    }
+  }
+}

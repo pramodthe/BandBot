@@ -1,0 +1,22 @@
+{
+  "CodeDiff": { "filename": "example.py", "additions": 1, "deletions": 0, "lines": [{ "kind": "added", "text": "print('Example')" }] },
+  "FileTree": { "nodes": [{ "path": "example.py", "name": "example.py", "depth": 0, "kind": "file", "additions": 1 }], "totalAdditions": 1, "totalDeletions": 0 },
+  "LinkPreview": { "href": "https://example.com", "title": "Example source", "description": "Offline fixture" },
+  "ImageGallery": { "images": [{ "id": "image-1", "src": "https://example.com/fixture.png", "alt": "Offline fixture image", "caption": "Example image" }] },
+  "DocumentReference": { "title": "Example document", "pages": 2, "anchors": [{ "page": 1, "quote": "First observation" }, { "page": 2, "quote": "Second observation" }] },
+  "ResearchReport": { "title": "Example research", "sections": [{ "id": "section-1", "heading": "Evidence", "state": "done", "sources": 1, "preview": "Example finding" }], "sourcesRead": 1 },
+  "ComparisonCard": { "traitLabels": ["Offline"], "options": [{ "id": "a", "name": "Option A", "headline": "Local", "traits": ["Supported"] }, { "id": "b", "name": "Option B", "headline": "Remote", "traits": [false] }], "recommendedId": "a", "reason": "Example comparison" },
+  "TodoList": { "title": "Example checklist", "items": [{ "id": "todo-1", "text": "Review evidence", "status": "done" }] },
+  "FlowGraph": { "nodes": [{ "id": "read", "label": "Read", "column": 0, "row": 0, "state": "done" }, { "id": "write", "label": "Write", "column": 1, "row": 0, "state": "pending" }], "edges": [{ "from": "read", "to": "write" }] },
+  "NumberTicker": { "value": 12, "label": "Sources reviewed" },
+  "AudioPlayer": { "src": "https://example.com/fixture.mp3", "title": "Example audio" },
+  "VideoPlayer": { "src": "https://example.com/fixture.mp4", "title": "Example video" },
+  "MathBlock": { "label": "Example calculation", "steps": [{ "expression": "2 + 2 = 4", "note": "Verified arithmetic" }] },
+  "TerminalBlock": { "command": "example-command", "lines": ["Example output"], "done": true, "exitCode": 0 },
+  "EventTimeline": { "events": [{ "id": "event-1", "when": "past", "time": "09:00", "title": "Review completed" }] },
+  "ScoreBreakdown": { "verdict": "Example score", "total": 8, "outOf": 10, "criteria": [{ "label": "Evidence", "score": 8, "weight": 1 }] },
+  "AgentPlan": { "title": "Example plan", "steps": ["Read", "Compare", "Report"], "activeIndex": 1 },
+  "RetrievalChunks": { "query": "Example evidence", "chunks": [{ "id": "chunk-1", "source": "Example document", "locator": "Page 1", "score": 0.9, "text": "Example passage" }], "searching": false },
+  "WebSearch": { "query": "Example research", "results": [{ "title": "Example source", "domain": "example.com" }], "searching": false },
+  "ActivityGraph": { "data": [{ "date": "2026-10-18", "count": 2 }], "start": "2026-10-01", "end": "2026-10-19", "title": "Example activity", "total": "2 runs" }
+}

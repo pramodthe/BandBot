@@ -1,0 +1,2521 @@
+{
+  "package": "@assistant-ui/generative-ui",
+  "version": "0.0.5",
+  "components": {
+    "Header": {
+      "description": "A section heading. Renders as a bold title.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "description": "The heading text or number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "size": {
+            "description": "Heading size; defaults to `lg`.",
+            "type": "string",
+            "enum": [
+              "sm",
+              "md",
+              "lg",
+              "xl",
+              "2xl",
+              "3xl"
+            ]
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Text": {
+      "description": "A run of text. Use for paragraphs, labels, or inline copy.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The text or number to display.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "size": {
+            "description": "Text size; defaults to `md`.",
+            "type": "string",
+            "enum": [
+              "sm",
+              "md",
+              "lg",
+              "xl",
+              "2xl",
+              "3xl"
+            ]
+          },
+          "weight": {
+            "description": "Font weight.",
+            "type": "string",
+            "enum": [
+              "normal",
+              "medium",
+              "semibold",
+              "bold"
+            ]
+          },
+          "color": {
+            "description": "Foreground color token.",
+            "type": "string",
+            "enum": [
+              "emphasis",
+              "secondary",
+              "alpha-70",
+              "white",
+              "white-70",
+              "white-50"
+            ]
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Caption": {
+      "description": "Secondary, de-emphasized text under a primary element.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The caption text or number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Image": {
+      "description": "An image. Provide `src` and `alt` for accessibility. Put several images in a `Row` for a gallery, or a `sm` image beside text for a thumbnail.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "string",
+            "description": "Image URL, taken from a tool result or the user; never invent one."
+          },
+          "alt": {
+            "type": "string",
+            "description": "Alt text for accessibility."
+          },
+          "size": {
+            "description": "Size token or pixel value.",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sm",
+                  "md",
+                  "lg"
+                ]
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "round": {
+            "description": "Render as a circular avatar (fully rounded, cropped to a square).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "src",
+          "alt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Divider": {
+      "description": "A horizontal rule between sections.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "flush": {
+            "description": "Whether the divider spans the full width with no inset.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Diagram": {
+      "description": "A diagram drawn from Mermaid source, such as a flowchart, a sequence of messages, or the states of a process. Keep it small and label the nodes in plain words.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Mermaid source, such as `flowchart LR` followed by `A[Order] --> B[Ship]`."
+          },
+          "title": {
+            "description": "A caption for the diagram, as text or a number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Map": {
+      "description": "Places on a map, such as the stops of a trip or locations to compare, with an optional route through them in order.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "places": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "The place's name."
+                },
+                "lat": {
+                  "type": "number",
+                  "description": "Latitude in degrees."
+                },
+                "lng": {
+                  "type": "number",
+                  "description": "Longitude in degrees."
+                },
+                "detail": {
+                  "description": "A short note about the place.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "lat",
+                "lng"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The places, in order."
+          },
+          "route": {
+            "description": "Draw a line through the places in order.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "places"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Fact": {
+      "description": "A label/value pair, rendered as a key followed by its value. Use for compact metadata, and put an answer's key figures side by side in a `Row`.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "description": "The fact label (key) as text or a number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "value": {
+            "description": "The fact value as text or a number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "delta": {
+            "description": "Change from before.",
+            "type": "string"
+          },
+          "trend": {
+            "description": "Change direction.",
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ]
+          },
+          "upIsGood": {
+            "description": "Whether up is good.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Button": {
+      "description": "A clickable button. Carries `_action` describing the side effect or resume value. Set `submit` to submit an ancestor Form/Card instead of firing `_action` on click.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "description": "Button label text or number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "buttonStyle": {
+            "description": "Visual style.",
+            "type": "string",
+            "enum": [
+              "primary",
+              "secondary",
+              "outline",
+              "ghost",
+              "danger"
+            ]
+          },
+          "block": {
+            "description": "Whether the button spans the full width.",
+            "type": "boolean"
+          },
+          "submit": {
+            "description": "Render as a submit button for an ancestor Form/Card instead of a click button.",
+            "type": "boolean"
+          },
+          "undoable": {
+            "description": "Delay the action with an undo control, for sends and other hard-to-reverse actions.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Select": {
+      "description": "A dropdown selector. Carries `_action` describing the on-select behavior.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Selectable options."
+          },
+          "placeholder": {
+            "description": "Placeholder text or number shown when nothing is selected.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "label": {
+            "description": "Accessible label for the control.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Field name used inside a Form.",
+            "type": "string"
+          },
+          "defaultValue": {
+            "description": "Initially selected value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Input": {
+      "description": "A text input. Carries `_action` describing the on-submit behavior.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "inputType": {
+            "description": "Single-line input type. Values remain strings.",
+            "type": "string",
+            "enum": [
+              "text",
+              "password",
+              "number"
+            ]
+          },
+          "placeholder": {
+            "description": "Placeholder text.",
+            "type": "string"
+          },
+          "multiline": {
+            "description": "Render a textarea instead of a single-line input; ignored when `inputType` is `\"password\"` or `\"number\"`.",
+            "type": "boolean"
+          },
+          "label": {
+            "description": "Accessible label for the control.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Field name used inside a Form.",
+            "type": "string"
+          },
+          "defaultValue": {
+            "description": "Initial text.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "DatePicker": {
+      "description": "A date, datetime, or time input. Carries `_action`, which runs once per committed value: a pick from the picker, or a typed value on blur or Enter.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "inputType": {
+            "description": "Temporal input type. Defaults to \"date\". Values remain strings.",
+            "type": "string",
+            "enum": [
+              "date",
+              "datetime",
+              "time"
+            ]
+          },
+          "value": {
+            "description": "Initial value: YYYY-MM-DD for date, HH:mm or HH:mm:ss with optional fraction of at most 9 digits for time, YYYY-MM-DDTHH:mm with optional :ss and fraction of at most 9 digits for datetime. A datetime with Z or ±HH:mm is an instant, displayed in the viewer's time zone and submitted with the same offset and precision. A datetime without an offset is local and submitted unchanged. An empty datetime submits with the viewer's offset and seconds.",
+            "type": "string"
+          },
+          "min": {
+            "description": "Minimum value: YYYY-MM-DD for date, HH:mm or HH:mm:ss with optional fraction of at most 9 digits for time, YYYY-MM-DDTHH:mm with optional :ss and fraction of at most 9 digits for datetime. Datetimes with Z or ±HH:mm are converted to the viewer's time zone.",
+            "type": "string"
+          },
+          "max": {
+            "description": "Maximum value: YYYY-MM-DD for date, HH:mm or HH:mm:ss with optional fraction of at most 9 digits for time, YYYY-MM-DDTHH:mm with optional :ss and fraction of at most 9 digits for datetime. Datetimes with Z or ±HH:mm are converted to the viewer's time zone.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Accessible label for the control.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Field name used inside a Form.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Checkbox": {
+      "description": "A checkbox with a label. Carries `_action` describing the on-change behavior.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "description": "Label text or number next to the checkbox.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "name": {
+            "description": "Field name used inside a Form.",
+            "type": "string"
+          },
+          "defaultChecked": {
+            "description": "Whether the checkbox starts checked.",
+            "type": "boolean"
+          },
+          "variant": {
+            "description": "Whether to render a checkbox or switch.",
+            "type": "string",
+            "enum": [
+              "checkbox",
+              "switch"
+            ]
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Slider": {
+      "description": "A numeric range control. Carries `_action` describing the committed value.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Field name used inside a Form.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Accessible label for the control.",
+            "type": "string"
+          },
+          "min": {
+            "type": "number",
+            "description": "Minimum value."
+          },
+          "max": {
+            "type": "number",
+            "description": "Maximum value."
+          },
+          "step": {
+            "description": "Value increment. Defaults to 1.",
+            "type": "number"
+          },
+          "defaultValue": {
+            "description": "Initial value.",
+            "type": "number"
+          },
+          "unit": {
+            "description": "Unit shown with the value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "RadioGroup": {
+      "description": "A group of mutually exclusive radio options. Carries `_action` describing the on-change behavior.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Selectable options."
+          },
+          "name": {
+            "description": "Field name used inside a Form.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Accessible name for the group.",
+            "type": "string"
+          },
+          "defaultValue": {
+            "description": "Initially selected value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "CheckboxGroup": {
+      "description": "A group of checkbox options where any number can be checked. Set `progress` for a checklist the user works through. Carries `_action` describing the on-change behavior.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Selectable options."
+          },
+          "name": {
+            "description": "Field name used inside a Form.",
+            "type": "string"
+          },
+          "label": {
+            "description": "Accessible name for the group.",
+            "type": "string"
+          },
+          "defaultValue": {
+            "description": "Initially checked values.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "progress": {
+            "description": "Show how many options are checked, with a progress bar.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Form": {
+      "description": "Wraps named child controls (Select/Input/Checkbox/RadioGroup/CheckboxGroup/DatePicker with a `name`). Carries `_action`; on submit it fires with every named control's value, keyed by `name`.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gap": {
+            "description": "Gap between children in 4px units. 0 to 8 is the supported range.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 8
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Card": {
+      "description": "A module the reader scans or acts on, such as a summary, a checklist, a form, or one option in a comparison. It renders as a panel, so keep plain sections (a `Header` with `Text` or `Markdown`) outside cards, and do not wrap the whole answer in one card or nest cards. It takes on a framed surface when `background` is set, when `confirm`/`cancel` add a footer, or when it is a slot in a `Carousel`. Set `asForm` to collect named child control values on submit.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "description": "Optional card title text or number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "padding": {
+            "description": "Padding in 4px units (e.g. 2 = 8px). 0 to 8 is the supported range.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 8
+          },
+          "background": {
+            "description": "Background color or gradient (any CSS background value). Setting this also switches the card's own text to white, since a custom background makes the card a tinted surface; children can still opt into a different color explicitly.",
+            "type": "string"
+          },
+          "asForm": {
+            "description": "Render as a form; submitting it fires `confirm._action`, or the Card's own `_action` when `confirm` has none, with every named child control's value keyed by `name`.",
+            "type": "boolean"
+          },
+          "confirm": {
+            "description": "Confirm button shown in the footer.",
+            "type": "object",
+            "properties": {
+              "label": {
+                "description": "Footer button label text or number.",
+                "type": [
+                  "string",
+                  "number"
+                ]
+              },
+              "_action": {
+                "description": "Action fired when the button is activated.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "The action type, resolved by the host's action registry."
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "cancel": {
+            "description": "Cancel button shown in the footer.",
+            "type": "object",
+            "properties": {
+              "label": {
+                "description": "Footer button label text or number.",
+                "type": [
+                  "string",
+                  "number"
+                ]
+              },
+              "_action": {
+                "description": "Action fired when the button is activated.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "The action type, resolved by the host's action registry."
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Col": {
+      "description": "A vertical stack; children laid out top to bottom.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gap": {
+            "description": "Gap between children in 4px units. 0 to 8 is the supported range.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 8
+          },
+          "align": {
+            "description": "Cross-axis alignment.",
+            "type": "string",
+            "enum": [
+              "start",
+              "center",
+              "end"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Row": {
+      "description": "A horizontal row; children laid out left to right.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gap": {
+            "description": "Gap between children in 4px units. 0 to 8 is the supported range.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 8
+          },
+          "align": {
+            "description": "Cross-axis alignment.",
+            "type": "string",
+            "enum": [
+              "start",
+              "center",
+              "end"
+            ]
+          },
+          "justify": {
+            "description": "Main-axis distribution.",
+            "type": "string",
+            "enum": [
+              "start",
+              "center",
+              "end",
+              "between"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Spacer": {
+      "description": "Empty space that pushes neighbors apart.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "Badge": {
+      "description": "A small labeled tag, e.g. for status or category.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Badge text or number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "variant": {
+            "description": "Visual variant token.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Box": {
+      "description": "A generic container for composition, e.g. a progress bar built from an outer track Box containing a partial-width fill Box. Size, radius, and background accept arbitrary values, so they render as inline styles rather than data-attribute hooks.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "width": {
+            "description": "Width; a number is pixels.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "height": {
+            "description": "Height; a number is pixels.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "radius": {
+            "description": "Corner radius; \"full\" is a pill/circle, a number is pixels.",
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "full"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "background": {
+            "description": "Background color or gradient (any CSS background value).",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Tabs": {
+      "description": "Panels the user switches between with tabs, one visible at a time. Use it for parallel content the user looks at one part at a time, such as options, plans, or days. Each child is one panel, usually a Col, labeled by the matching entry in `tabs`.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "tabs": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "description": "Tab labels as text or numbers, one per child panel, in order."
+          },
+          "label": {
+            "description": "Accessible name as text or a number for the row of tabs.",
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [
+          "tabs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ListView": {
+      "description": "A vertical list container. Wrap `ListViewItem` children as rows.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "ListViewItem": {
+      "description": "A row inside a ListView. Carries `_action` to make the whole row clickable and keyboard-activatable.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "Steps": {
+      "description": "Numbered steps to follow in order, such as instructions or a how-to guide. Each step has a short `title` saying what to do and an optional `detail` on how.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "description": "What to do, in a few words, as text or a number.",
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                },
+                "detail": {
+                  "description": "How to do it, or what to watch for, as text or a number.",
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The steps, in order."
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Timeline": {
+      "description": "Events in time order, each with a time or date label, such as a schedule, an itinerary, or a history.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "time": {
+                  "description": "When it happens, as the user should read it, such as `Day 1`, `6:00 pm`, or `1969`, as text or a number.",
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                },
+                "title": {
+                  "description": "What happens, as text or a number.",
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                },
+                "detail": {
+                  "description": "More about it, as text or a number.",
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                }
+              },
+              "required": [
+                "time",
+                "title"
+              ],
+              "additionalProperties": false
+            },
+            "description": "The events, in time order."
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Table": {
+      "description": "Tabular data. Provide `columns` and `rows`; each row is an array of cells matching the columns.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "columns": {
+            "description": "Column definitions.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "Column header label."
+                },
+                "align": {
+                  "description": "Cell alignment.",
+                  "type": "string",
+                  "enum": [
+                    "start",
+                    "end"
+                  ]
+                },
+                "format": {
+                  "description": "Cell value format.",
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "number",
+                        "currency",
+                        "percent",
+                        "date"
+                      ],
+                      "description": "Format kind. `percent` takes a fraction, so 0.25 renders as 25%."
+                    },
+                    "currency": {
+                      "description": "Currency code.",
+                      "type": "string"
+                    },
+                    "decimals": {
+                      "description": "Decimal places.",
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "rows": {
+            "description": "Rows of cells.",
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "description": "A cell value.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            }
+          },
+          "sortable": {
+            "description": "Allow header sorting.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Markdown": {
+      "description": "A markdown string. Rendered as-is by default; override this component for a full markdown renderer.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "Markdown source."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Chart": {
+      "description": "A chart. `variant` selects bar, line, sparkline, or area rendering. Provide `data` for a single series, or `series` for multiple named series (`series` takes precedence over `data` when both are present). Set `stacked` to accumulate series values instead of overlaying them, and `showAxis`/`showLegend` to add y-axis ticks, x-axis point labels, and a legend.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "variant": {
+            "type": "string",
+            "enum": [
+              "bar",
+              "line",
+              "sparkline",
+              "area"
+            ],
+            "description": "Chart variant."
+          },
+          "data": {
+            "description": "Data points for a single series.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "Point label.",
+                  "type": "string"
+                },
+                "value": {
+                  "type": "number",
+                  "description": "Point value."
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "series": {
+            "description": "Multiple named series; takes precedence over `data` when present.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "Series label, shown in the legend.",
+                  "type": "string"
+                },
+                "color": {
+                  "description": "Series color. One of `emphasis`, `secondary`, `alpha-70`, `white`, `white-70`, or `white-50`, matching Text's `color` tokens; other values have no visual effect.",
+                  "type": "string"
+                },
+                "data": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "description": "Point label.",
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "number",
+                        "description": "Point value."
+                      }
+                    },
+                    "required": [
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Data points for this series."
+                }
+              },
+              "required": [
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "stacked": {
+            "description": "Accumulate series values instead of overlaying them (bar and area variants; ignored for line and sparkline).",
+            "type": "boolean"
+          },
+          "showAxis": {
+            "description": "Show y-axis ticks and x-axis point labels.",
+            "type": "boolean"
+          },
+          "showLegend": {
+            "description": "Show a legend mapping each series to its color.",
+            "type": "boolean"
+          },
+          "color": {
+            "description": "Series color (single-series mode only). One of `emphasis`, `secondary`, `alpha-70`, `white`, `white-70`, or `white-50`, matching Text's `color` tokens; other values have no visual effect.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "variant"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Citation": {
+      "description": "A source the answer draws on, shown as a card with its title and site that links to it. Use one per source.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "description": "The source's title as text or a number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "url": {
+            "description": "Link to the source; only http and https links open.",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where it comes from, such as a site or publication, as text or a number. Defaults to the link's domain.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "snippet": {
+            "description": "A short quote or summary of what the source says, as text or a number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Alert": {
+      "description": "A highlighted message conveying urgency. `tone` drives the severity.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "description": "Alert title text or number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "description": {
+            "description": "Supporting description text or number.",
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "tone": {
+            "description": "Severity tone; defaults to `info`.",
+            "type": "string",
+            "enum": [
+              "info",
+              "success",
+              "warning",
+              "danger"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Carousel": {
+      "description": "A horizontally scrollable group of `Card` children (max 10). Set `label` for an accessible name.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "description": "Accessible label for the carousel.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Icon": {
+      "description": "A small line icon from the built-in set. `size` controls the rendered pixel size.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "sun",
+              "moon",
+              "cloud",
+              "rain",
+              "snow",
+              "wind",
+              "play",
+              "pause",
+              "check",
+              "x",
+              "star",
+              "heart",
+              "arrow-right",
+              "arrow-up-right",
+              "chevron-right",
+              "calendar",
+              "clock",
+              "map-pin",
+              "plane",
+              "truck",
+              "credit-card",
+              "user",
+              "search",
+              "bell"
+            ],
+            "description": "Which built-in icon to render."
+          },
+          "size": {
+            "description": "Icon size; defaults to `md` (16px).",
+            "type": "string",
+            "enum": [
+              "sm",
+              "md",
+              "lg"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "CodeDiff": {
+      "description": "CodeDiff: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "additions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "deletions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "lines": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "context",
+                    "added",
+                    "removed"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "cycle": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "filename",
+          "additions",
+          "deletions",
+          "lines"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "FileTree": {
+      "description": "FileTree: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 12
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "additions": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "deletions": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "required": [
+                "path",
+                "name",
+                "depth",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "totalAdditions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "totalDeletions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "visibleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "nodes",
+          "totalAdditions",
+          "totalDeletions"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "LinkPreview": {
+      "description": "LinkPreview: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "href": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "image": {
+            "type": "string",
+            "format": "uri"
+          },
+          "imageAlt": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "siteName": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "favicon": {
+            "type": "string",
+            "format": "uri"
+          },
+          "layout": {
+            "type": "string",
+            "enum": [
+              "card",
+              "compact"
+            ]
+          }
+        },
+        "required": [
+          "href"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ImageGallery": {
+      "description": "ImageGallery: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "images": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "src": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "alt": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "caption": {
+                  "type": "string",
+                  "maxLength": 8000
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "src",
+                "alt"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "maxVisible": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "images"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "DocumentReference": {
+      "description": "DocumentReference: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "anchors": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "page": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000
+                },
+                "quote": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "page",
+                "quote"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "activePage": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "title",
+          "pages",
+          "anchors"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ResearchReport": {
+      "description": "ResearchReport: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "sections": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "heading": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "writing",
+                    "done"
+                  ]
+                },
+                "sources": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                },
+                "preview": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "id",
+                "heading",
+                "state",
+                "sources"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sourcesRead": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "title",
+          "sections",
+          "sourcesRead"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ComparisonCard": {
+      "description": "ComparisonCard: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "traitLabels": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          "options": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "headline": {
+                  "type": "string",
+                  "maxLength": 8000
+                },
+                "traits": {
+                  "maxItems": 100,
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 8000
+                      },
+                      {
+                        "type": "boolean",
+                        "const": false
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "headline",
+                "traits"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "recommendedId": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "traitLabels",
+          "options",
+          "recommendedId",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "TodoList": {
+      "description": "TodoList: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "items": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 8000
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "active",
+                    "done",
+                    "failed",
+                    "cancelled"
+                  ]
+                },
+                "description": {
+                  "type": "string",
+                  "maxLength": 8000
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "maxVisible": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "FlowGraph": {
+      "description": "FlowGraph: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "column": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 20
+                },
+                "row": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "done",
+                    "active",
+                    "pending"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "column",
+                "row",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "edges": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "to": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "visibleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "NumberTicker": {
+      "description": "NumberTicker: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "AudioPlayer": {
+      "description": "AudioPlayer: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "artwork": {
+            "type": "string",
+            "format": "uri"
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "src"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "VideoPlayer": {
+      "description": "VideoPlayer: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "poster": {
+            "type": "string",
+            "format": "uri"
+          },
+          "ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "4:3",
+              "1:1",
+              "9:16",
+              "auto"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "src"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "MathBlock": {
+      "description": "MathBlock: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "steps": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "expression": {
+                  "type": "string",
+                  "maxLength": 8000
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "expression"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "visibleSteps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "steps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "TerminalBlock": {
+      "description": "TerminalBlock: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "lines": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 8000
+            }
+          },
+          "done": {
+            "type": "boolean"
+          },
+          "exitCode": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "stderr": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 8000
+            }
+          },
+          "cwd": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "durationMs": {
+            "type": "number",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "maxCollapsedLines": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "paper",
+              "ink"
+            ]
+          },
+          "visibleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "command",
+          "lines",
+          "done"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "EventTimeline": {
+      "description": "EventTimeline: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "events": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "when": {
+                  "type": "string",
+                  "enum": [
+                    "past",
+                    "now",
+                    "future"
+                  ]
+                },
+                "time": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "title": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "detail": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "id",
+                "when",
+                "time",
+                "title"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "visibleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ScoreBreakdown": {
+      "description": "ScoreBreakdown: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "total": {
+            "type": "number",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          },
+          "outOf": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1000000000000
+          },
+          "criteria": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "score": {
+                  "type": "number",
+                  "minimum": -1000000000000,
+                  "maximum": 1000000000000
+                },
+                "weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "label",
+                "score",
+                "weight"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "visibleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "verdict",
+          "total",
+          "outOf",
+          "criteria"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "AgentPlan": {
+      "description": "AgentPlan: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "steps": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    "label": {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    "description": {
+                      "type": "string",
+                      "maxLength": 8000
+                    }
+                  },
+                  "required": [
+                    "label"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "activeIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "steps",
+          "activeIndex"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "RetrievalChunks": {
+      "description": "RetrievalChunks: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "chunks": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "source": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "locator": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "score": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 8000
+                }
+              },
+              "required": [
+                "id",
+                "source",
+                "locator",
+                "score",
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "searching": {
+            "type": "boolean"
+          },
+          "visibleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "query",
+          "chunks",
+          "searching"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "WebSearch": {
+      "description": "WebSearch: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "results": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                "domain": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              },
+              "required": [
+                "title",
+                "domain"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "searching": {
+            "type": "boolean"
+          },
+          "visibleResults": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "cycle": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "query",
+          "results",
+          "searching"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ActivityGraph": {
+      "description": "ActivityGraph: a native Elements display. Supply verified task data; this is a saved snapshot.",
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "data": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "required": [
+                "date",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "start": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "total": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "data",
+          "start",
+          "end",
+          "title",
+          "total"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

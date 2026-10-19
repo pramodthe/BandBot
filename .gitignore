@@ -1,0 +1,43 @@
+# secrets
+.env
+.env.*
+!.env.example
+.cursor/mcp.json
+backend/mcp_servers.json
+agent_config.yaml
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.db
+*.sqlite
+*.sqlite3
+
+# node
+node_modules/
+dist/
+
+# test caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.log
+
+# Agent runtime and local QA artifacts
+*.db-shm
+*.db-wal
+*.worker.lock
+output/playwright/
+playwright-report/
+test-results/
+.playwright-cli/
+backend/documents/
+/.tmp-*/
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
