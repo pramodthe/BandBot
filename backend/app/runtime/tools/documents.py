@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage
@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import documents
 from app.openai_provider import client, configuration
-from app.persistence.models import Document, DocumentCollection, TaskDocument, TaskDocumentSource, TaskModel, db
+from app.persistence.models import Document, DocumentCollection, TaskDocumentSource, TaskModel, db
 from app.tasks.usage import BudgetExceeded, over_budget, record_usage
 
 
@@ -60,40 +60,7 @@ async def save_generated_file(task, sdk, annotation, *, source_ids: tuple[str, .
     if name.startswith("cfile_"):
         kind = "image" if media.startswith("image/") else "file"
         name = f"generated-{kind}-{document_id[:8]}{Path(name).suffix.lower()}"
-    artifact = Document(id=document_id, channel_id=task.channel_id, uploaded_by=0, name=name,
-                        media_type=media, size=len(data), status="queued")
-    path = documents.path_for(artifact)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
-    created = False
-    try:
-        with db() as session:
-            authorize(session)
-            # Publish complete bytes atomically. A replay repairs files left before a metadata commit.
-            temporary.write_bytes(data)
-            temporary.replace(path)
-            created = True
-            if media.startswith("text/"):
-                artifact.units = documents.extract(artifact)
-            session.add(artifact)
-            session.add(TaskDocument(task_id=task.id, document_id=artifact.id))
-            session.add(TaskDocumentSource(task_id=task.id, document_id=artifact.id))
-            session.commit()
-    except IntegrityError:
-        # Parallel helpers can receive the same annotation. The first atomic commit owns the file.
-        with db() as session:
-            existing = session.get(Document, document_id)
-            if not existing:
-                raise
-            if existing.status in {"deleting", "deleted"}:
-                return None
-    except Exception:
-        if created:
-            path.unlink(missing_ok=True)
-        raise
-    finally:
-        temporary.unlink(missing_ok=True)
-    return {"name": name, "url": f"/api/documents/{artifact.id}/download"}
+    return documents.store_generated(task, document_id, name, media, data, authorize)
 
 
 def document_tools(task):

@@ -9,17 +9,21 @@ import logging
 import re
 import shlex
 from datetime import timedelta, timezone
-from uuid import uuid4
+from pathlib import PurePosixPath
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from e2b import NotFoundException, RateLimitException, SandboxException
+from fastapi import HTTPException
 
 from app.computer.e2b import DesktopOptions, E2BDesktopClient
 
 from sqlmodel import select
 
+from app import documents
 from app.config import settings
 from app.computer.display import display_state, record_step, update_display
-from app.persistence.models import AgentProfile, AgentTask, ComputerControl, ComputerViewLease, TaskSandbox, db, utcnow
+from app.persistence.models import (AgentProfile, AgentTask, ComputerControl, ComputerViewLease, Document, TaskSandbox,
+                                    db, utcnow)
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +385,9 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
     async def export_file(self, path: str) -> dict:
         if not path.startswith("/") or len(path) > 500:
             raise ComputerUnavailable("Use an absolute sandbox file path")
+        media = documents.TYPES.get(PurePosixPath(path).suffix.lower(), "")
+        if media and not media.startswith("text/"):
+            return await self._export_document(path)
         code = f"import base64;print(base64.b64encode(open({path!r},'rb').read(200001)).decode())"
         async with self.lock:
             sandbox = await self.ensure()
@@ -393,7 +400,7 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
             try:
                 content = data.decode("utf-8")
             except UnicodeDecodeError:
-                raise ComputerUnavailable("Export currently supports UTF-8 text files") from None
+                raise ComputerUnavailable("Export supports UTF-8 text and DOCX, XLSX, PDF, PNG, JPEG, or WebP files") from None
             with db() as session:
                 task = session.get(AgentTask, self.task.id)
                 artifacts = [a for a in task.artifacts if a["path"] != path]
@@ -403,6 +410,29 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
                 session.add(task)
                 session.commit()
             return {"path": path, "bytes": len(data), "download": "Available in task results"}
+
+    async def _export_document(self, path: str) -> dict:
+        """Binary deliverables (DOCX, XLSX, PDF, images) become durable channel documents."""
+        async with self.lock:
+            sandbox = await self.ensure()
+            info = await sandbox.fs.get_file_info(path, request_timeout=30)
+            if info.is_dir or info.size > documents.LIMIT:
+                raise ComputerUnavailable("Export supports document files up to 25 MB")
+            data = bytes(await sandbox.fs.download_file(path, 120))
+        try:
+            name, media = documents.validate_file(PurePosixPath(path).name, data)
+        except HTTPException as exc:
+            raise ComputerUnavailable(f"Could not export {PurePosixPath(path).name}: {exc.detail}") from None
+        # Content-addressed: replays reuse the document, while a re-edited file becomes a new version.
+        document_id = uuid5(NAMESPACE_URL, f"band:{self.task.id}:sandbox:{path}:{hashlib.sha256(data).hexdigest()}").hex
+        with db() as session:
+            existing = session.get(Document, document_id)
+        saved = ({"name": existing.name, "url": f"/api/documents/{existing.id}/download"} if existing
+                 else documents.store_generated(self.task, document_id, name, media, data))
+        if saved is None:
+            raise ComputerUnavailable("That exported file was deleted")
+        return {"path": path, "bytes": len(data), "name": saved["name"], "download": saved["url"],
+                "link": f"[{saved['name']}]({saved['url']})"}
 
     async def live_view(self, *, minutes: int = CONTROL_MINUTES, user_id: int | None = None) -> dict:
         """A signed noVNC link for people. The token is in the link, so treat it as a short-lived secret."""

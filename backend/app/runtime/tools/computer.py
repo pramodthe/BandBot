@@ -98,9 +98,11 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
 
     @tool
     async def sandbox_export_file(path: str) -> dict:
-        """Export a UTF-8 text file from the E2B computer to downloadable task results (up to 200000 bytes).
+        """Make a file on the E2B computer downloadable by the humans in this conversation.
 
-        Export final deliverables before finishing. Paused computers retain files until explicitly deleted.
+        DOCX, XLSX, PDF, PNG, JPEG, and WebP files (up to 25 MB) become channel documents; link the returned
+        `link` in your reply. Other UTF-8 text files (up to 200000 bytes) go to task results. Export final
+        deliverables before finishing; never send sandbox: links. Paused computers retain files until deleted.
         """
         return await computer_call(lambda: computer.export_file(path))
 

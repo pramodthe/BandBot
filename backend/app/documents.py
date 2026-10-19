@@ -8,11 +8,13 @@ import io
 import re
 from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 from zipfile import ZipFile
 
 from fastapi import HTTPException
 from PIL import Image
 from sqlalchemy import and_, func, or_, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 from sqlmodel import select
 
@@ -93,6 +95,45 @@ def finalize_document_links(task, text: str) -> str:
     if missing:
         text += "\n\nFiles:\n" + "\n".join(f"[{doc.name}](/api/documents/{doc.id}/download)" for doc in missing)
     return validate_citations(task, text)
+
+
+def store_generated(task, document_id: str, name: str, media: str, data: bytes, authorize=None) -> dict | None:
+    """Persist an agent-made file once, even when a checkpoint is replayed by a new worker."""
+    authorize = authorize or (lambda session: agent_authorize(session, task))
+    artifact = Document(id=document_id, channel_id=task.channel_id, uploaded_by=0, name=name,
+                        media_type=media, size=len(data), status="queued")
+    path = path_for(artifact)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    created = False
+    try:
+        with db() as session:
+            authorize(session)
+            # Publish complete bytes atomically. A replay repairs files left before a metadata commit.
+            temporary.write_bytes(data)
+            temporary.replace(path)
+            created = True
+            if media.startswith("text/"):
+                artifact.units = extract(artifact)
+            session.add(artifact)
+            session.add(TaskDocument(task_id=task.id, document_id=artifact.id))
+            session.add(TaskDocumentSource(task_id=task.id, document_id=artifact.id))
+            session.commit()
+    except IntegrityError:
+        # Parallel helpers can receive the same file. The first atomic commit owns it.
+        with db() as session:
+            existing = session.get(Document, document_id)
+            if not existing:
+                raise
+            if existing.status in {"deleting", "deleted"}:
+                return None
+    except Exception:
+        if created:
+            path.unlink(missing_ok=True)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"name": name, "url": f"/api/documents/{artifact.id}/download"}
 
 
 def link_attachments(session, message, ids: list[str], task_ids: list[str]) -> None:
