@@ -1,19 +1,17 @@
-# API and worker share one instance and one disk. SQLite, checkpoints, and
-# documents are not safe on Render's ephemeral filesystem or across services.
+# API and worker share one instance so they can use the same database files.
+# Free instances have no persistent disk: the workspace resets when the
+# service sleeps or redeploys. Move to a paid plan and attach a disk at
+# /var/data before relying on accounts, messages, or uploaded files.
 services:
   - type: web
     name: band-bots
     runtime: docker
-    plan: starter
-    region: singapore
+    plan: free
+    region: oregon
     branch: main
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/health
-    disk:
-      name: band-bots-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: WORKER_CONCURRENCY
         value: "1"
