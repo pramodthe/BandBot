@@ -1,0 +1,37 @@
+# API and worker share one instance and one disk. SQLite, checkpoints, and
+# documents are not safe on Render's ephemeral filesystem or across services.
+services:
+  - type: web
+    name: band-bots
+    runtime: docker
+    plan: starter
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    disk:
+      name: band-bots-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: WORKER_CONCURRENCY
+        value: "1"
+      - key: DATABASE_URL
+        value: sqlite:////var/data/band_slack.db
+      - key: AGENT_CHECKPOINT_PATH
+        value: /var/data/agent_checkpoints.db
+      - key: DOCUMENTS_PATH
+        value: /var/data/documents
+      - key: APP_SECRET
+        generateValue: true
+      - key: BAND_USER_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: E2B_API_KEY
+        sync: false
+      - key: COMPOSIO_API_KEY
+        sync: false

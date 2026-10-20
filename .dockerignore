@@ -1,0 +1,14 @@
+.git
+.env
+**/.env
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+frontend/node_modules
+frontend/dist
+backend/band_slack.db
+backend/agent_checkpoints.db
+backend/documents
+demo-video
+output
