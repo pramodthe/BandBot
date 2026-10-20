@@ -3,6 +3,7 @@ WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+COPY backend/app/runtime/ui_catalog.json /src/backend/app/runtime/ui_catalog.json
 RUN npm run build
 
 FROM python:3.12-bookworm
