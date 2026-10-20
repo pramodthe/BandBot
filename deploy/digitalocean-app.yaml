@@ -1,0 +1,53 @@
+name: band-bots
+region: sfo
+services:
+  - name: web
+    git:
+      repo_clone_url: https://github.com/pramodthe/BandBot.git
+      branch: main
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-2gb
+    health_check:
+      http_path: /api/health
+    envs:
+      - key: WORKER_CONCURRENCY
+        value: "1"
+        scope: RUN_TIME
+      - key: DATABASE_URL
+        value: sqlite:////var/data/band_slack.db
+        scope: RUN_TIME
+      - key: AGENT_CHECKPOINT_PATH
+        value: /var/data/agent_checkpoints.db
+        scope: RUN_TIME
+      - key: DOCUMENTS_PATH
+        value: /var/data/documents
+        scope: RUN_TIME
+      - key: MASTER_AGENT_NAME
+        value: Band Bots
+        scope: RUN_TIME
+      - key: APP_SECRET
+        value: REPLACE_AT_DEPLOY
+        type: SECRET
+        scope: RUN_TIME
+      - key: BAND_USER_API_KEY
+        value: REPLACE_AT_DEPLOY
+        type: SECRET
+        scope: RUN_TIME
+      - key: OPENAI_API_KEY
+        value: REPLACE_AT_DEPLOY
+        type: SECRET
+        scope: RUN_TIME
+      - key: EXA_API_KEY
+        value: REPLACE_AT_DEPLOY
+        type: SECRET
+        scope: RUN_TIME
+      - key: E2B_API_KEY
+        value: REPLACE_AT_DEPLOY
+        type: SECRET
+        scope: RUN_TIME
+      - key: COMPOSIO_API_KEY
+        value: REPLACE_AT_DEPLOY
+        type: SECRET
+        scope: RUN_TIME
