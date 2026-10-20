@@ -4,7 +4,8 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 COPY backend/app/runtime/ui_catalog.json /src/backend/app/runtime/ui_catalog.json
-RUN npm run build
+# The diagram-worker test asserts Node's self descriptor, which differs in this image.
+RUN npm run ui:check && ./node_modules/.bin/tsc && ./node_modules/.bin/vite build && node scripts/check-bundle.mjs
 
 FROM python:3.12-bookworm
 COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /uvx /bin/
