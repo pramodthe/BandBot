@@ -20,8 +20,9 @@ from sqlmodel import select
 
 from app.config import settings
 from app.openai_provider import client, configuration
-from app.persistence.models import (Budget, Channel, ChannelMember, DirectMessage, Document, DocumentCollection,
-                                    DocumentUsage, MessageAttachment, TaskDocument, TaskDocumentSource, TaskUsage, db, utcnow)
+from app.persistence.models import (Budget, Channel, ChannelMember, DirectMessage, Document, DocumentBlob,
+                                    DocumentCollection, DocumentUsage, MessageAttachment, TaskDocument,
+                                    TaskDocumentSource, TaskUsage, db, utcnow)
 
 LIMIT = 25 * 1024 * 1024
 TYPES = {".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -46,6 +47,47 @@ def agent_authorize(session, task) -> None:
 
 def path_for(doc: Document) -> Path:
     return Path(settings.documents_path) / (doc.id + Path(doc.name).suffix.lower())
+
+
+def database_files() -> bool:
+    return settings.documents_path == "database"
+
+
+def save_original(session, doc: Document, data: bytes) -> bool:
+    """Store original bytes. Returns True when a file was written outside the transaction."""
+    if database_files():
+        session.add(DocumentBlob(document_id=doc.id, data=data))
+        return False
+    path = path_for(doc)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(data)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
+
+
+def read_original(doc: Document) -> bytes:
+    if database_files():
+        with db() as session:
+            blob = session.get(DocumentBlob, doc.id)
+            if blob is None:
+                raise FileNotFoundError(doc.id)
+            return bytes(blob.data)
+    return path_for(doc).read_bytes()
+
+
+def delete_original(doc: Document) -> None:
+    if database_files():
+        with db() as session:
+            blob = session.get(DocumentBlob, doc.id)
+            if blob is not None:
+                session.delete(blob)
+                session.commit()
+        return
+    path_for(doc).unlink(missing_ok=True)
 
 
 def summary(doc: Document) -> dict:
@@ -102,19 +144,14 @@ def store_generated(task, document_id: str, name: str, media: str, data: bytes, 
     authorize = authorize or (lambda session: agent_authorize(session, task))
     artifact = Document(id=document_id, channel_id=task.channel_id, uploaded_by=0, name=name,
                         media_type=media, size=len(data), status="queued")
-    path = path_for(artifact)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
-    created = False
+    file_written = False
     try:
         with db() as session:
             authorize(session)
             # Publish complete bytes atomically. A replay repairs files left before a metadata commit.
-            temporary.write_bytes(data)
-            temporary.replace(path)
-            created = True
+            file_written = save_original(session, artifact, data)
             if media.startswith("text/"):
-                artifact.units = extract(artifact)
+                artifact.units = extract(artifact, data)
             session.add(artifact)
             session.add(TaskDocument(task_id=task.id, document_id=artifact.id))
             session.add(TaskDocumentSource(task_id=task.id, document_id=artifact.id))
@@ -128,11 +165,9 @@ def store_generated(task, document_id: str, name: str, media: str, data: bytes, 
             if existing.status in {"deleting", "deleted"}:
                 return None
     except Exception:
-        if created:
-            path.unlink(missing_ok=True)
+        if file_written:
+            path_for(artifact).unlink(missing_ok=True)
         raise
-    finally:
-        temporary.unlink(missing_ok=True)
     return {"name": name, "url": f"/api/documents/{artifact.id}/download"}
 
 
@@ -235,9 +270,9 @@ def validate_file(name: str, data: bytes) -> tuple[str, str]:
     return name, TYPES[suffix]
 
 
-def extract(doc: Document) -> list[dict[str, str]]:
+def extract(doc: Document, data: bytes | None = None) -> list[dict[str, str]]:
     """Bounded, non-executing extraction. A vision field is transient, never stored in metadata."""
-    data = path_for(doc).read_bytes()
+    data = read_original(doc) if data is None else data
     suffix = Path(doc.name).suffix.lower()
     units = []
     characters = 0
@@ -342,7 +377,7 @@ async def ingest(document_id: str) -> None:
                 raise ValueError("Extracted content exceeds the processing limit; split the file")
             doc = patch(doc.id, units=units)
         if not doc.file_id:
-            uploaded = await sdk.files.create(file=(doc.name, path_for(doc).read_bytes(), doc.media_type), purpose="user_data")
+            uploaded = await sdk.files.create(file=(doc.name, read_original(doc), doc.media_type), purpose="user_data")
             doc = patch(doc.id, file_id=uploaded.id)
         with db() as session:
             collection = session.get(DocumentCollection, doc.channel_id)
@@ -397,7 +432,7 @@ async def process_one() -> bool:
                             await sdk.files.delete(file_id)
                         except NotFoundError:
                             pass
-            path_for(doc).unlink(missing_ok=True)
+            delete_original(doc)
             patch(doc.id, status="deleted", units=[], file_id="", index_file_id="")
         else:
             async with asyncio.timeout(settings.task_timeout):

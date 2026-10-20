@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlmodel import Session, select
 from sqlalchemy.orm import defer
 
@@ -38,16 +39,15 @@ async def upload(channel_id: int, name: str, request: Request, user: User = Depe
             raise HTTPException(413, "Maximum file size is 25 MiB")
     name, media = documents.validate_file(name, bytes(data))
     doc = Document(id=uuid4().hex, channel_id=channel_id, uploaded_by=user.id, name=name, media_type=media, size=len(data))
-    target = documents.path_for(doc)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    file_written = documents.save_original(session, doc, bytes(data))
     try:
         session.add(doc)
         record("document_uploaded", actor_type="human", actor_id=user.id, actor_name=user.display_name,
                channel_id=channel_id, detail={"document_id": doc.id, "size": doc.size}, session=session)
         session.commit()
     except Exception:
-        target.unlink(missing_ok=True)
+        if file_written:
+            documents.path_for(doc).unlink(missing_ok=True)
         raise
     return documents.summary(doc)
 
@@ -71,6 +71,15 @@ def detail(document_id: str, user: User = Depends(current_user), session: Sessio
 @router.get("/api/documents/{document_id}/download")
 def download(document_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     doc = get_document(session, user, document_id)
+    if documents.database_files():
+        try:
+            payload = documents.read_original(doc)
+        except FileNotFoundError:
+            raise HTTPException(404, "Original file is unavailable") from None
+        return Response(content=payload, media_type=doc.media_type, headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(doc.name)}",
+            "X-Content-Type-Options": "nosniff",
+        })
     target = documents.path_for(doc)
     if not target.exists():
         raise HTTPException(404, "Original file is unavailable")

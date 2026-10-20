@@ -50,6 +50,30 @@ class Settings:
 
 settings = Settings()
 
+
+def is_postgres(url: str) -> bool:
+    return url.split(":", 1)[0] in {"postgres", "postgresql", "postgresql+psycopg"}
+
+
+def sqlalchemy_url(url: str) -> str:
+    """SQLAlchemy needs the psycopg driver; the rest of the URL stays intact."""
+    if url.startswith("postgresql+"):
+        return url
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgres://")
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+    return url
+
+
+def postgres_conninfo(url: str) -> str:
+    """psycopg accepts a libpq URL, including one copied from SQLAlchemy."""
+    if url.startswith("postgresql+psycopg://"):
+        return "postgresql://" + url.removeprefix("postgresql+psycopg://")
+    if url.startswith("postgres://"):
+        return "postgresql://" + url.removeprefix("postgres://")
+    return url
+
 MODELS = [
     {"id": "gpt-6-astra", "label": "GPT-6 Astra"},
     {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol"},

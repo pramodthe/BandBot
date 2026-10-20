@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
@@ -58,11 +57,12 @@ async def lifespan(_app: FastAPI):
             session.add(Channel(name="general", topic="Humans and agents, all together"))
             session.commit()
         ensure_owner(session)
-    startup = asyncio.create_task(service.startup())
-    yield
-    startup.cancel()
-    await asyncio.gather(startup, return_exceptions=True)
-    await service.shutdown()
+    # Stay closed until Band setup finishes, so a health check cannot pass early.
+    await service.startup()
+    try:
+        yield
+    finally:
+        await service.shutdown()
 
 
 app = FastAPI(title="BAND_BOTS", lifespan=lifespan)
@@ -1035,9 +1035,17 @@ async def websocket(ws: WebSocket, token: str = ""):
         await bus.disconnect(user_id, ws)
 
 
+def health_status() -> tuple[int, dict]:
+    band = service.org.status()
+    # A configured Band account that failed to register is not a healthy deploy.
+    ok = service.ready and not (band["configured"] and (band["error"] or not band["online"]))
+    return (200 if ok else 503), {"ok": ok, "band": band}
+
+
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "band": service.org.status()}
+    status, body = health_status()
+    return JSONResponse(body, status_code=status)
 
 
 if FRONTEND_DIST.exists():

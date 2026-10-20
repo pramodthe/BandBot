@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Column, UniqueConstraint, event
+from sqlalchemy import JSON, Column, LargeBinary, UniqueConstraint, event
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Field, Session, SQLModel, create_engine
 
-from app.config import settings
+from app.config import is_postgres, settings, sqlalchemy_url
 
 
 def utcnow() -> datetime:
@@ -436,6 +436,12 @@ class DocumentCollection(SQLModel, table=True):
     vector_store_id: str = ""
 
 
+class DocumentBlob(SQLModel, table=True):
+    """Original file bytes. Stored with the database so a redeploy does not drop uploads."""
+    document_id: str = Field(primary_key=True)
+    data: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
+
+
 class Document(SQLModel, table=True):
     id: str = Field(primary_key=True)
     channel_id: int = Field(index=True)
@@ -485,8 +491,23 @@ class Budget(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+_sqlite = settings.database_url.startswith("sqlite")
+connect_args = {"check_same_thread": False, "timeout": 30} if _sqlite else {}
+engine_kwargs: dict[str, Any] = {"connect_args": connect_args}
+if is_postgres(settings.database_url):
+    # Two processes share a small development database, so keep the pools narrow.
+    engine_kwargs.update(pool_pre_ping=True, pool_size=2, max_overflow=2)
+engine = create_engine(sqlalchemy_url(settings.database_url), **engine_kwargs)
+
+
+if _sqlite:
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 @event.listens_for(SASession, "before_flush")

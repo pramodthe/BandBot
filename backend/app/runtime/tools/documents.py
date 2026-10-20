@@ -183,7 +183,7 @@ def document_tools(task):
         else:
             for doc in docs:
                 content.append({"type": "input_image", "image_url": "data:" + doc.media_type + ";base64," +
-                                base64.b64encode(documents.path_for(doc).read_bytes()).decode()}
+                                base64.b64encode(documents.read_original(doc)).decode()}
                                if doc.media_type.startswith("image/") else {"type": "input_file", "file_id": doc.file_id})
         async with client() as sdk:
             response = await sdk.responses.create(model=model, input=[{"role": "user", "content": content}],

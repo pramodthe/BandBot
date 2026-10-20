@@ -1,10 +1,12 @@
-"""Run separately: uv run python -m app.worker (one worker per checkpoint file, several tasks at once)."""
+"""Run separately: uv run python -m app.worker (one worker per checkpoint store, several tasks at once)."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import signal
 import sys
+import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from band.client.rest import AsyncRestClient, ChatMessageRequest, ChatMessageRequestMentionsItem, aclose_rest_client
@@ -15,7 +17,7 @@ from sqlmodel import select
 from sqlalchemy import delete, update
 
 from app.auth import decrypt_secret
-from app.config import settings
+from app.config import is_postgres, postgres_conninfo, settings
 from app import documents
 from app.openai_provider import LegacyCheckpoint, migrate_profiles, pin_task
 from app.runtime.harness import build_harness
@@ -310,6 +312,22 @@ def _lock_exclusively(lock) -> None:
         raise SystemExit("A worker already owns this checkpoint file")
 
 
+@asynccontextmanager
+async def open_checkpointer(path: str):
+    if is_postgres(path):
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        async with AsyncPostgresSaver.from_conn_string(postgres_conninfo(path)) as saver:
+            await saver.setup()
+            yield saver
+        return
+    file = Path(path)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(file)) as saver:
+        await saver.setup()
+        yield saver
+
+
 async def work() -> None:
     # A supervisor's SIGTERM gets the same cancellation/cleanup path as Ctrl+C.
     # Windows event loops don't support signal handlers; Ctrl+C still works there.
@@ -318,9 +336,14 @@ async def work() -> None:
         asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, current.cancel)
     init_db()
     migrate_profiles()
-    path = Path(settings.checkpoint_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(path) + ".worker.lock", "w") as lock:
+    path = settings.checkpoint_path
+    if is_postgres(path):
+        lock_path = Path(tempfile.gettempdir()) / "band-bots-worker.lock"
+    else:
+        file = Path(path)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = Path(str(file) + ".worker.lock")
+    with open(lock_path, "w") as lock:
         _lock_exclusively(lock)
         recover_tasks()
         documents.recover_jobs()
@@ -332,8 +355,7 @@ async def work() -> None:
                 task.updated_at = utcnow()
                 session.add(task)
             session.commit()
-        async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
-            await saver.setup()
+        async with open_checkpointer(path) as saver:
             logger.info("Deep Agents worker ready (up to %d concurrent tasks)", settings.worker_concurrency)
             await run_queue(saver, concurrency=settings.worker_concurrency)
 

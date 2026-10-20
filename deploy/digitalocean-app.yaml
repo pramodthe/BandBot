@@ -1,5 +1,14 @@
+# Accounts, messages, checkpoints, and uploads live in the dev database.
+# That data survives a redeploy. Removing this database component deletes it.
+# APP_SECRET, BAND_USER_API_KEY, OPENAI_API_KEY, EXA_API_KEY, E2B_API_KEY, and
+# COMPOSIO_API_KEY are set on the app and omitted here so this file cannot replace them.
 name: band-bots
 region: sfo
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    production: false
 services:
   - name: web
     git:
@@ -11,43 +20,23 @@ services:
     instance_size_slug: apps-s-1vcpu-2gb
     health_check:
       http_path: /api/health
+      initial_delay_seconds: 20
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 9
     envs:
       - key: WORKER_CONCURRENCY
         value: "1"
         scope: RUN_TIME
       - key: DATABASE_URL
-        value: sqlite:////var/data/band_slack.db
+        value: ${db.DATABASE_URL}
         scope: RUN_TIME
       - key: AGENT_CHECKPOINT_PATH
-        value: /var/data/agent_checkpoints.db
+        value: ${db.DATABASE_URL}
         scope: RUN_TIME
       - key: DOCUMENTS_PATH
-        value: /var/data/documents
+        value: database
         scope: RUN_TIME
       - key: MASTER_AGENT_NAME
         value: Band Bots
-        scope: RUN_TIME
-      - key: APP_SECRET
-        value: REPLACE_AT_DEPLOY
-        type: SECRET
-        scope: RUN_TIME
-      - key: BAND_USER_API_KEY
-        value: REPLACE_AT_DEPLOY
-        type: SECRET
-        scope: RUN_TIME
-      - key: OPENAI_API_KEY
-        value: REPLACE_AT_DEPLOY
-        type: SECRET
-        scope: RUN_TIME
-      - key: EXA_API_KEY
-        value: REPLACE_AT_DEPLOY
-        type: SECRET
-        scope: RUN_TIME
-      - key: E2B_API_KEY
-        value: REPLACE_AT_DEPLOY
-        type: SECRET
-        scope: RUN_TIME
-      - key: COMPOSIO_API_KEY
-        value: REPLACE_AT_DEPLOY
-        type: SECRET
         scope: RUN_TIME

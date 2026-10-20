@@ -158,10 +158,17 @@ class AppService:
         self._take_over_poller: asyncio.Task | None = None
         self._dm_lock = asyncio.Lock()
         self._register_lock = asyncio.Lock()
+        self.ready = False
 
     # --- lifecycle ---
 
     async def startup(self) -> None:
+        try:
+            await self._startup()
+        finally:
+            self.ready = True
+
+    async def _startup(self) -> None:
         with db() as session:
             latest = session.exec(select(Message.id).order_by(Message.id.desc()).limit(1)).first() or 0
         settle_interrupted()

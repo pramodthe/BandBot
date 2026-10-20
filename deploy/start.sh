@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# One container runs the API and the worker so they share the persistent disk.
+# One container runs the API and the worker so they share one database.
+# DOCUMENTS_PATH=database stores uploads in that database. Any other value is a local directory.
 set -euo pipefail
 
-mkdir -p "${DOCUMENTS_PATH:-/var/data/documents}"
+if [ "${DOCUMENTS_PATH:-}" != "database" ]; then
+  mkdir -p "${DOCUMENTS_PATH:-/var/data/documents}"
+fi
 cd /app/backend
 
 python -m app.worker &
