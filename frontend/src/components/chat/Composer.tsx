@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
 import { api, uploadDocument } from "@/api";
-import type { State } from "@/store";
+import type { Action, State } from "@/store";
 import type { Channel, WorkspaceDocument } from "@/types";
+import { deliverMessage } from "./deliver";
 import { AttachmentCard } from "@/components/documents/DocumentsPanel";
 import Avatar from "@/components/shared/Avatar";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ interface Candidate {
   inChannel: boolean;
 }
 
-export default function Composer({ state, channel }: { state: State; channel: Channel }) {
+export default function Composer({ state, channel, dispatch }: { state: State; channel: Channel; dispatch: (action: Action) => void }) {
   const [text, setText] = useState("");
   const [query, setQuery] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
@@ -30,8 +31,10 @@ export default function Composer({ state, channel }: { state: State; channel: Ch
   const [uploading, setUploading] = useState(false);
   const files = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const inflight = useRef(false);
   const master = Object.values(state.agents).find((a) => a.is_master);
   const dmAgent = channel.dm_agent_id != null ? state.agents[channel.dm_agent_id] : null;
+  const dmPerson = state.users[channel.dm_user_ids?.find((id) => id !== state.me.id) ?? -1];
 
   const candidates = useMemo<Candidate[]>(() => {
     if (query === null) return [];
@@ -99,22 +102,22 @@ export default function Composer({ state, channel }: { state: State; channel: Ch
     });
   };
 
-  const send = async () => {
+  const send = () => {
     const content = text.trim();
-    if ((!content && attachments.length === 0) || sending || uploading) return;
+    if ((!content && attachments.length === 0) || inflight.current || uploading) return;
+    const attachmentIds = attachments.map((doc) => doc.id);
+    const clientId = crypto.randomUUID();
+    inflight.current = true;
     setSending(true);
     setError("");
-    try {
-      await api("POST", `/api/channels/${channel.id}/messages`, { content, attachment_ids: attachments.map((d) => d.id) });
-      setText("");
-      setAttachments([]);
-      setQuery(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
+    setText("");
+    setAttachments([]);
+    setQuery(null);
+    void deliverMessage(dispatch, channel.id, content, attachmentIds, clientId).finally(() => {
+      inflight.current = false;
       setSending(false);
       input.current?.focus();
-    }
+    });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -158,7 +161,7 @@ export default function Composer({ state, channel }: { state: State; channel: Ch
               aria-autocomplete="list"
               className="max-h-[200px] min-h-8 flex-1 resize-none rounded-none border-0 bg-transparent p-0 py-1.5 text-sm shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent"
               placeholder={
-                dmAgent
+                dmPerson ? `Message ${dmPerson.display_name}` : dmAgent
                   ? `Message ${dmAgent.name}`
                   : master
                     ? `Message #${channel.name}. Type @ to mention a teammate`

@@ -14,6 +14,7 @@ from app.persistence.models import AgentProfile, AgentSkill, SkillDefinition, Us
 from app.workspace.audit import record
 from app.workspace.events import bus
 from app.workspace.permissions import is_admin
+from app.workspace.access import agent_owner, agent_visible
 from app.workspace.skills import (MAX_UPLOAD, SkillContent, SkillError, check_install, create_skill, export_skill,
                                   parse_bundle, parse_upload, seed_library, serialize_skill, skill_or_error)
 
@@ -32,6 +33,12 @@ def get_skill(session: Session, skill_id: str) -> SkillDefinition:
         return skill_or_error(session, skill_id)
     except SkillError as exc:
         raise HTTPException(exc.status, str(exc)) from exc
+
+
+def check_agent_owner(session: Session, agent_id: int | None, user: User) -> None:
+    profile = session.get(AgentProfile, agent_id) if agent_id else None
+    if profile and agent_owner(session, profile) not in {None, user.id}:
+        raise HTTPException(403, "Only this agent's owner can change its skills")
 
 
 def commit(session: Session) -> None:
@@ -54,7 +61,8 @@ async def changed() -> None:
 
 @router.get("/agents/{agent_id}/skills")
 def agent_skills(agent_id: int, _user: User = Depends(current_user), session: Session = Depends(get_session)):
-    if session.get(AgentProfile, agent_id) is None:
+    profile = session.get(AgentProfile, agent_id)
+    if profile is None or not agent_visible(session, profile, _user.id):
         raise HTTPException(404, "Agent not found")
     seed_library(session)
     library = session.exec(select(SkillDefinition).order_by(SkillDefinition.name)).all()
@@ -74,6 +82,7 @@ class CreateBody(SkillContent):
 
 @router.post("/skills")
 async def add_skill(body: CreateBody, user: User = Depends(manager), session: Session = Depends(get_session)):
+    check_agent_owner(session, body.agent_id, user)
     try:
         skill = create_skill(session, SkillContent(**body.model_dump()), user.id, agent_id=body.agent_id)
         audit(session, user, "skill_created", skill, agent_id=body.agent_id)
@@ -87,6 +96,7 @@ async def add_skill(body: CreateBody, user: User = Depends(manager), session: Se
 @router.post("/skills/import")
 async def import_skill(request: Request, filename: str = "", agent_id: int | None = None,
                        user: User = Depends(manager), session: Session = Depends(get_session)):
+    check_agent_owner(session, agent_id, user)
     payload = bytearray()
     async for chunk in request.stream():
         payload.extend(chunk)
@@ -163,6 +173,7 @@ class InstallBody(BaseModel):
 @router.post("/agents/{agent_id}/skills")
 async def install_skill(agent_id: int, body: InstallBody, user: User = Depends(manager),
                         session: Session = Depends(get_session)):
+    check_agent_owner(session, agent_id, user)
     skill = get_skill(session, body.skill_id)
     try:
         check_install(session, agent_id, skill.id)
@@ -183,6 +194,7 @@ class EnableBody(BaseModel):
 @router.patch("/agents/{agent_id}/skills/{skill_id}")
 async def enable_skill(agent_id: int, skill_id: str, body: EnableBody, user: User = Depends(manager),
                        session: Session = Depends(get_session)):
+    check_agent_owner(session, agent_id, user)
     skill = get_skill(session, skill_id)
     row = session.get(AgentSkill, (agent_id, skill.id))
     if row is None:
@@ -198,6 +210,7 @@ async def enable_skill(agent_id: int, skill_id: str, body: EnableBody, user: Use
 @router.delete("/agents/{agent_id}/skills/{skill_id}")
 async def uninstall_skill(agent_id: int, skill_id: str, user: User = Depends(manager),
                           session: Session = Depends(get_session)):
+    check_agent_owner(session, agent_id, user)
     skill = get_skill(session, skill_id)
     row = session.get(AgentSkill, (agent_id, skill.id))
     if row is None:

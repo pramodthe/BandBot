@@ -20,7 +20,12 @@ export interface Channel {
   outside_agents: OutsideAgent[];
   is_dm: boolean;
   dm_agent_id: number | null;
+  dm_user_ids?: number[];
+  owner_id?: number | null;
+  private?: boolean;
   policy: ChannelPolicy;
+  /** Human direct messages are closed after a block. Shared channels stay open and history stays. */
+  messaging_disabled?: boolean;
 }
 
 export type WorkspaceRole = "owner" | "admin" | "member";
@@ -45,6 +50,7 @@ export interface BandPeer extends OutsideAgent {
 export interface ChannelComputer {
   agent_id: number;
   task_id: string;
+  computer_key?: string;
   status: string;
   last_action: string;
   updated_at: string;
@@ -58,6 +64,10 @@ export interface AgentStatus {
 }
 
 export interface AgentComputerScope {
+  computer_key?: string;
+  shared?: boolean;
+  provider?: "e2b" | "tenki";
+  configured?: boolean;
   channel_id: number;
   channel_name: string;
   is_dm: boolean;
@@ -73,8 +83,28 @@ export interface AgentComputersResponse {
   computers: AgentComputerScope[];
 }
 
+export type AgentRuntime = "deepagents" | "codex" | "claude" | "cursor" | "openclaw";
+export type ConnectedAgentRuntime = Exclude<AgentRuntime, "deepagents">;
+
+export interface AgentConnection {
+  id: string;
+  provider: ConnectedAgentRuntime;
+  label: string;
+  auth_method: "api_key" | "chatgpt" | "codex_chatgpt" | "gateway_token";
+  models: string[];
+}
+
+export interface AgentConnectionsResponse {
+  connections: AgentConnection[];
+  codex_chatgpt_sign_in: boolean;
+  codex_local_sign_in: boolean;
+  runtimes: Record<ConnectedAgentRuntime, boolean>;
+  openclaw_gateways: string[];
+}
+
 export interface Agent {
   id: number;
+  owner_id?: number | null;
   name: string;
   handle: string;
   role: string;
@@ -83,6 +113,8 @@ export interface Agent {
   avatar?: string | null;
   instructions: string;
   model: string;
+  runtime?: AgentRuntime;
+  connection_id?: string | null;
   band_agent_id: string;
   is_master: boolean;
   status: AgentStatus;
@@ -91,6 +123,41 @@ export interface Agent {
   created_at?: string;
   /** Null means every plugin connected in the workspace. */
   plugins: string[] | null;
+}
+
+export interface BandAccount {
+  connected: boolean;
+  handle: string;
+  name: string;
+}
+
+export interface PeopleResponse {
+  contacts: { user_id: number; name: string; handle: string }[];
+  requests: { id: string; user_id: number; name: string; handle: string; message: string }[];
+  sent_requests: { id: string; user_id: number; name: string; handle: string; message: string }[];
+  sent_invitations?: { id: string; channel_name: string; recipient_name: string }[];
+  blocked?: { user_id: number; name: string; handle: string }[];
+}
+
+export interface ServiceProvider {
+  agent_id: number;
+  name: string;
+  provider: string;
+  state: "ready" | "sign_in_required" | "unavailable" | string;
+  action?: "reconnect";
+}
+
+export interface ServiceStatus {
+  api: string;
+  human_chat: string;
+  worker: "ready" | "busy" | "starting" | "unavailable" | string;
+  providers: ServiceProvider[];
+}
+
+export interface ChannelInvitation {
+  id: string;
+  channel_name: string;
+  inviter_name: string;
 }
 
 export interface Plugin {
@@ -147,6 +214,19 @@ export interface Message {
   approval: MessageApproval | null;
   handoff: boolean;
   created_at: string;
+  /** Present when this human send used a client idempotency key. */
+  client_id?: string;
+}
+
+export interface OutgoingMessage {
+  clientId: string;
+  channelId: number;
+  content: string;
+  attachmentIds: string[];
+  createdAt: string;
+  status: "pending" | "failed";
+  error?: string;
+  retryable: boolean;
 }
 
 export interface MessageApproval {
@@ -361,6 +441,8 @@ export interface ComputerControl {
 }
 
 export interface ComputerState {
+  shared?: boolean;
+  provider?: "e2b" | "tenki";
   configured: boolean;
   status: string;
   sandbox_id: string | null;
@@ -436,6 +518,11 @@ export interface Bootstrap {
   models: Model[];
   band: BandStatus;
   openai_configured: boolean;
+  /** Monotonic snapshot cursor. Events with an equal or lower cursor are already included. */
+  cursor?: number;
+  invitations?: ChannelInvitation[];
+  contact_requests?: PeopleResponse["requests"];
+  service?: ServiceStatus;
 }
 
 export interface Draft {
@@ -445,7 +532,7 @@ export interface Draft {
   content: string;
 }
 
-export type ServerEvent =
+export type ServerEvent = (
   | { type: "document_removed"; channel_id: number; document_id: string }
   | { type: "openai_settings"; models: Model[]; configured: boolean }
   | { type: "skills_changed" }
@@ -461,6 +548,9 @@ export type ServerEvent =
   | { type: "agent_status"; agent_id: number; status: AgentStatus }
   | { type: "typing"; channel_id: number; agent_id: number; active: boolean }
   | { type: "band_status"; band: BandStatus }
+  | { type: "channel_removed"; channel_id: number }
   | { type: "task_activity"; task: TaskActivity }
   | { type: "workspace_role"; user_id: number; role: WorkspaceRole }
-  | { type: "budget"; scope: "agent" | "channel"; scope_id: number; daily_tokens: number | null };
+  | { type: "budget"; scope: "agent" | "channel"; scope_id: number; daily_tokens: number | null }
+  | { type: "people_changed" }
+) & { cursor?: number };

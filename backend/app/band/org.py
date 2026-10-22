@@ -36,7 +36,8 @@ class Owner:
 class BandOrg:
     """The org's Band account, driven through the Human API with one user API key."""
 
-    def __init__(self) -> None:
+    def __init__(self, api_key: str | None = None) -> None:
+        self._api_key = api_key
         self.owner: Owner | None = None
         self.error: str | None = None
         self._rest: AsyncRestClient | None = None
@@ -44,7 +45,7 @@ class BandOrg:
 
     @property
     def configured(self) -> bool:
-        return bool(settings.band_user_api_key)
+        return bool(settings.band_user_api_key if self._api_key is None else self._api_key)
 
     @property
     def online(self) -> bool:
@@ -69,14 +70,15 @@ class BandOrg:
         if not self.configured:
             self.error = "BAND_USER_API_KEY is not set"
             return
-        if settings.band_user_api_key.startswith("band_a_"):
+        key = settings.band_user_api_key if self._api_key is None else self._api_key
+        if key.startswith("band_a_"):
             self.error = (
                 "BAND_USER_API_KEY is an agent key (band_a_...). Create a user API key (band_u_...) "
                 "at app.band.ai/users/settings"
             )
             logger.error(self.error)
             return
-        rest = AsyncRestClient(api_key=settings.band_user_api_key, base_url=settings.band_rest_url)
+        rest = AsyncRestClient(api_key=key, base_url=settings.band_rest_url)
         try:
             profile = (await rest.human_api_profile.get_my_profile(request_options=DEFAULT_REQUEST_OPTIONS)).data
         except Exception as exc:
@@ -117,7 +119,7 @@ class BandOrg:
 
     async def create_room(self, title: str) -> str:
         response = await self._client().human_api_chats.create_my_chat_room(
-            chat=CreateMyChatRoomRequestChat(title=title), request_options=DEFAULT_REQUEST_OPTIONS
+            chat=CreateMyChatRoomRequestChat(title=title), request_options=NO_RETRY
         )
         room_id = response.data.id
         self._room_members[room_id] = {self.owner.id} if self.owner else set()
@@ -173,7 +175,7 @@ class BandOrg:
                     ChatMessageRequestMentionsItem(id=i, **({"handle": h} if h else {})) for i, h in mentions
                 ],
             ),
-            request_options=DEFAULT_REQUEST_OPTIONS,
+            request_options=NO_RETRY,
         )
         return response.data.id
 

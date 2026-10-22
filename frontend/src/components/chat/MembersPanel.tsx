@@ -76,8 +76,9 @@ export default function MembersPanel({
   const [peers, setPeers] = useState<BandPeer[] | null>(null);
   const humans = channel.human_ids.map((id) => state.users[id]).filter(Boolean);
   const agents = channel.agent_ids.map((id) => state.agents[id]).filter(Boolean);
-  const available = Object.values(state.agents).filter((a) => !channel.agent_ids.includes(a.id));
+  const available = Object.values(state.agents).filter((a) => !channel.agent_ids.includes(a.id) && (a.owner_id == null || a.owner_id === state.me.id));
   const joined = channel.human_ids.includes(state.me.id);
+  const canInviteOutside = joined && (!channel.private || channel.owner_id === state.me.id);
   const owner = roleOf(state, state.me.id) === "owner";
 
   const run = (p: Promise<unknown>) => p.then(() => setError("")).catch((e) => setError((e as Error).message));
@@ -89,16 +90,17 @@ export default function MembersPanel({
   return (
     <aside className="border-border bg-background narrow:absolute narrow:inset-y-0 narrow:right-0 narrow:z-20 narrow:shadow-lg w-[280px] max-w-full shrink-0 overflow-y-auto border-l py-3">
       <div className="flex items-center justify-between px-4 pb-3"><h2 className="text-sm font-semibold">Channel members</h2><Button variant="ghost" size="icon-xs" aria-label="Close channel members" onClick={onClose}><XIcon /></Button></div>
+      {channel.private && channel.owner_id === state.me.id ? <div className="px-4 pb-3"><Button variant="outline" className="w-full" onClick={() => openModal({ kind: "people", channelId: channel.id })}>Invite people</Button></div> : null}
       <Section title={`Agents in #${channel.name}`}>
         {agents.length === 0 && <div className={hint}>No agents yet.</div>}
         {agents.map((a) => (
           <div key={a.id} className="flex items-center gap-2">
-            <Avatar name={a.name} kind="agent" role={a.role} avatar={a.avatar} size={28} />
+            <Avatar name={a.name} kind="agent" role={a.role} avatar={a.avatar} runtime={a.runtime} size={28} />
             <button className={memberName} onClick={() => openModal({ kind: "agent", agentId: a.id })}>
               <MemberName name={a.name} sub={a.role_label} />
             </button>
             <StatusDot state={a.status.state} title={a.status.error ?? a.status.state} />
-            {!a.is_master && <RemoveButton onClick={() => run(api("DELETE", `/api/channels/${channel.id}/agents/${a.id}`))} />}
+            {!a.is_master && (a.owner_id == null || a.owner_id === state.me.id || channel.owner_id === state.me.id) && <RemoveButton onClick={() => run(api("DELETE", `/api/channels/${channel.id}/agents/${a.id}`))} />}
           </div>
         ))}
         {available.length > 0 ? (
@@ -114,7 +116,7 @@ export default function MembersPanel({
           </Picker>
         ) : (
           <Button variant="secondary" size="sm" className="self-start text-[13px]" onClick={() => openModal({ kind: "new-agent" })}>
-            + Create a new agent
+            + Add agents
           </Button>
         )}
       </Section>
@@ -129,15 +131,15 @@ export default function MembersPanel({
             <span className={memberName} title={o.description}>
               <MemberName name={o.name} sub={`@${o.handle}`} />
             </span>
-            {joined && (
+            {canInviteOutside && (
               <RemoveButton
                 onClick={() => run(api("DELETE", `/api/channels/${channel.id}/outside-agents/${encodeURIComponent(o.band_id)}`))}
               />
             )}
           </div>
         ))}
-        {!joined ? (
-          <div className={hint}>Join the channel to invite or remove outside agents.</div>
+        {!canInviteOutside ? (
+          <div className={hint}>The channel owner can invite or remove outside Band agents.</div>
         ) : peers === null ? (
           <Button variant="link" size="inline" className="self-start text-[12.5px]" onClick={loadPeers} disabled={!channel.band_room_id}>
             + Invite a Band agent

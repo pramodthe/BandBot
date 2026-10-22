@@ -7,9 +7,10 @@ import RichText from "@/components/shared/RichText";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
-export default function AgentInstructions({ agent, roleInstructions, onUpdated }: {
+export default function AgentInstructions({ agent, roleInstructions, canManage = true, onUpdated }: {
   agent: Agent;
   roleInstructions?: string;
+  canManage?: boolean;
   onUpdated: (agent: Agent) => void;
 }) {
   const id = useId();
@@ -37,7 +38,7 @@ export default function AgentInstructions({ agent, roleInstructions, onUpdated }
   };
 
   return (
-    <ProfileSection title="Instructions" action={!editing ? (
+    <ProfileSection title="Instructions" action={!editing && canManage ? (
       <Button variant="ghost" size="icon-sm" aria-label={`Edit ${agent.name} instructions`} onClick={start}><PencilIcon /></Button>
     ) : undefined}>
       {editing ? (

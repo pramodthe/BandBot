@@ -17,6 +17,7 @@ from app.persistence.models import (AgentProfile, AgentTask, DirectMessage, Mess
 from app.tasks.queue import MAX_HANDOFFS, handoff_root, handoffs_used
 from app.workspace.audit import record_agent
 from app.workspace.roles import ROLES, role_label
+from app.workspace.access import channel_teammates
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,12 @@ def _request(task: AgentTask, *, name: str, role: str, instructions: str, call_i
             return {"error": "This is a private one-on-one conversation, so teammates can't join it."}
         if existing := session.exec(select(TeammateRequest).where(TeammateRequest.source_key == source_key)).first():
             return existing.id
-        same = session.exec(select(AgentProfile).where(func.lower(AgentProfile.name) == name.lower())).first()
+        same = next((a for a in channel_teammates(session, task.channel_id) if a.name.lower() == name.lower()), None)
         if same:
             return {"status": "exists", "teammate": same.name, "role": role_label(same.role),
                     "note": f"{same.name} already exists; reuse it with ask_teammate instead of creating another."}
-        if outsider := session.exec(select(OutsideAgent).where(func.lower(OutsideAgent.name) == name.lower())).first():
+        if outsider := session.exec(select(OutsideAgent).where(OutsideAgent.channel_id == task.channel_id,
+                func.lower(OutsideAgent.name) == name.lower())).first():
             return {"error": f"{outsider.name} is an outside Band agent. Hand off to it with ask_teammate, "
                              "or choose another name."}
         in_progress = session.exec(select(TeammateRequest).where(
@@ -164,7 +166,7 @@ def _matches(value: str, *candidates: str) -> bool:
 
 def outside_agent(session, task: AgentTask, teammate: str) -> OutsideAgent | None:
     """An outside agent in this channel with that name or handle, unless a local teammate has the name."""
-    if any(_matches(teammate, a.name, a.handle) for a in session.exec(select(AgentProfile)).all()):
+    if any(_matches(teammate, a.name, a.handle) for a in channel_teammates(session, task.channel_id)):
         return None
     return next((o for o in session.exec(select(OutsideAgent).where(OutsideAgent.channel_id == task.channel_id)).all()
                  if _matches(teammate, o.name, o.handle, o.handle.rsplit("/", 1)[-1])), None)

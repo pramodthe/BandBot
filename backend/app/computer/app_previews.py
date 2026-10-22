@@ -12,10 +12,10 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
-from app.auth import decrypt_secret
+from app.computer.ingress import endpoint
 from app.config import settings
 from app.persistence.models import (AgentProfile, AgentTask, AppPreview, AppPreviewLease, ChannelMember,
-                                    ComputerConnection, DirectMessage, MessageComponent, User, db, utcnow)
+                                    DirectMessage, MessageComponent, User, db, utcnow)
 from app.workspace.permissions import allowed
 
 LEASE_SECONDS = 900
@@ -98,7 +98,7 @@ def summary(preview: AppPreview) -> dict:
             "agent_id": preview.agent_id, "channel_id": preview.channel_id, "status": status}
 
 
-async def prepare(computer, *, expected_sandbox: str | None = None):
+async def prepare(computer, *, expected_sandbox: str | None = None, port: int = 6080):
     from app.computer.desktop import ComputerUnavailable, sandbox_record
     async with computer.lock:
         record = sandbox_record(computer.key)
@@ -107,7 +107,10 @@ async def prepare(computer, *, expected_sandbox: str | None = None):
         sandbox = await computer.ensure(create=False)
         if expected_sandbox and sandbox.id != expected_sandbox:
             raise ComputerUnavailable("The app's computer has changed. Publish this app again.")
-        await sandbox.prepare_app_connection(seconds=LEASE_SECONDS)
+        if computer.provider == "tenki":
+            await sandbox.prepare_app_connection(seconds=LEASE_SECONDS, port=port)
+        else:
+            await sandbox.prepare_app_connection(seconds=LEASE_SECONDS)
         return sandbox
 
 
@@ -124,13 +127,10 @@ async def publish(computer, *, port: int, title: str, path: str, call_id: str) -
             return summary(prior)
         if len(session.exec(select(AppPreview.id).where(AppPreview.task_id == task.id)).all()) >= 6:
             raise ComputerUnavailable("A task can publish at most six app previews.")
-    sandbox = await prepare(computer)
+    sandbox = await prepare(computer, port=port)
+    host, _ = endpoint(computer.key, sandbox.id, port)
     with db() as session:
-        connection = session.get(ComputerConnection, sandbox.id)
-        if not connection or not re.fullmatch(r"6080-[a-zA-Z0-9-]+\.e2b\.app", connection.host):
-            raise ComputerUnavailable("Private app routing is unavailable for this computer.")
-        host = connection.host.replace("6080-", f"{port}-", 1)
-        request_host = f"localhost:{port}" if sandbox.labels.get("preview_host") == "localhost" else host
+        request_host = f"localhost:{port}" if computer.provider == "tenki" or sandbox.labels.get("preview_host") == "localhost" else host
         preview = AppPreview(id=preview_id, task_id=task.id, channel_id=task.channel_id, agent_id=task.agent_id,
                              computer_key=computer.key, sandbox_id=sandbox.id, port=port, title=title.strip(),
                              path=path, request_host=request_host)
@@ -178,17 +178,14 @@ def resolve(token: str):
             raise HTTPException(403, "Preview access is unavailable")
         authorize(session, preview, user)
         record = sandbox_record(preview.computer_key)
-        connection = session.get(ComputerConnection, preview.sandbox_id)
         if not record or record.sandbox_id != preview.sandbox_id:
             raise HTTPException(409, "The app's computer has changed. Publish this app again.")
         if record.status != "running":
             raise HTTPException(409, "The app's computer is paused. Reconnect from chat.")
-        if not connection or not re.fullmatch(r"6080-[a-zA-Z0-9-]+\.e2b\.app", connection.host):
-            raise HTTPException(502, "Private app routing is unavailable")
-        host = connection.host.replace("6080-", f"{validate_port(preview.port)}-", 1)
+        host, secret = endpoint(preview.computer_key, preview.sandbox_id, validate_port(preview.port))
         if preview.request_host not in {host, f"localhost:{preview.port}"}:
             raise HTTPException(502, "Invalid app routing configuration")
-        return lease, preview, host, decrypt_secret(connection.access_token_enc)
+        return lease, preview, host, secret
 
 
 def has_active_view(computer_key: str) -> bool:

@@ -5,7 +5,9 @@ from typing import Any
 
 from sqlalchemy import JSON, Column, LargeBinary, UniqueConstraint, event
 from sqlalchemy.orm import Session as SASession
-from sqlmodel import Field, Session, SQLModel, create_engine
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from app.config import is_postgres, settings, sqlalchemy_url
 
@@ -45,6 +47,66 @@ class ChannelMember(SQLModel, table=True):
     member_id: int = Field(primary_key=True)
 
 
+class UserBandAccount(SQLModel, table=True):
+    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    band_user_id: str | None = Field(default=None, unique=True)
+    secret_enc: str = ""
+    handle: str = ""
+    name: str = ""
+
+
+class PrivateConversation(SQLModel, table=True):
+    """New conversations use explicit membership; legacy workspace channels stay shared."""
+    channel_id: int = Field(foreign_key="channel.id", primary_key=True)
+    owner_id: int = Field(foreign_key="user.id")
+    kind: str = "channel"
+    title: str = ""
+
+
+class HumanDirectMessage(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("first_user_id", "second_user_id"),)
+    channel_id: int = Field(foreign_key="channel.id", primary_key=True)
+    first_user_id: int = Field(foreign_key="user.id")
+    second_user_id: int = Field(foreign_key="user.id")
+
+
+class ChannelInvitation(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    channel_id: int = Field(foreign_key="channel.id", index=True)
+    inviter_id: int = Field(foreign_key="user.id")
+    recipient_id: int = Field(foreign_key="user.id", index=True)
+    status: str = "pending"
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AppContact(SQLModel, table=True):
+    first_user_id: int = Field(foreign_key="user.id", primary_key=True)
+    second_user_id: int = Field(foreign_key="user.id", primary_key=True)
+
+
+class AppContactRequest(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("requester_id", "recipient_id"),)
+    id: str = Field(primary_key=True)
+    requester_id: int = Field(foreign_key="user.id", index=True)
+    recipient_id: int = Field(foreign_key="user.id", index=True)
+    message: str = ""
+    status: str = "pending"
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class BandRoomAccount(SQLModel, table=True):
+    """Pins existing rooms to the account that created them, even after a personal account is linked."""
+    channel_id: int = Field(foreign_key="channel.id", primary_key=True)
+    band_user_id: str
+    user_id: int | None = Field(default=None, foreign_key="user.id")
+
+
+class BandAgentOwner(SQLModel, table=True):
+    agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
+    user_id: int = Field(foreign_key="user.id")
+    band_user_id: str
+
+
 class AgentProfile(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str
@@ -65,6 +127,42 @@ class AgentPersona(SQLModel, table=True):
     agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
     specialty: str = ""
     avatar: str | None = None
+
+
+class AgentConnection(SQLModel, table=True):
+    """A workspace runtime credential; never included in agent/bootstrap payloads."""
+    id: str = Field(primary_key=True)
+    provider: str
+    label: str
+    auth_method: str = "api_key"
+    secret_enc: str
+    models: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    created_by: int = Field(foreign_key="user.id")
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AgentRuntime(SQLModel, table=True):
+    """Separate table keeps existing agent databases migration-free."""
+    agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
+    connection_id: str = Field(foreign_key="agentconnection.id", index=True)
+    provider: str
+
+
+class AgentOAuthAttempt(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    user_id: int = Field(foreign_key="user.id")
+    state_hash: str = Field(unique=True, index=True)
+    verifier_enc: str
+    nonce: str
+    redirect_uri: str
+    status: str = "pending"
+    connection_id: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AgentHost(SQLModel, table=True):
+    id: int = Field(default=1, primary_key=True)
+    host_id: str
 
 
 class SkillDefinition(SQLModel, table=True):
@@ -113,6 +211,31 @@ class Message(SQLModel, table=True):
     to_humans: bool = True
     band_message_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class ClientMessage(SQLModel, table=True):
+    """Idempotency record for one human send, scoped to that sender and conversation.
+
+    A new table keeps existing message rows unchanged. Clients that omit client_id keep the previous behavior.
+    """
+
+    __tablename__ = "client_message"
+    __table_args__ = (UniqueConstraint("user_id", "channel_id", "client_id"),)
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    channel_id: int = Field(foreign_key="channel.id", index=True)
+    client_id: str
+    message_id: int = Field(foreign_key="message.id", index=True)
+    payload_hash: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class SyncCursor(SQLModel, table=True):
+    """One monotonic counter so a bootstrap snapshot can be ordered against live events."""
+
+    __tablename__ = "sync_cursor"
+    id: int = Field(primary_key=True)
+    value: int = 0
 
 
 class AgentTask(SQLModel, table=True):
@@ -233,6 +356,46 @@ class ComputerConnection(SQLModel, table=True):
     sandbox_id: str = Field(primary_key=True)
     host: str
     access_token_enc: str
+
+
+class ComputerScope(SQLModel, table=True):
+    """The selected provider for future tasks; scope includes the immutable Band identity."""
+    key: str = Field(primary_key=True)
+    provider: str
+
+
+class ComputerControlContext(SQLModel, table=True):
+    """The channel where a workspace computer's human take-over was requested."""
+    key: str = Field(primary_key=True)
+    task_id: str
+
+
+class TaskComputerBinding(SQLModel, table=True):
+    task_id: str = Field(primary_key=True)
+    provider: str
+    computer_key: str = Field(index=True)
+
+
+class ComputerDisk(SQLModel, table=True):
+    """A durable Tenki data volume. Removing a VM never deletes this disk."""
+    key: str = Field(primary_key=True)
+    name: str = Field(unique=True)
+    volume_id: str | None = None
+    state: str = "new"
+
+
+class ComputerGateway(SQLModel, table=True):
+    key: str = Field(primary_key=True)
+    sandbox_id: str
+    secret_enc: str
+
+
+class ComputerEndpoint(SQLModel, table=True):
+    key: str = Field(primary_key=True)
+    port: int = Field(primary_key=True)
+    sandbox_id: str
+    endpoint_enc: str
+    expires_at: datetime
 
 
 class AppPreview(SQLModel, table=True):
@@ -491,6 +654,59 @@ class Budget(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class AuthSession(SQLModel, table=True):
+    """A revocable login. The browser token is useless once this row is revoked or expired."""
+    __tablename__ = "auth_session"
+    id: str = Field(primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class RecoveryAddress(SQLModel, table=True):
+    """A verified email is the only recovery channel. Unverified addresses cannot reset a password."""
+    __tablename__ = "recovery_address"
+    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    email: str = Field(index=True)
+    verified_at: datetime | None = None
+    verify_hash: str | None = None
+    verify_expires_at: datetime | None = None
+
+
+class PasswordReset(SQLModel, table=True):
+    __tablename__ = "password_reset"
+    id: str = Field(primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    token_hash: str = Field(unique=True)
+    expires_at: datetime
+    used_at: datetime | None = None
+
+
+class ContactBlock(SQLModel, table=True):
+    """One direction. Shared-channel membership and message history are left alone."""
+    __tablename__ = "contact_block"
+    blocker_id: int = Field(foreign_key="user.id", primary_key=True)
+    blocked_id: int = Field(foreign_key="user.id", primary_key=True)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class WorkerHeartbeat(SQLModel, table=True):
+    __tablename__ = "worker_heartbeat"
+    id: int = Field(default=1, primary_key=True)
+    started_at: datetime = Field(default_factory=utcnow)
+    beat_at: datetime = Field(default_factory=utcnow)
+    status: str = "idle"
+
+
+class ConnectionHealth(SQLModel, table=True):
+    """Operator-facing provider state. Detail is a short code, never a raw provider body."""
+    __tablename__ = "connection_health"
+    connection_id: str = Field(foreign_key="agentconnection.id", primary_key=True)
+    state: str = "ready"
+    detail: str = ""
+
+
 _sqlite = settings.database_url.startswith("sqlite")
 connect_args = {"check_same_thread": False, "timeout": 30} if _sqlite else {}
 engine_kwargs: dict[str, Any] = {"connect_args": connect_args}
@@ -510,6 +726,51 @@ if _sqlite:
         cursor.close()
 
 
+def bind_computer(session, task: AgentTask, *, legacy: bool = False) -> None:
+    if session.get(TaskComputerBinding, task.id):
+        return
+    profile = session.get(AgentProfile, task.agent_id)
+    owner = profile.band_agent_id if profile else f"deleted-agent-{task.agent_id}"
+    if profile and task.created_at.replace(tzinfo=timezone.utc) < profile.created_at.replace(tzinfo=timezone.utc):
+        owner = f"retired-task-{task.id}"
+    key = f"agent-{owner}-channel-{task.channel_id}"
+    scope = session.get(ComputerScope, key)
+    if scope is None:
+        provider = "e2b" if legacy else settings.computer_provider
+        if provider not in {"e2b", "tenki"}:
+            raise ValueError("COMPUTER_PROVIDER must be e2b or tenki")
+        dialect = session.get_bind().dialect.name
+        if dialect in {"sqlite", "postgresql"}:
+            insert = sqlite_insert if dialect == "sqlite" else postgres_insert
+            session.connection().execute(insert(ComputerScope).values(key=key, provider=provider)
+                .on_conflict_do_nothing(index_elements=["key"]))
+            scope = session.get(ComputerScope, key)
+        else:
+            scope = ComputerScope(key=key, provider=provider)
+            session.add(scope)
+    provider = "e2b" if legacy else scope.provider
+    from app.computer.identity import selected_key
+    computer_key = f"{provider}-{key}" if legacy else selected_key(session, owner, task.channel_id, provider, settings)
+    values = {"task_id": task.id, "provider": provider, "computer_key": computer_key}
+    dialect = session.get_bind().dialect.name
+    if legacy and dialect in {"sqlite", "postgresql"}:
+        insert = sqlite_insert if dialect == "sqlite" else postgres_insert
+        # API and worker may backfill the same legacy task during startup.
+        # Keep the first immutable binding if another process inserted it.
+        session.connection().execute(insert(TaskComputerBinding).values(**values)
+            .on_conflict_do_nothing(index_elements=["task_id"]))
+    else:
+        session.add(TaskComputerBinding(**values))
+
+
+@event.listens_for(SASession, "before_flush")
+def _snapshot_task_computer(session, _context, _instances):
+    pending = {row.task_id for row in session.new if isinstance(row, TaskComputerBinding)}
+    for task in [row for row in session.new if isinstance(row, AgentTask)]:
+        if task.id not in pending:
+            bind_computer(session, task)
+
+
 @event.listens_for(SASession, "before_flush")
 def _snapshot_task_model(session, _context, _instances):
     """Every task creation path snapshots its model in the same transaction."""
@@ -527,12 +788,19 @@ def _snapshot_task_model(session, _context, _instances):
         if task.id in existing or session.get(TaskModel, task.id):
             continue
         profile = session.get(AgentProfile, task.agent_id)
-        model = profile.model if profile and profile.model in models else default
-        session.add(TaskModel(task_id=task.id, model=model))
+        runtime = session.get(AgentRuntime, task.agent_id)
+        model = profile.model if profile and (runtime or profile.model in models) else default
+        session.add(TaskModel(task_id=task.id, model=model, provider=runtime.provider if runtime else "openai"))
 
 
 def init_db() -> None:
-    SQLModel.metadata.create_all(engine)
+    from app.persistence.migrate import upgrade_database
+    upgrade_database()
+    with Session(engine) as session:
+        for task in session.exec(select(AgentTask).outerjoin(TaskComputerBinding,
+                AgentTask.id == TaskComputerBinding.task_id).where(TaskComputerBinding.task_id == None)).all():
+            bind_computer(session, task, legacy=True)
+        session.commit()
 
 
 def db() -> Session:

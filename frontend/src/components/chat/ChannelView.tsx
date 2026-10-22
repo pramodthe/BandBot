@@ -5,6 +5,7 @@ import type { Agent, Channel, ChannelComputer, Draft, Message } from "@/types";
 import { cn } from "@/lib/utils";
 import Avatar from "@/components/shared/Avatar";
 import Composer from "./Composer";
+import { deliverMessage } from "./deliver";
 import DocumentsPanel, { AttachmentCard } from "@/components/documents/DocumentsPanel";
 import ComputerActivity from "@/components/computer/ComputerActivity";
 import TaskPanel from "./TaskPanel";
@@ -132,7 +133,7 @@ function MessageRow({
             {formatTime(message.created_at)}
           </span>
         ) : (
-          agent ? <button type="button" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`View ${agent.name} profile`} onClick={() => openModal({ kind: "agent", agentId: agent.id })}><Avatar name={message.author_name} kind={message.author_type} role={agent.role} avatar={agent.avatar} /></button> : <Avatar name={message.author_name} kind={message.author_type} />
+          agent ? <button type="button" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`View ${agent.name} profile`} onClick={() => openModal({ kind: "agent", agentId: agent.id })}><Avatar name={message.author_name} kind={message.author_type} role={agent.role} avatar={agent.avatar} runtime={agent.runtime} /></button> : <Avatar name={message.author_name} kind={message.author_type} />
         )}
       </div>
       <div
@@ -165,7 +166,7 @@ function DraftRow({ draft, state, openModal }: { draft: Draft; state: State; ope
   return (
     <div className={rowClass}>
       <div className="w-9 shrink-0">
-        <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} />
+        <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} runtime={agent.runtime} />
       </div>
       <div className={cn("min-w-0 flex-1", caretClass)}>
         <AuthorLine name={agent.name} agent={agent} tag={agent.role_label} time="writing…" writing openModal={openModal} />
@@ -276,6 +277,7 @@ export default function ChannelView({
   ];
   const agentCount = channel.agent_ids.length;
   const humanCount = channel.human_ids.length;
+  const dmPerson = state.users[channel.dm_user_ids?.find((id) => id !== state.me.id) ?? -1];
   const dmAgent = channel.dm_agent_id != null ? state.agents[channel.dm_agent_id] : null;
   const headerComputer = computers.find((c) => c.computer_working) ?? computers[0];
   const activeComputers = computers.filter((c) => c.computer_working);
@@ -286,7 +288,7 @@ export default function ChannelView({
         <Button variant="ghost" size="icon-sm" className="hidden max-sm:inline-flex" aria-label="Back to conversations" onClick={onBack}><ArrowLeftIcon /></Button>
         {dmAgent ? (
           <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`View ${dmAgent.name} profile`} onClick={() => openModal({ kind: "agent", agentId: dmAgent.id })}>
-            <Avatar name={dmAgent.name} kind="agent" role={dmAgent.role} avatar={dmAgent.avatar} />
+            <Avatar name={dmAgent.name} kind="agent" role={dmAgent.role} avatar={dmAgent.avatar} runtime={dmAgent.runtime} />
             <div className="min-w-0">
               <div className={titleClass}>{dmAgent.name}</div>
               <div className={topicClass}>
@@ -296,20 +298,20 @@ export default function ChannelView({
           </button>
         ) : (
           <div className="min-w-0 flex-1">
-            <div className={titleClass}># {channel.name}</div>
-            {channel.topic && <div className={topicClass}>{channel.topic}</div>}
+            <div className={titleClass}>{dmPerson ? dmPerson.display_name : `# ${channel.name}`}</div>
+            {dmPerson ? <div className={topicClass}>Private conversation</div> : channel.topic && <div className={topicClass}>{channel.topic}</div>}
           </div>
         )}
         <div className="ml-auto flex min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2 max-sm:w-full">
           <Button variant="ghost" size="sm" onClick={() => setViewsOpen(true)}><LayoutDashboardIcon data-icon="inline-start" />Views</Button>
           <Button variant="ghost" size="sm" onClick={() => setDocumentsOpen(true)}>Files</Button>
-          <label
+          {!dmPerson && <label
             className="text-muted-foreground flex cursor-pointer items-center gap-1.5 text-xs"
             title="Show messages agents send to each other"
           >
             <Checkbox checked={showChatter} onCheckedChange={(checked) => setShowChatter(checked === true)} />
             Agent chatter
-          </label>
+          </label>}
           {headerComputer && !computerOpen && (
             <Button
               variant="chip"
@@ -325,7 +327,7 @@ export default function ChannelView({
             <Button variant="ghost" size="icon-sm" aria-label="Open agent profile" onClick={() => openModal({ kind: "agent", agentId: dmAgent.id })}>
               <PanelRightIcon />
             </Button>
-          ) : (
+          ) : !dmPerson ? (
             <Button
               variant="chip"
               size="chip"
@@ -336,7 +338,7 @@ export default function ChannelView({
             >
               <UsersIcon data-icon="inline-start" />{humanCount + agentCount}
             </Button>
-          )}
+          ) : null}
         </div>
       </header>
       <ChannelViews key={`views-${channel.id}`} channelId={channel.id} open={viewsOpen} onClose={() => setViewsOpen(false)} />
@@ -346,12 +348,32 @@ export default function ChannelView({
         {!messages && <div className="text-muted-foreground p-6 text-center">Loading messages…</div>}
         {messages && messages.length === 0 && (
           <WorkspaceEmpty
-            title={dmAgent ? `A little help from ${dmAgent.name}` : `Welcome to #${channel.name}`}
-            description={dmAgent ? `Your private conversation with ${dmAgent.name}. Send a message to get started.` : "Bring your team together. Mention @Master to put your AI teammates to work."}
+            title={dmPerson ? `Chat with ${dmPerson.display_name}` : dmAgent ? `A little help from ${dmAgent.name}` : `Welcome to #${channel.name}`}
+            description={dmPerson ? "Your private conversation. Send a message to get started." : dmAgent ? `Your private conversation with ${dmAgent.name}. Send a message to get started.` : "Bring your team together. Mention @Master to put your AI teammates to work."}
           />
         )}
         <MentionNames names={mentionNames}>
           {rows}
+          {(state.outgoing[channel.id] ?? []).filter((item) => !messages?.some((message) => message.client_id === item.clientId)).map((item) => (
+            <div key={item.clientId} className={cn(rowClass, "flex-row-reverse")}>
+              <div className="w-9 shrink-0"><Avatar name={state.me.display_name} kind="human" /></div>
+              <div className="bg-self-message ml-auto max-w-[85%] rounded-2xl px-4 py-3 text-white">
+                <AuthorLine name={state.me.display_name} agent={null} tag={null} time={item.status === "pending" ? "Sending…" : "Not sent"} mine openModal={openModal} />
+                {item.content ? <p className="whitespace-pre-wrap">{item.content}</p> : <p className="text-white/80">{item.attachmentIds.length} attachment{item.attachmentIds.length === 1 ? "" : "s"}</p>}
+                {item.status === "pending" && <p className="mt-1 text-xs text-white/75" role="status">Sending…</p>}
+                {item.status === "failed" && (
+                  <div className="mt-2">
+                    <p className="text-xs text-white/90" role="alert">{item.error || "Couldn't send"}</p>
+                    {item.retryable && (
+                      <Button variant="outline" size="sm" className="mt-2 border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white" aria-label="Retry sending" onClick={() => void deliverMessage(dispatch, channel.id, item.content, item.attachmentIds, item.clientId)}>
+                        Retry
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
           {drafts.map((d) => (
             <DraftRow key={d.task_id} draft={d} state={state} openModal={openModal} />
           ))}
@@ -367,7 +389,7 @@ export default function ChannelView({
         )}
       </div>
 
-      <TaskPanel key={`tasks-${channel.id}`} channelId={channel.id} state={state} dispatch={dispatch} openComputer={openComputer} />
+      {!dmPerson && <TaskPanel key={`tasks-${channel.id}`} channelId={channel.id} state={state} dispatch={dispatch} openComputer={openComputer} />}
 
       <div className={cn("relative flex shrink-0 items-center gap-1.5 overflow-x-auto px-5 [scrollbar-width:none]", working.length > 0 && "h-8")} aria-live="polite">
         {working.map((item) => (
@@ -381,7 +403,24 @@ export default function ChannelView({
         ))}
       </div>
 
-      <Composer state={state} channel={channel} />
+      {state.serviceStatus?.worker === "unavailable" && (
+        <p role="status" className="text-muted-foreground px-5 pb-2 text-sm">Worker unavailable. Messages to agents are saved and will run when the worker is back.</p>
+      )}
+      {state.serviceStatus?.providers.filter((provider) => provider.state === "sign_in_required").map((provider) => (
+        <div key={provider.agent_id} role="status" className="mx-5 mb-2 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+          <span className="min-w-0 flex-1">{provider.action === "reconnect"
+            ? `${provider.name} needs you to sign in again.`
+            : `Provider sign-in required for ${provider.name}. The connection owner can reconnect it.`}</span>
+          {provider.action === "reconnect" && (
+            <Button size="sm" variant="outline" aria-label="Reconnect provider" onClick={() => openModal({ kind: "new-agent" })}>Reconnect provider</Button>
+          )}
+        </div>
+      ))}
+      {channel.messaging_disabled ? (
+        <p role="status" className="text-muted-foreground px-5 py-4 text-sm">Messaging isn't available for this conversation. History is unchanged.</p>
+      ) : (
+        <Composer state={state} channel={channel} dispatch={dispatch} />
+      )}
     </section>
   );
 }

@@ -36,8 +36,9 @@ async function raw(method: string, path: string, body?: Blob): Promise<Response>
 const note = "text-muted-foreground text-xs";
 const emptyBox = "flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border bg-background px-4 py-9 text-center";
 
-export default function ComputerPanel({ taskId, agent, working, liveBlocked, others = [], onSwitch, onClose, embedded = false, channelId }: {
+export default function ComputerPanel({ taskId, computerKey, agent, working, liveBlocked, others = [], onSwitch, onClose, embedded = false, channelId }: {
   taskId: string;
+  computerKey?: string;
   agent: Agent | undefined;
   working: boolean;
   liveBlocked: string | null;
@@ -50,7 +51,7 @@ export default function ComputerPanel({ taskId, agent, working, liveBlocked, oth
   const base = `/api/tasks/${taskId}/computer`;
   const name = agent?.name ?? "Agent";
   const [tab, setTab] = useState<Tab>("screen");
-  const { computer, error: pollError } = useComputerState(taskId, working);
+  const { computer, error: pollError } = useComputerState(taskId, working, true, computerKey);
   const steps = computer?.steps ?? [];
   const [live, setLive] = useState<LiveView | null>(null);
   const [files, setFiles] = useState<FileEntry[] | null>(null);
@@ -116,19 +117,30 @@ export default function ComputerPanel({ taskId, agent, working, liveBlocked, oth
   const viewOnly = !control?.mine;
   const status = computer?.status === "stopped" ? "paused" : computer?.status.replaceAll("_", " ") ?? "loading";
   const dot = computer?.status === "running" ? "online" : computer?.error ? "error" : "stopped";
-  const unavailable = !computer?.configured || !computer.sandbox_id;
+  const unavailable = !computer?.configured || !computer.sandbox_id
+    || ["provisioning", "starting", "pausing"].includes(computer.status);
+  const liveControls = <>
+    <div className="flex flex-wrap gap-2">
+      <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked || unavailable} onClick={() => void openLive(false)}>
+        {live ? "Reconnect" : "Connect"}
+      </Button>
+      {!control?.mine && <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked || unavailable} onClick={() => void openLive(true)}>Take over</Button>}
+      {control && <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked} onClick={() => void handBack()}>Hand back</Button>}
+    </div>
+    {control && <p className={note}>{control.mine ? "You control" : `${control.user_name} controls`} this computer until {time(control.until)}.</p>}
+  </>;
 
   return (
     <aside
       className={cn("border-border bg-muted/30 max-xl:bg-background flex min-h-0 shrink-0 flex-col text-[13px]", embedded
         ? "w-full overflow-hidden rounded-xl border"
         : "w-[min(560px,44vw)] border-l max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-20 max-xl:w-[min(100vw,560px)] max-xl:shadow-[-4px_0_16px_rgba(0,0,0,0.2)]")}
-      aria-label={`${name}'s computer`}
+      aria-label={computer?.shared ? "Workspace computer" : `${name}'s computer`}
     >
       <header className="border-border bg-background flex min-h-[58px] items-center gap-2.5 border-b px-4 py-3">
         <Avatar name={name} kind="agent" role={agent?.role} avatar={agent?.avatar} size={28} />
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-black">{name}'s computer</div>
+          <div className="text-[15px] font-black">{computer?.shared ? "Workspace computer" : `${name}'s computer`}</div>
           <div className="text-muted-foreground flex items-center gap-1.5 text-xs">
             <StatusDot state={dot} />
             <span className="capitalize">{status}</span>
@@ -163,11 +175,12 @@ export default function ComputerPanel({ taskId, agent, working, liveBlocked, oth
           {(error || pollError) && <p className="text-destructive text-xs" role="alert">{error || pollError}</p>}
           {computer?.network_warning && <p className="rounded-lg border border-border bg-muted p-3 text-xs" role="alert">{computer.network_warning}</p>}
           {computer && !computer.configured && <p className="text-muted-foreground">Computer access is not configured for this workspace.</p>}
+          {computer?.shared && <p className={note}>Shared files, apps, and browser logins for workspace agents. Private chats stay separate.</p>}
           {computer?.error && <p className="text-destructive text-xs">{computer.error}</p>}
           {control && (
             <p className="rounded-md border border-[#d9a400] bg-[#ffc400]/12 px-2.5 py-1.5">
               {control.mine ? "You control" : `${control.user_name} controls`} this computer until {time(control.until)}.
-              The agent waits for its clicks, typing, and commands.
+              {computer?.shared ? "All agents wait for clicks, typing, and commands." : "The agent waits for its clicks, typing, and commands."}
             </p>
           )}
 
@@ -192,7 +205,7 @@ export default function ComputerPanel({ taskId, agent, working, liveBlocked, oth
 
           <TabsContent value="live" className="flex flex-col gap-2">
             {live ? <>
-              <ComputerLiveView url={live.url} viewOnly={viewOnly} name={name} />
+              <ComputerLiveView url={live.url} viewOnly={viewOnly} name={name} controls={liveControls} />
               <p className={note}>Link valid until {time(live.expires_at)}.
                 {viewOnly ? " View only: take over to use the mouse and keyboard." : ""}</p>
             </> : (
@@ -201,21 +214,7 @@ export default function ComputerPanel({ taskId, agent, working, liveBlocked, oth
                 <p className={note}>{unavailable ? "Ask the agent to use its computer in this chat first." : "Connect to resume a paused computer. Take over pauses the agent’s mouse, keyboard, and commands for up to 15 minutes."}</p>
               </div>
             )}
-            <div className="flex flex-wrap gap-2">
-              <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked || unavailable} onClick={() => void openLive(false)}>
-                {live ? "Reconnect" : "Connect"}
-              </Button>
-              {!control?.mine && (
-                <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked || unavailable} onClick={() => void openLive(true)}>
-                  Take over
-                </Button>
-              )}
-              {control && (
-                <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked} onClick={() => void handBack()}>
-                  Hand back
-                </Button>
-              )}
-            </div>
+            {liveControls}
             {liveBlocked && <p className={note}>{liveBlocked} The Screen and Files tabs stay available.</p>}
           </TabsContent>
 
@@ -268,7 +267,7 @@ export default function ComputerPanel({ taskId, agent, working, liveBlocked, oth
         </Button>
         {computer?.sandbox_id && (
           <a className="text-mention text-xs hover:underline" href={computer.dashboard_url} target="_blank" rel="noreferrer">
-            E2B dashboard
+            {computer.provider === "tenki" ? "Tenki" : "E2B"} dashboard
           </a>
         )}
       </footer>

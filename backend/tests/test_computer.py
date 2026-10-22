@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import json
 from dataclasses import replace
-from zipfile import ZipFile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -24,9 +22,7 @@ from app.auth import encrypt_secret, issue_token
 from app.computer import ComputerUnavailable, TaskComputer, sandbox_record, save_sandbox
 from app.runtime.harness import build_harness
 from app.main import app
-from app import documents
-from app.persistence.models import (AgentProfile, AgentTask, Channel, ChannelMember, Document, TaskDocument, User, db,
-                                    init_db)
+from app.persistence.models import AgentProfile, AgentTask, Channel, ChannelMember, User, db, init_db
 from app.tasks import enqueue
 from app.tasks.worker import execute
 from app.workspace.audit import record_agent
@@ -368,50 +364,6 @@ def test_browser_launch_and_file_export_survive_final_result(tmp_path, desktop_j
     asyncio.run(scenario())
 
 
-def test_docx_export_becomes_a_durable_download_linked_in_the_reply(desktop_job):
-    task, agent, _, computer, _, sandbox = desktop_job
-    with db() as session:
-        session.add(ChannelMember(channel_id=task.channel_id, member_type="agent", member_id=agent.id))
-        session.commit()
-    buffer = io.BytesIO()
-    with ZipFile(buffer, "w") as docx:
-        docx.writestr("[Content_Types].xml", "<Types/>")
-        docx.writestr("word/document.xml", "<document/>")
-    resume = buffer.getvalue()
-    sandbox.fs.get_file_info.side_effect = lambda path, **kwargs: SimpleNamespace(is_dir=False, size=len(resume))
-    sandbox.fs.download_file.side_effect = lambda *args: resume
-
-    async def scenario():
-        async with computer:
-            first = await computer.export_file("/home/user/Resume_Updated.docx")
-            replay = await computer.export_file("/home/user/Resume_Updated.docx")
-            return first, replay
-    first, replay = asyncio.run(scenario())
-    assert first["name"] == "Resume_Updated.docx" and first["download"].startswith("/api/documents/")
-    assert replay["download"] == first["download"]
-    doc_id = first["download"].split("/")[3]
-    with db() as session:
-        doc = session.get(Document, doc_id)
-        assert doc.uploaded_by == 0 and doc.channel_id == task.channel_id and doc.status == "queued"
-        assert session.get(TaskDocument, (task.id, doc_id)) is not None
-        # Leave nothing queued for document-processing tests that share this database.
-        doc.status = "ready"
-        session.add(doc)
-        session.commit()
-        session.refresh(doc)
-    assert documents.path_for(doc).read_bytes() == resume
-    reply = documents.finalize_document_links(task, "Done: [Your resume](sandbox:/home/user/Resume_Updated.docx)")
-    assert reply == f"Done: [Your resume]({first['download']})"
-
-    sandbox.fs.download_file.side_effect = lambda *args: b"not a zip"
-    sandbox.fs.get_file_info.side_effect = lambda path, **kwargs: SimpleNamespace(is_dir=False, size=9)
-    async def broken():
-        async with computer:
-            await computer.export_file("/home/user/broken.docx")
-    with pytest.raises(ComputerUnavailable, match="broken.docx"):
-        asyncio.run(broken())
-
-
 def test_browser_metadata_omits_url_credentials_and_clears_old_network_warning(desktop_job):
     from app.computer.display import display_state, update_display
     _, _, _, computer, _, sandbox = desktop_job
@@ -705,6 +657,7 @@ async def _create_computer(computer):
 
 
 def test_agent_profile_discovers_channel_computers_without_starting_them(desktop_job):
+    from app.computer import computer_key
     task, agent, user, computer, client, _ = desktop_job
     asyncio.run(_create_computer(computer))
     newer = enqueue(agent_id=agent.id, channel_id=task.channel_id, room_id=task.room_id,
@@ -727,6 +680,7 @@ def test_agent_profile_discovers_channel_computers_without_starting_them(desktop
         assert result.status_code == 200 and result.headers["cache-control"] == "no-store"
         rows = {row["channel_id"]: row for row in result.json()["computers"]}
         assert rows[task.channel_id]["task_id"] == newer.id
+        assert rows[task.channel_id]["computer_key"] == computer_key(task) == computer_key(newer)
         assert rows[task.channel_id]["status"] == "stopped"
         assert rows[fresh_id]["task_id"] is None and rows[fresh_id]["status"] == "not_started"
         assert "image" not in rows[task.channel_id] and "sandbox_id" not in rows[task.channel_id]

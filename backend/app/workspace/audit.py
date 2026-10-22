@@ -16,7 +16,7 @@ SECRET_WORDS = ("apikey", "accesskey", "privatekey", "secret", "token", "passw",
 # Each pattern keeps its first group and hides the rest; leaning toward hiding too much is fine.
 SECRET_PATTERNS = [
     re.compile(r"()(?:\bbearer\s+[\w.~+/=-]+|\b(?:sk-|sk_|band_[a-z]_|ghp_|gho_|ghs_|github_pat_|xox[abprs]-|AKIA)"
-               r"[\w-]{8,})", re.I),
+               r"[\w-]{8,}|\btk_[\w-]{8,})", re.I),
     # URL user info: scheme://user:pass@host or scheme://token@host.
     re.compile(r"(\b[a-z][\w+.-]*://)[^/\s@\"']+@", re.I),
     # Header values of any scheme (Basic, Digest, token), up to the closing quote or the line end.

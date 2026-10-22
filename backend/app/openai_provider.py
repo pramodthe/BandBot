@@ -7,6 +7,7 @@ from sqlmodel import select
 from app.auth import decrypt_secret
 from app.config import MODELS, settings
 from app.persistence.models import AgentProfile, AgentTask, OpenAISettings, TaskModel, db
+from app.agent_connections import runtime_for
 
 
 def configuration() -> tuple[str, list[str], str]:
@@ -56,6 +57,8 @@ def migrate_profiles() -> None:
     _, _, default = configuration()
     with db() as session:
         for profile in session.exec(select(AgentProfile).where(AgentProfile.model.like("claude-%"))).all():
+            if runtime_for(profile.id):
+                continue
             for task in session.exec(select(AgentTask).where(AgentTask.agent_id == profile.id,
                                                              AgentTask.attempts > 0)).all():
                 if not session.get(TaskModel, task.id):

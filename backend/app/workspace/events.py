@@ -7,6 +7,9 @@ from typing import Any, Callable
 
 from fastapi import WebSocket
 
+from app.persistence.models import db
+from app.workspace.sync import advance_cursor
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,13 +22,14 @@ def _channel_id(event: dict[str, Any]) -> int | None:
 
 
 class EventBus:
-    """Fans app events out to connected browser sockets; private channels reach only their owner."""
+    """Fans app events out to authorized members of each conversation."""
 
     def __init__(self) -> None:
         self._sockets: dict[int, set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
-        # Maps a channel id to the only user allowed to see it, or None when everyone may.
-        self.audience: Callable[[int], int | None] = lambda _channel_id: None
+        # None preserves the audience of legacy shared-workspace channels.
+        self.audience: Callable[[int], int | set[int] | None] = lambda _channel_id: None
+        self.agent_visible: Callable[[int, int], bool] = lambda _uid, _aid: True
 
     @property
     def online_user_ids(self) -> list[int]:
@@ -45,12 +49,22 @@ class EventBus:
         if last:
             await self.publish({"type": "presence", "user_id": user_id, "online": False})
 
-    async def publish(self, event: dict[str, Any]) -> None:
+    async def publish(self, event: dict[str, Any], *, users: set[int] | None = None) -> None:
+        if "cursor" not in event:
+            try:
+                with db() as session:
+                    event = {**event, "cursor": advance_cursor(session)}
+                    session.commit()
+            except Exception:
+                logger.exception("Could not stamp an event cursor")
         channel_id = _channel_id(event)
         owner = self.audience(channel_id) if channel_id is not None else None
+        audience = ({owner} if isinstance(owner, int) else owner) if users is None else users
+        agent_id = (event.get("agent") or {}).get("id") or (event.get("agent_id") if channel_id is None else None)
         async with self._lock:
             targets = [ws for user_id, sockets in self._sockets.items()
-                       if owner is None or user_id == owner for ws in sockets]
+                       if (audience is None or user_id in audience)
+                       and (not agent_id or self.agent_visible(user_id, agent_id)) for ws in sockets]
         results = await asyncio.gather(
             *(ws.send_json(event) for ws in targets), return_exceptions=True
         )

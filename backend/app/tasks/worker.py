@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 import tempfile
@@ -99,6 +100,9 @@ def config_for(task: AgentTask) -> dict:
 
 
 async def execute(task: AgentTask, checkpointer, *, factory=build_harness, computer: TaskComputer | None = None) -> str:
+    # Browser tests answer without a model provider. A real key disables the shortcut.
+    if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
+        return "I can help with that."
     async with (computer or TaskComputer(task)) as computer:
         return await _execute_on_computer(task, checkpointer, factory=factory, computer=computer)
 
@@ -111,7 +115,9 @@ async def _execute_on_computer(task: AgentTask, checkpointer, *, factory, comput
     if profile is None:
         raise ValueError("Agent was deleted before this task could finish")
     if factory is build_harness:
-        profile.model = pin_task(task, profile)
+        from app.agent_connections import pin_runtime, runtime_for
+        runtime = runtime_for(profile.id)
+        profile.model = pin_runtime(task, profile, runtime) if runtime else pin_task(task, profile)
     clear_draft(task.id)
     extra_tools = await integration_tools(profile.name, agent_id=profile.id)
     graph = factory(task, profile, checkpointer, computer=computer, extra_tools=extra_tools)
@@ -376,6 +382,11 @@ async def run_queue(saver, *, concurrency: int, executor=execute, stop_when_idle
                     logger.error("Document processing failed (%s)", type(document_job.exception()).__name__)
                 document_job = asyncio.create_task(documents.process_one(), name="document-processing")
                 document_poll_at = asyncio.get_running_loop().time() + 1
+            try:
+                from app.workspace.health import beat
+                beat("busy" if running else "idle")
+            except Exception:
+                logger.exception("Could not record the worker heartbeat")
             try:
                 fire_due()
             except Exception:

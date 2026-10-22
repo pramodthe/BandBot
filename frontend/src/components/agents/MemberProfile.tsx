@@ -34,7 +34,7 @@ export default function MemberProfile({ state, selected, onSelect, openModal, on
     <section aria-label={`${human.display_name} profile`} className="min-h-0 flex-1 overflow-y-auto px-5 py-5 min-[640px]:px-6 min-[640px]:py-10 min-[901px]:px-8 min-[901px]:py-16">
       <div className="mx-auto flex w-full max-w-[752px] flex-col gap-5">
         <Button variant="ghost" size="sm" className="hidden self-start max-sm:inline-flex" onClick={onBack}><ArrowLeftIcon data-icon="inline-start" />Members</Button>
-        <header className="mb-1 flex items-center gap-3.5"><Avatar name={human.display_name} kind="human" size={64} /><h1 className="min-w-0 truncate text-base font-semibold">{human.display_name}</h1></header>
+        <header className="mb-1 flex flex-wrap items-center gap-3.5"><Avatar name={human.display_name} kind="human" size={64} /><h1 className="min-w-0 flex-1 truncate text-base font-semibold">{human.display_name}</h1>{human.id !== state.me.id ? <Button variant="outline" onClick={() => openModal({ kind: "people", personId: human.id })}>Connect or message</Button> : <Button variant="outline" onClick={() => openModal({ kind: "people" })}>People</Button>}</header>
         <ProfileSection title="PROFILE">
           <dl className="text-sm">
             <ProfileRow label="Role" icon={<UserRoundIcon />}><span className="capitalize">{roleOf(state, human.id)}</span></ProfileRow>

@@ -42,6 +42,7 @@ export default function AgentComputers({ agent, preferredChannelId, onChannel, o
     ?? preferred ?? computers[0];
   const label = (item: typeof selected) => item ? item.is_dm ? "Direct chat" : `#${item.channel_name}` : "";
   const channelId = selected?.channel_id;
+  const computerKey = selected ? `${selected.channel_id}-${selected.computer_key ?? selected.provider ?? "computer"}` : "";
 
   return (
     <div className="flex flex-col gap-4">
@@ -51,7 +52,9 @@ export default function AgentComputers({ agent, preferredChannelId, onChannel, o
           Open chat<ArrowUpRightIcon data-icon="inline-end" />
         </Button>
       </div>
-      <p className="text-muted-foreground text-xs">Each channel has its own computer, files, and browser sessions.</p>
+      <p className="text-muted-foreground text-xs">{selected?.shared
+        ? "Workspace agents share this computer, its files, apps, and browser logins. Private chats have separate computers."
+        : "This computer keeps its files and browser sessions within this agent and channel."}</p>
       {error ? <p role="alert" className="text-destructive text-sm">{error}</p> : null}
       {!data ? <p role="status" className="text-muted-foreground flex items-center gap-2 py-8 text-sm"><LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />{error ? "Couldn’t load computers. Retrying…" : "Loading computers…"}</p> : <>
         {selected ? <div className="flex flex-wrap items-center gap-3">
@@ -60,8 +63,8 @@ export default function AgentComputers({ agent, preferredChannelId, onChannel, o
             <SelectContent><SelectGroup>{computers.map((item) => <SelectItem key={item.channel_id} value={String(item.channel_id)}>{label(item)}</SelectItem>)}</SelectGroup></SelectContent>
           </Select>
         </div> : null}
-        {!data.configured ? <p className="text-muted-foreground text-sm">Computer access is not configured. A workspace admin needs to configure E2B to enable desktops.</p> : null}
-        {selected?.task_id ? <ComputerPanel key={`${selected.channel_id}-${selected.task_id}`} embedded
+        {!(selected?.configured ?? data.configured) ? <p className="text-muted-foreground text-sm">Computer access is not configured. A workspace admin needs to enable desktops.</p> : null}
+        {selected?.task_id ? <ComputerPanel key={computerKey} computerKey={computerKey} embedded
           taskId={selected.task_id} agent={agent} working={selected.agent_working} channelId={selected.channel_id}
           liveBlocked={selected.can_control ? null : "Only workspace admins can use the live desktop in this channel."} /> : (
           <Empty className="rounded-xl border py-12">

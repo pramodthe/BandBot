@@ -29,7 +29,7 @@ export default function ComputerActivity({ agent, activity, openComputer }: {
 
   return (
     <div className="mx-auto flex w-full max-w-[920px] gap-3 px-6 py-3 max-sm:px-4" aria-label={`${agent.name}'s computer activity`}>
-      <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} />
+      <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} runtime={agent.runtime} />
       <div className="min-w-0 flex-1">
         <div className="mb-2 flex max-w-md flex-wrap items-center gap-x-2 gap-y-1 text-xs">
           <span className="text-sm font-semibold">{agent.name}'s computer</span>

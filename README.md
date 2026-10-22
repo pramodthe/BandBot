@@ -20,13 +20,14 @@
 
 BAND_BOTS brings team conversation and agent execution into one place. Give an AI teammate a task in a channel or private chat, follow its progress, review its results, and step in when it needs you. Teammates have their own identities, roles, and channel-scoped memory, so the work can continue beyond a single prompt.
 
-**Band** handles messaging and agent identity. **OpenAI + Deep Agents** power execution. **E2B** gives agents private cloud computers when a task needs a browser, terminal, or running application.
+**Band** handles messaging and agent identity. **OpenAI + Deep Agents** power execution. **E2B**, or the optional [persistent Tenki computer](docs/tenki-computers.md), gives agents private cloud computers when a task needs a browser, terminal, or running application.
 
 ## What you can do
 
 | Capability | In your workspace |
 | --- | --- |
 | **Work together in context** | People and AI teammates share channels, private conversations, files, and task history. |
+| **Connect with people** | Add contacts by app username, chat without agents, and invite people into channels. Individual Band keys are optional. |
 | **Build a persistent team** | Give teammates names, expressive avatars, roles, instructions, reusable skills, and scoped memory. |
 | **Delegate real work** | Combine research, coding, writing, and review through specialist helpers and visible teammate hand-offs. |
 | **Watch work happen** | See task ownership and progress, inspect the agent's cloud computer, and take over when needed. |
@@ -120,6 +121,7 @@ To serve the built UI from FastAPI instead, run `npm run build` in `frontend/` a
 | Optional service | Setting | Enables |
 | --- | --- | --- |
 | E2B | `E2B_API_KEY` | Cloud desktops, browser and terminal tools, persistent sandbox files, and live app previews. |
+| Tenki (optional) | `TENKI_API_KEY`, `TENKI_DESKTOP_IMAGE` | Cloud desktops with durable data disks, pause/resume, private viewing and app previews. `TENKI_COMPUTER_SHARING=workspace` shares one computer across channel agents; private chats stay separate. See [setup and rollback](docs/tenki-computers.md). |
 | Exa | `EXA_API_KEY` | Web research and public-page retrieval. |
 | Composio | `COMPOSIO_API_KEY` | Connected apps such as Gmail, GitHub, and Slack, with agent-specific access controls. |
 | MCP servers | `MCP_CONFIG_PATH` | Additional tools governed by the workspace's approval policies. |
@@ -141,6 +143,8 @@ flowchart TB
 
 Tasks are queued durably and execute outside the API process. Checkpoints preserve progress across worker restarts. Agent memory and computers are scoped to the agent and channel; task-scoped helpers remain distinct from visible teammates.
 
+A dropped connection reloads the signed-in person's channels, memberships, agents, and pending invitations, then catches up messages without counting the same one twice. Sends can include a `client_id`. Retrying the same id and payload returns the original message and does not create another agent task. See [Reconnect and message retries](docs/reference.md#reconnect-and-message-retries). Sessions, recovery, people blocking, worker health, PostgreSQL, and backups are in [Operations](docs/operations.md).
+
 Live app previews use expiring, isolated origins that proxy to a registered port on the agent's private computer. Provider credentials stay server-side. The saved **Preview** remains available when the computer is paused; **Live app** opens the running version in the same place.
 
 **Current deployment model:** one API process and one worker share a persistent local filesystem, application database, checkpoint store, and application secret. This is one shared workspace; channel permissions are not tenant isolation. See [deployment limits](docs/reference.md#deployment-limits) before changing that topology.
@@ -150,6 +154,7 @@ Live app previews use expiring, isolated origins that proxy to a registered port
 | Guide | What you'll find |
 | --- | --- |
 | [Configuration and operations](docs/reference.md) | Environment variables, document processing, memory, recovery, computers, approvals, schedules, integrations, and deployment. |
+| [Operations](docs/operations.md) | Sessions, recovery email, blocking, worker health, Alembic, PostgreSQL, and backup restore. |
 | [Architecture](docs/architecture.md) | Source map, feature boundaries, and where changes belong. |
 | [Interactive answers](docs/interactive-ui.md) | Opt-in custom interfaces, sandbox restrictions, and human-reviewed follow-ups. |
 | [Assistant UI Elements](docs/assistant-ui-elements.md) | Installed components, supported compositions, and integration boundaries. |
@@ -157,6 +162,22 @@ Live app previews use expiring, isolated origins that proxy to a registered port
 | [Repository guidelines](AGENTS.md) | Product intent, application invariants, and security expectations. |
 
 ## Development
+
+### Add connected agent teammates
+
+Open **Add agents** and choose **Create agent**, **Codex**, **Claude Agent**, **Cursor**, or **OpenClaw**. Create agent opens the custom teammate editor. External providers open a dedicated connection screen, authenticate first, and select a model and display name automatically; these can be changed under Connection options. Optionally add the teammate to the current channel. Credentials are encrypted using `APP_SECRET` and never returned to the browser. Provider connections belong to the person who authenticated them; signed-in users can connect their own providers. See [people and Band accounts](docs/people-and-band-accounts.md) for contact requests and channel invitations. Remove agents using a connection before disconnecting it. See [connected agent setup](docs/connected-agents.md) for provider requirements and connection steps.
+
+Run `uv sync --locked` in `backend/` for the Claude and Cursor Agent SDKs. Install the Codex CLI on the API/worker host with `npm install -g @openai/codex`; use `CODEX_EXECUTABLE` for a custom native executable. The API and worker must have the same runtime installation. OpenClaw uses an approved Gateway and a dedicated agent whose native tools are disabled. No runtime needs a user terminal to remain open.
+
+On a local installation, **Codex → Sign in with ChatGPT** uses the installed Codex app-server's browser login. The app starts a separate credential session, opens OpenAI authorization, and saves the completed session encrypted; the worker lets Codex refresh its tokens. Codex's callback listener uses port 1455, which must be free, and the browser must run on the API host. This option is offered on `localhost` or `127.0.0.1` without an environment flag. The app never imports the host's existing Codex login. Claude uses Anthropic API keys; claude.ai subscription login is not offered.
+
+The separate, optional Sign in with ChatGPT client integration remains gated by `CODEX_CHATGPT_SIGN_IN=on`, with `AGENT_OAUTH_REDIRECT_URI=http://127.0.0.1:8000/auth/callback`. It uses PKCE, single-use state and verified ID tokens. This is distinct from Codex's native port-1455 login. Hosted or paid products must obtain the appropriate provider access before offering subscription usage; these local login routes reject remote hostnames.
+
+Connected agents run in the existing worker. Codex app-server, Claude Agent SDK, Cursor Agent SDK, and the OpenClaw Gateway supply reasoning steps using structured responses; Deep Agents owns checkpointed conversation state and executes the selected app tools. Native vendor shell/file tools, personal CLI configuration, plugins and MCP servers are disabled. Local children receive only their own connection credential in a clean temporary home; OpenClaw's dedicated native tool policy is checked before every step. Code execution, files and computer actions use the existing per-agent/per-channel E2B computer. App tools retain approvals, cancellation, memory isolation, connected-app restrictions and token budgets. Hosted OpenAI Code Interpreter is not attached to connected runtimes. Vendor output arrives at model-step boundaries rather than as live token deltas.
+
+This is an embedded runtime integration, not a mirror of the user's Codex or Claude desktop chats. Conversation recovery comes from LangGraph checkpoints, not vendor session files. Codex app-server is an evolving interface; the optional offline CLI contract test checks its output and ensures native execution tools stay disabled. Provider sign-in and live model execution require a real account and have not been exercised by the offline suite.
+
+Provider references: [Codex app-server](https://learn.chatgpt.com/docs/app-server), [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source), and [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).
 
 Run the offline checks from the repository root:
 
