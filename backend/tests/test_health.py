@@ -11,7 +11,7 @@ def test_health_is_ok_when_band_is_not_configured():
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["band"]["configured"] is False
+    assert body["band"] == {"configured": False, "online": False}
 
 
 def test_health_fails_when_band_setup_fails():
@@ -26,7 +26,9 @@ def test_health_fails_when_band_setup_fails():
         assert response.status_code == 503
         body = response.json()
         assert body["ok"] is False
-        assert "Validation failed" in body["band"]["error"]
+        assert body["band"] == {"configured": True, "online": False}
+        assert "error" not in body["band"]
+        assert "Validation failed" not in response.text
     finally:
         object.__setattr__(settings, "band_user_api_key", previous)
         service.org.error = previous_error

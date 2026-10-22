@@ -39,7 +39,7 @@ Copy `.env.example` to `.env` in the repository root and configure:
 | `E2B_API_KEY` | Enables isolated cloud desktops, browser/GUI operations, and Python/shell execution. |
 | `E2B_DESKTOP_TEMPLATE` | Official `desktop` template by default; custom templates must provide the same XFCE, Xvfb, Chromium, xdotool, scrot, x11vnc, and `/opt/noVNC` stack. |
 | `E2B_TIMEOUT_SECONDS` | Runtime fallback auto-pauses the computer; default 1200, range 60–3600. Keep above `AGENT_TASK_TIMEOUT`. Paused computers persist until explicitly deleted. |
-| `AGENT_CHECKPOINT_PATH` | Checkpoint SQLite file; defaults to `backend/agent_checkpoints.db`. |
+| `AGENT_CHECKPOINT_PATH` | Checkpoint store; defaults to the SQLite file `backend/agent_checkpoints.db`. May also be a PostgreSQL URL for diskless hosts. |
 | `AGENT_TASK_TIMEOUT` | Execution time limit per attempt in seconds; default 900. |
 | `AGENT_RECURSION_LIMIT` | Graph step limit per invocation; default 100. |
 | `WORKER_CONCURRENCY` | Tasks the worker runs at once; default 4. Each agent still runs one task at a time per channel. |
@@ -61,7 +61,7 @@ The worker extracts source locations, transcribes scanned pages/images with Open
 
 Questions about uploaded or saved conversation files go directly to the built-in document tools, including follow-ups without new attachments. Connected-app discovery is for external sources such as Google Drive or Gmail. Missing or processing conversation files do not automatically trigger a search of external accounts.
 
-Originals and metadata must be backed up together. `DOCUMENTS_PATH` defaults to `backend/documents`; keep it on the shared persistent filesystem used by API and worker. Abandoned staged uploads expire after a day. Removal hides documents immediately and schedules provider cleanup; stale retrieval results are filtered against local access and deletion state. Uploaders and admins can remove files. Ingestion jobs recover after worker restarts, and processing tokens count against channel budgets. Token cost estimates exclude OpenAI storage and hosted tool charges.
+Originals and metadata must be backed up together. `DOCUMENTS_PATH` defaults to `backend/documents`; keep it on the shared persistent filesystem used by API and worker, or set it to `database` so originals live in the application database. Abandoned staged uploads expire after a day. Removal hides documents immediately and schedules provider cleanup; stale retrieval results are filtered against local access and deletion state. Uploaders and admins can remove files. Ingestion jobs recover after worker restarts, and processing tokens count against channel budgets. Token cost estimates exclude OpenAI storage and hosted tool charges.
 
 Before the first OpenAI deployment, let running Claude tasks finish and back up both databases. Agent identities, conversations, memories and computers remain. Old paused/failed Claude checkpoints are retained for inspection; cancel a waiting task and choose Retry/Resume to explicitly start a new OpenAI task. They are never automatically replayed through the new provider. New OpenAI tasks retain normal checkpoint resume behavior.
 
@@ -139,6 +139,18 @@ Enabled skills are loaded at the start of a task through Deep Agents' native ski
 - Replies stream into the channel while the agent writes them. Only the parent agent's final answer streams (text it writes before a tool call is dropped); helpers, report-backs to teammates, and interim statuses don't stream. The draft lives in the `MessageDraft` table and is removed when the final message is saved or the task fails, is cancelled, or pauses for approval. Band still receives only the final message.
 - Each task has its own checkpoint thread. Worker restart requeues interrupted tasks and resumes saved progress. Provider requests have bounded retries; task failures require **Resume**. The parent has a 40-model-call limit per invocation and 120 per task thread; computer helpers have a 30-call limit and other named helpers have a 12-call limit per invocation, in addition to graph/time limits. These are execution limits, not dollar budgets.
 - Local replies are committed with task completion. Band replies get one automatic send attempt: uncertain outcomes are marked `unknown` and are never blindly resent. A local answer remains available even when Band delivery is uncertain. Full local answers may exceed the 8,000-character Band copy.
+
+## Reconnect and message retries
+
+The workspace keeps one API process. Its WebSocket fan-out is in memory, so events sent while a browser is disconnected are not replayed. When the socket opens again, the app reloads `GET /api/bootstrap` and applies that snapshot, then replays only socket events whose `cursor` is newer than the snapshot. A slow snapshot cannot put a private channel back after the member has left, and it cannot overwrite a newer live update. Pending channel invitations and incoming contact requests are part of the snapshot, so they show up in the conversation list without a page reload.
+
+`GET /api/channels/{id}/messages?after={message_id}` returns messages newer than one the client has already seen. Those are counted once. Opening the conversation clears that count. A message the client has already applied does not increase it again.
+
+Human sends may include `client_id`: 8–80 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. The server stores it in the `client_message` table, unique per sender and conversation, in the same transaction as the message and its agent tasks. The same id and the same text and attachments return the original message and do not enqueue another task. A different payload with that id returns 409. The id is scoped to the authenticated sender and that conversation: it cannot fetch another person's message, and a retry after leaving a private channel is rejected with the same 404 as any other request. Omitting `client_id` preserves the previous behavior, one new message per request, so older clients keep working. New clients show Sending, then the saved message, or Not sent with Retry. Retry uses the original `client_id`.
+
+`sync_cursor` and `client_message` are new tables. Startup creates them; existing message rows are not rewritten. Update the API and the web app together so retries are idempotent. An uncertain Band delivery stays uncertain: a message retry never resends a Band post whose outcome is unknown.
+
+This cursor orders one API process's events. It does not add multi-process fan-out.
 
 ## Assistant UI Elements
 
@@ -219,14 +231,18 @@ The Python prop schemas are generated from the installed assistant-ui package: r
 
 ```bash
 cd backend
+uv run alembic upgrade head
 uv run pytest
 
 cd ../frontend
 npm test
 npm run build
+npm run e2e
 ```
 
 Offline tests exercise actual Deep Agents tool calls and helper delegation using a scripted model, checkpoint recovery across reopened connections, memory isolation, job deduplication, cancellation, authenticated task controls, role and policy permissions, the activity log, and budget enforcement. The computer tests use a fake E2B SDK to check lifecycle/ownership, screenshot delivery to the real harness, replay-safe input, isolation, and authenticated desktop inspection. Live Band/OpenAI/Exa/E2B calls require configured integration checks.
+
+`npm run e2e` starts a temporary API, worker, and Vite and runs the two-person Playwright suite. It does not call Band or a model provider. See [Operations](operations.md).
 
 Frontend tests use Node's built-in runner for diagram-worker concurrency, errors, timeouts, and syntax-asset integrity. Diagram layout runs in one shared worker loaded only when a diagram is shown, keeping the layout engine off the UI thread. Large C++ and Emacs Lisp grammars load as complete JSON assets, and Oniguruma loads its standalone WASM binary. All languages and diagram types remain available. The production build enforces a 500 kB limit per page script and a separate 2 MB limit for the on-demand diagram worker, with Vite's warning threshold unchanged. It also tests the compiled worker across six diagram types under strict worker-global semantics.
 
@@ -243,10 +259,13 @@ See [the architecture guide](architecture.md) for the source map and runtime bou
 - `backend/app/persistence/models.py`, `backend/app/auth.py`: database models, session authentication, and key encryption.
 - `backend/tests/`: offline regression tests.
 - `frontend/src/components/`: application components grouped into `agents/`, `chat/`, `computer/`, `documents/`, `generated/`, `settings/`, `shared/`, and `workspace/`. Tailwind 4 styling uses [shadcn/ui](https://ui.shadcn.com) primitives in `ui/` and [Tool UI](https://www.tool-ui.com) elements in `assistant-ui/elements/`. The UI uses a slim navigation rail, a member/conversation directory, expressive vector agent characters, and spacious profile panels, with Geist and charcoal surfaces by default. A remembered light theme is also available. Theme tokens and global styles live in `src/app.css`, the only stylesheet. New primitives come from `npx shadcn@latest add <name>` and new elements from `npx shadcn@latest add @assistant-ui/elements-<name>`; see CLAUDE.md for the post-install steps.
+- `backend/alembic/`: versioned application-database migrations. Checkpoints stay in their own SQLite file. See [Operations](operations.md).
 
 ## Deployment limits
 
 The product is now called **BAND_BOTS**. Existing database filenames, browser storage keys, session signatures, and cloud-computer ownership labels retain their earlier identifiers so upgrades keep accounts, preferences, and saved computers connected. Renaming the display brand does not require a data migration.
+
+`DATABASE_URL` can name SQLite or PostgreSQL. `AGENT_CHECKPOINT_PATH` may be a SQLite file or a PostgreSQL URL. Changing the application database does not enable a second API or a second worker. See [Operations](operations.md) for the migration, backup, and rollback steps.
 
 This version supports **one API process and one worker on a shared local filesystem**. The worker runs up to `WORKER_CONCURRENCY` tasks at once, at most one per agent per channel, so messages to the same agent in a channel are answered in order. Parallel tasks multiply concurrent OpenAI requests and can start several E2B computers at once; lower the setting if you hit rate limits or cost limits. An exclusive lock prevents a second worker using the same checkpoint file. Run the worker under a process supervisor for automatic restart. Do not run independent worker replicas or different checkpoint paths against the same queue. Multi-host workers need a transactional leased queue and a shared checkpoint backend before deployment.
 

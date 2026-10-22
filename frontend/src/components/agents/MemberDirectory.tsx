@@ -28,15 +28,15 @@ export default function MemberDirectory({ state, selected, onSelect, openModal, 
   );
   const agents = Object.values(state.agents).sort((a, b) => Number(b.is_master) - Number(a.is_master) || a.name.localeCompare(b.name));
   const members = [
-    ...humans.map((user) => ({ id: user.id, kind: "human" as const, name: user.display_name, role: roleOf(state, user.id), avatar: undefined, sub: roleOf(state, user.id) })),
-    ...agents.map((agent) => ({ id: agent.id, kind: "agent" as const, name: agent.name, role: agent.role, avatar: agent.avatar, sub: agent.is_master ? "Head of Agents" : agent.role_label })),
+    ...humans.map((user) => ({ id: user.id, kind: "human" as const, name: user.display_name, role: roleOf(state, user.id), avatar: undefined, runtime: undefined, sub: roleOf(state, user.id) })),
+    ...agents.map((agent) => ({ id: agent.id, kind: "agent" as const, name: agent.name, role: agent.role, avatar: agent.avatar, runtime: agent.runtime, sub: agent.is_master ? "Head of Agents" : agent.role_label })),
   ].filter((member) => (filter === "all" || member.kind === filter) && member.name.toLowerCase().includes(search));
 
   return (
     <aside aria-label="Member directory" className={cn("border-border bg-sidebar flex w-[280px] shrink-0 flex-col border-r narrow:w-[248px] max-sm:min-w-0 max-sm:flex-1", selected && "max-sm:hidden")}>
       <header className="flex h-16 shrink-0 items-center justify-between px-5">
         <h1 className="text-base font-semibold">Members</h1>
-        <Button variant="ghost" size="icon-sm" aria-label="Create agent" onClick={() => openModal({ kind: "new-agent" })}><PlusIcon /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Add agents" onClick={() => openModal({ kind: "new-agent" })}><PlusIcon /></Button>
       </header>
       <div className="px-5 pb-4">
         <ToggleGroup type="single" variant="filter" size="sm" spacing={1} value={filter} onValueChange={(value) => value && setFilter(value)} aria-label="Filter members">
@@ -57,7 +57,7 @@ export default function MemberDirectory({ state, selected, onSelect, openModal, 
               aria-current={selected?.kind === member.kind && selected.id === member.id ? "true" : undefined}
               onClick={() => onSelect({ kind: member.kind, id: member.id })}
             >
-              <Avatar name={member.name} kind={member.kind} role={member.role} avatar={member.avatar} size={40} working={activity?.status === "running"} />
+              <Avatar name={member.name} kind={member.kind} role={member.role} avatar={member.avatar} runtime={member.runtime} size={40} working={activity?.status === "running"} />
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm font-medium">{member.name}</span>
                 <span className={cn("text-muted-foreground truncate text-sm", member.kind === "human" && "capitalize")}>{activity?.status === "waiting" ? "Needs attention" : activity?.status === "running" ? "Working…" : activity?.status === "queued" ? "Queued" : member.sub}</span>

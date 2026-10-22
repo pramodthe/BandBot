@@ -38,8 +38,8 @@ def test_humans_chat_while_band_is_not_configured():
         assert {alice["user"]["id"], bob["user"]["id"]} <= set(channel["human_ids"])
 
         response = client.post("/api/channels", json={"name": "Launch Plan"}, headers=auth_a)
-        assert response.status_code == 503
-        assert "BAND_USER_API_KEY" in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["private"] and response.json()["band_room_id"] is None
 
         with client.websocket_connect(f"/ws?token={bob['token']}") as ws:
             posted = client.post(
@@ -131,4 +131,6 @@ def test_private_channel_events_reach_only_their_owner():
     asyncio.run(scenario())
 
     assert len(owner.events) == 5
-    assert other.events == [{"type": "message", "message": {"channel_id": 3}}]
+    assert [event["type"] for event in other.events] == ["message"]
+    assert other.events[0]["message"]["channel_id"] == 3
+    assert isinstance(other.events[0]["cursor"], int)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -12,7 +14,9 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 from sqlalchemy import case, or_, update
 
-from app.auth import current_user, hash_password, issue_token, user_id_from_token, verify_password
+from app.auth import (authenticate, current_session_id, current_user, hash_password, issue_token,
+                      require_production_secret, revoke_session, revoke_user_sessions, verify_password)
+from app.auth_throttle import GENERIC_LOCKOUT, login_limiter, signup_limiter
 from app.api.skills import router as skills_router
 from app.api.generative import router as generative_router
 from app.api.documents import router as documents_router
@@ -27,11 +31,15 @@ from app.persistence.models import (AgentMemory, AgentPersona, AgentTask, AgentP
                                     ChannelPolicy, DirectMessage, Message, TaskApproval, User, WorkspaceRole, db,
                                     get_session, init_db, utcnow)
 from app.workspace.audit import record, serialize_event
-from app.workspace.permissions import allowed, ensure_owner, is_admin, role_of, serialize_policy, workspace_roles
+from app.workspace.permissions import allowed, can_connect_agents, ensure_owner, is_admin, role_of, serialize_policy, workspace_roles
 from app.workspace.roles import ROLES
 from app.tasks.schedules import cancel_schedule, channel_schedules, describe, serialize_schedule
 from app.tasks import decide_approval, serialize_task
 from e2b import AuthenticationException, SandboxException, ServiceBusyException
+from app.computer.providers import (ComputerProviderError, configured, dashboard, provider_for, scope_provider,
+                                    scope_computer_key, running_on)
+from app.computer.identity import is_shared
+from app.persistence.models import TaskComputerBinding
 
 from app.computer import (TRANSFER_LIMIT, ComputerUnavailable, TaskComputer, active_control, computer_key,
                           release_control, sandbox_record, take_control)
@@ -41,6 +49,16 @@ from app.computer.viewer import router as computer_viewer_router
 from app.runtime.tools.composio import (ComposioError, authorization_link, disconnect_plugin, list_plugins,
                                         normalize_slugs, set_plugin_access)
 from app.workspace.service import ServiceError, serialize_messages, serialize_user, service
+from app.api.agent_connections import router as agent_connections_router
+from app.agent_connections import CONNECTED_PROVIDERS, MODEL_ID, runtime_available, runtime_for
+from app.persistence.models import AgentConnection
+from app.persistence.models import UserBandAccount, PrivateConversation, HumanDirectMessage
+from app.workspace.access import channel_visible, agent_visible, agent_owner
+from app.api.people import incoming_contact_requests, pending_invitations, router as people_router
+from app.workspace.health import service_status
+from app.workspace.sync import current_cursor
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 for noisy in ("httpx", "httpx2"):
@@ -50,6 +68,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    require_production_secret()
+    from app.workspace.health import mark_api_started
+    mark_api_started()
     init_db()
     migrate_profiles()
     with db() as session:
@@ -57,12 +78,13 @@ async def lifespan(_app: FastAPI):
             session.add(Channel(name="general", topic="Humans and agents, all together"))
             session.commit()
         ensure_owner(session)
-    # Stay closed until Band setup finishes, so a health check cannot pass early.
-    await service.startup()
-    try:
-        yield
-    finally:
-        await service.shutdown()
+    startup = asyncio.create_task(service.startup())
+    yield
+    startup.cancel()
+    await asyncio.gather(startup, return_exceptions=True)
+    from app.codex_login import shutdown as close_codex_logins
+    await close_codex_logins()
+    await service.shutdown()
 
 
 app = FastAPI(title="BAND_BOTS", lifespan=lifespan)
@@ -73,6 +95,16 @@ app.include_router(generative_router)
 app.include_router(computer_viewer_router)
 app.include_router(documents_router)
 app.include_router(openai_router)
+app.include_router(agent_connections_router)
+app.include_router(people_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    # FastAPI's default validation response includes rejected input values, including pasted credentials.
+    if request.url.path.startswith(("/api/agent-connections", "/api/band/account")):
+        return JSONResponse({"detail": "Invalid connection details. Check the provider, name and credential."}, status_code=422)
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.exception_handler(ServiceError)
@@ -100,8 +132,16 @@ def _join_general(session: Session, user: User) -> None:
         session.add(ChannelMember(channel_id=general.id, member_type="human", member_id=user.id))
 
 
+def _client_host(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/api/auth/signup")
-async def signup(body: SignupBody, session: Session = Depends(get_session)):
+async def signup(body: SignupBody, request: Request, session: Session = Depends(get_session)):
+    host = _client_host(request)
+    if signup_limiter.too_many(host):
+        raise HTTPException(429, GENERIC_LOCKOUT)
+    signup_limiter.record_failure(host)
     username = body.username.lower()
     if session.exec(select(User).where(User.username == username)).first():
         raise HTTPException(409, "That username is taken")
@@ -122,28 +162,112 @@ async def signup(body: SignupBody, session: Session = Depends(get_session)):
 
 
 @app.post("/api/auth/login")
-async def login(body: LoginBody, session: Session = Depends(get_session)):
+async def login(body: LoginBody, request: Request, session: Session = Depends(get_session)):
+    key = f"{_client_host(request)}:{body.username.strip().lower()}"
+    if login_limiter.too_many(key):
+        raise HTTPException(429, GENERIC_LOCKOUT)
     user = session.exec(select(User).where(User.username == body.username.lower())).first()
     if not user or not verify_password(body.password, user.password_hash):
+        login_limiter.record_failure(key)
+        if login_limiter.too_many(key):
+            raise HTTPException(429, GENERIC_LOCKOUT)
         raise HTTPException(401, "Wrong username or password")
     return {"token": issue_token(user.id), "user": serialize_user(user)}
 
 
+@app.post("/api/auth/logout")
+def logout(session_id: str = Depends(current_session_id)):
+    revoke_session(session_id)
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout-all")
+def logout_all(user: User = Depends(current_user)):
+    revoke_user_sessions(user.id)
+    return {"ok": True}
+
+
+class RecoveryEmailBody(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+
+
+class RecoveryRequestBody(BaseModel):
+    username: str = Field(min_length=1, max_length=32)
+
+
+class RecoveryTokenBody(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
+class PasswordResetBody(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    password: str = Field(min_length=6, max_length=128)
+
+
+@app.post("/api/account/recovery-email")
+def set_recovery_email(body: RecoveryEmailBody, user: User = Depends(current_user)):
+    from app.recovery import start_verification
+    try:
+        start_verification(user, body.email)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return {"ok": True}
+
+
+@app.post("/api/auth/recovery/verify")
+def verify_recovery(body: RecoveryTokenBody):
+    from app.recovery import confirm_verification
+    if not confirm_verification(body.token):
+        raise HTTPException(400, "That verification code is invalid or expired")
+    return {"ok": True}
+
+
+@app.post("/api/auth/recovery")
+def request_recovery(body: RecoveryRequestBody):
+    from app.recovery import GENERIC, request_reset
+    request_reset(body.username)
+    return {"ok": True, "message": GENERIC}
+
+
+@app.post("/api/auth/recovery/reset")
+def recover_password(body: PasswordResetBody):
+    from app.recovery import reset_password
+    if not reset_password(body.token, body.password):
+        raise HTTPException(400, "That reset code is invalid or expired")
+    return {"ok": True}
+
+
 @app.get("/api/bootstrap")
 async def bootstrap(user: User = Depends(current_user), session: Session = Depends(get_session)):
+    # Read the cursor before the snapshot so a change committed during this request has a newer cursor
+    # and is replayed from the live socket instead of being dropped as already included.
+    cursor = current_cursor(session)
     dms = {dm.channel_id: dm for dm in session.exec(select(DirectMessage)).all()}
     visible = [c for c in session.exec(select(Channel).order_by(Channel.name)).all()
-               if c.id not in dms or (dms[c.id].user_id == user.id and dms[c.id].agent_id is not None)]
+               if channel_visible(session, c.id, user.id) and (c.id not in dms or dms[c.id].agent_id is not None)]
+    account = session.get(UserBandAccount, user.id)
+    band = service.org.status()
+    if account and account.secret_enc:
+        cached = service._user_orgs.get(user.id)
+        band = {"configured": bool(account.secret_enc), "online": bool(account.secret_enc),
+                "owner_name": account.name or None, "owner_handle": account.handle or None,
+                "error": None}
+        if cached and cached[0] == account.secret_enc:
+            band = cached[1].status()
     return {
         "me": serialize_user(user),
         "users": [serialize_user(u) for u in session.exec(select(User)).all()],
         "channels": [service.serialize_channel(session, c) for c in visible],
-        "agents": [service.serialize_agent(a) for a in session.exec(select(AgentProfile)).all()],
+        "agents": [service.serialize_agent(a) for a in session.exec(select(AgentProfile)).all() if agent_visible(session, a, user.id)],
         "roles": [{"id": k, **v} for k, v in ROLES.items()],
         "workspace_roles": workspace_roles(session),
         "models": model_catalog(),
-        "band": service.org.status(),
+        "band": band,
         "openai_configured": bool(configuration()[0]),
+        "cursor": cursor,
+        "invitations": pending_invitations(session, user.id),
+        "contact_requests": incoming_contact_requests(session, user.id),
+        "service": service_status(user),
     }
 
 
@@ -252,7 +376,7 @@ async def workspace_audit(before: int | None = None, user: User = Depends(curren
                           session: Session = Depends(get_session)):
     """Every channel's activity for admins, except other people's direct messages."""
     _require_admin(session, user, "Only workspace admins can see the whole audit log")
-    private = select(DirectMessage.channel_id).where(DirectMessage.user_id != user.id)
+    private = [c.id for c in session.exec(select(Channel)).all() if not channel_visible(session, c.id, user.id)]
     query = select(AuditEvent).where(or_(AuditEvent.channel_id.is_(None), AuditEvent.channel_id.notin_(private)))
     if before:
         query = query.where(AuditEvent.id < before)
@@ -270,15 +394,20 @@ class ChannelBody(BaseModel):
 
 def _channel_or_404(session: Session, channel_id: int, user: User) -> Channel:
     channel = session.get(Channel, channel_id)
-    dm = session.get(DirectMessage, channel_id)
-    if not channel or (dm and dm.user_id != user.id):
+    if not channel or not channel_visible(session, channel_id, user.id):
         raise HTTPException(404, "Channel not found")
     return channel
 
 
 def _reject_dm(session: Session, channel_id: int, detail: str) -> None:
-    if session.get(DirectMessage, channel_id):
+    if session.get(DirectMessage, channel_id) or session.get(HumanDirectMessage, channel_id):
         raise HTTPException(409, detail)
+
+
+def _require_channel_owner(session: Session, channel_id: int, user: User) -> None:
+    scope = session.get(PrivateConversation, channel_id)
+    if scope and scope.owner_id != user.id:
+        raise HTTPException(403, "Only the channel owner can manage outside Band participants")
 
 
 @app.post("/api/channels")
@@ -303,11 +432,17 @@ async def join_channel(channel_id: int, user: User = Depends(current_user), sess
 async def leave_channel(channel_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
     _channel_or_404(session, channel_id, user)
     _reject_dm(session, channel_id, "You can't leave a direct message")
+    scope = session.get(PrivateConversation, channel_id)
+    if scope:
+        if scope.owner_id == user.id:
+            raise HTTPException(409, "The channel owner cannot leave their channel")
     member = session.get(ChannelMember, (channel_id, "human", user.id))
     if member:
         session.delete(member)
         session.commit()
         await service.publish_channel(channel_id)
+        if scope:
+            await bus.publish({"type": "channel_removed", "channel_id": channel_id}, users={user.id})
     return {"ok": True}
 
 
@@ -322,6 +457,7 @@ async def add_channel_agent(
     _channel_or_404(session, channel_id, user)
     _reject_dm(session, channel_id, "Direct messages are one person and one agent")
     profile = _agent_or_404(session, body.agent_id)
+    _require_agent_owner(session, profile, user)
     await service.add_agent_to_channel(channel_id, profile)
     _audit(user, "agent_added", channel_id=channel_id, agent=profile.name)
     return {"ok": True}
@@ -334,6 +470,9 @@ async def remove_channel_agent(
     _channel_or_404(session, channel_id, user)
     _reject_dm(session, channel_id, "Direct messages are one person and one agent")
     profile = _agent_or_404(session, agent_id)
+    scope = session.get(PrivateConversation, channel_id)
+    if not scope or scope.owner_id != user.id:
+        _require_agent_owner(session, profile, user)
     await service.remove_agent_from_channel(channel_id, profile)
     _audit(user, "agent_removed", channel_id=channel_id, agent=profile.name)
     return {"ok": True}
@@ -342,6 +481,7 @@ async def remove_channel_agent(
 @app.get("/api/channels/{channel_id}/peers")
 async def list_channel_peers(channel_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
     _channel_or_404(session, channel_id, user)
+    _require_channel_owner(session, channel_id, user)
     _reject_dm(session, channel_id, "Direct messages are one person and one agent")
     return await service.list_peers(channel_id)
 
@@ -355,6 +495,7 @@ async def invite_outside_agent(
     channel_id: int, body: OutsideAgentBody, user: User = Depends(current_user), session: Session = Depends(get_session)
 ):
     _channel_or_404(session, channel_id, user)
+    _require_channel_owner(session, channel_id, user)
     _reject_dm(session, channel_id, "Direct messages are one person and one agent")
     if not session.get(ChannelMember, (channel_id, "human", user.id)):
         raise HTTPException(403, "Join the channel to invite outside agents")
@@ -368,6 +509,7 @@ async def remove_outside_agent(
     channel_id: int, band_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)
 ):
     _channel_or_404(session, channel_id, user)
+    _require_channel_owner(session, channel_id, user)
     _reject_dm(session, channel_id, "Direct messages are one person and one agent")
     if not session.get(ChannelMember, (channel_id, "human", user.id)):
         raise HTTPException(403, "Join the channel to remove outside agents")
@@ -380,21 +522,32 @@ async def remove_outside_agent(
 async def list_messages(
     channel_id: int,
     before: int | None = None,
+    after: int | None = None,
     limit: int = 100,
     user: User = Depends(current_user),
     session: Session = Depends(get_session),
 ):
     _channel_or_404(session, channel_id, user)
     query = select(Message).where(Message.channel_id == channel_id)
+    if before is not None and after is not None:
+        raise HTTPException(422, "Use either before or after")
+    if after is not None:
+        rows = session.exec(query.where(Message.id > after).order_by(Message.id.asc()).limit(min(limit, 200))).all()
+        return serialize_messages(session, rows)
     if before:
         query = query.where(Message.id < before)
     rows = session.exec(query.order_by(Message.id.desc()).limit(min(limit, 200))).all()
     return serialize_messages(session, list(reversed(rows)))
 
 
+CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+
+
 class MessageBody(BaseModel):
     content: str = Field(default="", max_length=8000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=10)
+    # Optional so existing clients keep creating one message per request.
+    client_id: str | None = Field(default=None, max_length=80)
 
 
 @app.post("/api/channels/{channel_id}/messages")
@@ -402,13 +555,23 @@ async def post_message(
     channel_id: int, body: MessageBody, user: User = Depends(current_user), session: Session = Depends(get_session)
 ):
     _channel_or_404(session, channel_id, user)
+    if body.client_id is not None and not CLIENT_ID.fullmatch(body.client_id):
+        raise HTTPException(422, "client_id must be 8-80 letters, numbers, underscores, or hyphens")
     if not body.content.strip() and not body.attachment_ids:
         raise HTTPException(422, "Write a message or attach a document")
+    # Membership is checked before a retry can return a stored message.
+    if body.client_id:
+        existing = service.existing_human_message(user, channel_id, body.client_id, body.content.strip(), body.attachment_ids)
+        if existing is not None:
+            return existing
+    from app.api.people import messaging_blocked
+    if messaging_blocked(session, channel_id, user.id):
+        raise HTTPException(403, "Messaging isn't available for this conversation")
     if not session.get(ChannelMember, (channel_id, "human", user.id)):
         session.add(ChannelMember(channel_id=channel_id, member_type="human", member_id=user.id))
         session.commit()
         await service.publish_channel(channel_id)
-    return await service.post_human_message(user, channel_id, body.content.strip(), body.attachment_ids)
+    return await service.post_human_message(user, channel_id, body.content.strip(), body.attachment_ids, body.client_id)
 
 
 # --- agents ---
@@ -424,6 +587,8 @@ class AgentCreateBody(BaseModel):
     specialty: str = Field(default="", max_length=160)
     avatar: AvatarStyle | None = None
     model: str | None = None
+    runtime: Literal["deepagents", "codex", "claude", "cursor", "openclaw"] = "deepagents"
+    connection_id: str | None = None
     channel_id: int | None = None
     # None means every plugin connected in the workspace, including ones connected later.
     plugins: list[str] | None = None
@@ -456,13 +621,35 @@ def _validate_role_and_model(role: str | None, model: str | None) -> None:
 
 @app.post("/api/agents")
 async def create_agent(body: AgentCreateBody, user: User = Depends(current_user), session: Session = Depends(get_session)):
-    body.model = body.model or configuration()[2]
-    _validate_role_and_model(body.role, body.model)
+    if body.runtime != "deepagents":
+        if not can_connect_agents(session, user.id):
+            raise HTTPException(403, "Sign in before adding agent connections")
+        if not runtime_available(body.runtime):
+            raise HTTPException(409, f"The {body.runtime.title()} runtime is not installed on the server. Ask an admin to complete runtime setup.")
+        connection = session.get(AgentConnection, body.connection_id) if body.connection_id else None
+        if connection and connection.created_by != user.id:
+            raise HTTPException(403, "Choose your own provider connection")
+        if connection is None or connection.provider != body.runtime:
+            raise HTTPException(422, "Choose an authenticated connection for this agent")
+        if not body.model or not MODEL_ID.fullmatch(body.model):
+            raise HTTPException(422, "Enter a valid model ID for this provider")
+        if body.runtime == "claude" and not body.model.startswith("claude-"):
+            raise HTTPException(422, "Choose a Claude model for the Claude runtime")
+        if body.runtime == "cursor" and body.model == "auto-smart":
+            raise HTTPException(422, "Choose a specific Cursor model; Router parameters are not supported yet")
+        _validate_role_and_model(body.role, None)
+    else:
+        if body.connection_id:
+            raise HTTPException(422, "A custom agent uses the workspace OpenAI connection")
+        body.model = body.model or configuration()[2]
+        _validate_role_and_model(body.role, body.model)
     channel_id = body.channel_id
     if channel_id is not None:
         _channel_or_404(session, channel_id, user)
-        if session.get(DirectMessage, channel_id):
+        if session.get(DirectMessage, channel_id) or session.get(HumanDirectMessage, channel_id):
             channel_id = None
+    if not is_admin(session, user.id) and body.plugins:
+        raise HTTPException(403, "Only admins can grant access to workspace apps")
     profile = await service.create_agent(
         name=body.name,
         role=body.role,
@@ -470,9 +657,11 @@ async def create_agent(body: AgentCreateBody, user: User = Depends(current_user)
         model=body.model,
         channel_id=channel_id,
         created_by=user.id,
-        plugins=_plugins_or_422(body.plugins),
+        plugins=_plugins_or_422(body.plugins) if is_admin(session, user.id) else [],
         specialty=body.specialty,
         avatar=body.avatar,
+        runtime=body.runtime,
+        connection_id=body.connection_id,
     )
     _audit(user, "agent_created", channel_id=channel_id, agent=profile.name, role=profile.role, model=profile.model)
     return service.serialize_agent(profile)
@@ -485,13 +674,26 @@ def _agent_or_404(session: Session, agent_id: int) -> AgentProfile:
     return profile
 
 
+def _require_agent_owner(session: Session, profile: AgentProfile, user: User) -> None:
+    owner = agent_owner(session, profile)
+    if owner is not None and owner != user.id:
+        raise HTTPException(403, "Only this agent's owner can manage or share it")
+
+
 @app.patch("/api/agents/{agent_id}")
 async def update_agent(
     agent_id: int, body: AgentUpdateBody, user: User = Depends(current_user), session: Session = Depends(get_session)
 ):
-    _validate_role_and_model(body.role, body.model)
     profile = _agent_or_404(session, agent_id)
-    if body.model is not None and body.model != profile.model:
+    _require_agent_owner(session, profile, user)
+    runtime = runtime_for(agent_id)
+    if runtime and body.model is not None:
+        if runtime.provider == "cursor" and body.model == "auto-smart":
+            raise HTTPException(422, "Choose a specific Cursor model; Router parameters are not supported yet")
+        if not MODEL_ID.fullmatch(body.model) or (runtime.provider == "claude" and not body.model.startswith("claude-")):
+            raise HTTPException(422, "Enter a valid model ID for this agent runtime")
+    _validate_role_and_model(body.role, None if runtime else body.model)
+    if body.model is not None and body.model != profile.model and agent_owner(session, profile) != user.id:
         _require_admin(session, user, "Only workspace admins can change an agent's model")
     changed = {name: value for name, value in (("role", body.role), ("model", body.model))
                if value is not None and value != getattr(profile, name)}
@@ -506,6 +708,8 @@ async def update_agent(
         session.add(persona)
         changed["persona"] = "updated"
     if "plugins" in body.model_fields_set:
+        if agent_owner(session, profile) is not None:
+            _require_admin(session, user, "Only workspace admins can change access to workspace apps")
         chosen = _plugins_or_422(body.plugins)
         set_plugin_access(profile.id, chosen)
         changed["plugins"] = "all" if chosen is None else ",".join(chosen) or "none"
@@ -562,8 +766,9 @@ async def remove_plugin(slug: str, user: User = Depends(current_user), session: 
 
 
 @app.post("/api/agents/{agent_id}/restart")
-async def restart_agent(agent_id: int, _user: User = Depends(current_user), session: Session = Depends(get_session)):
+async def restart_agent(agent_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
     profile = _agent_or_404(session, agent_id)
+    _require_agent_owner(session, profile, user)
     await service.start_agent(profile)
     return service.serialize_agent(profile)
 
@@ -575,8 +780,12 @@ async def open_dm(agent_id: int, user: User = Depends(current_user), session: Se
 
 @app.delete("/api/agents/{agent_id}")
 async def delete_agent(agent_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
-    _require_admin(session, user, "Only workspace admins can delete agents")
+    if not can_connect_agents(session, user.id):
+        raise HTTPException(403, "Only workspace admins or personal agent owners can delete agents")
     profile = _agent_or_404(session, agent_id)
+    _require_agent_owner(session, profile, user)
+    if agent_owner(session, profile) is None:
+        _require_admin(session, user, "Only workspace admins can delete agents")
     name = profile.name
     await service.delete_agent(profile)
     _audit(user, "agent_deleted", agent=name)
@@ -590,7 +799,8 @@ async def delete_agent(agent_id: int, user: User = Depends(current_user), sessio
 async def list_tasks(channel_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
     """The 30 newest tasks plus every unfinished one, so long-running tasks keep their live drafts."""
     _channel_or_404(session, channel_id, user)
-    newest = session.exec(select(AgentTask).where(AgentTask.channel_id == channel_id)
+    newest = session.exec(select(AgentTask).where(AgentTask.channel_id == channel_id,
+                         ~AgentTask.source_key.startswith("operator-computer:"))
                           .order_by(AgentTask.created_at.desc()).limit(30)).all()
     unfinished = session.exec(select(AgentTask).where(AgentTask.channel_id == channel_id,
                               AgentTask.status.in_(["queued", "running", "waiting"]))).all()
@@ -667,12 +877,14 @@ async def task_detail(task_id: str, user: User = Depends(current_user), session:
 async def task_computer(task_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     task = _task_or_404(session, task_id)
     _require_task_member(session, task, user)
-    # Computers persist per agent and channel; tasks from before that change kept their own.
+    # Task bindings preserve historical machines when the workspace sharing mode changes.
     row = sandbox_record(computer_key(task)) or sandbox_record(task_id)
     display = display_state(computer_key(task))
     return JSONResponse({
         "control": _control_json(active_control(computer_key(task)), user),
-        "configured": bool(settings.e2b_api_key),
+        "configured": configured(provider_for(task), settings),
+        "provider": provider_for(task),
+        "shared": is_shared(computer_key(task)),
         "status": row.status if row else "not_started",
         "sandbox_id": row.sandbox_id if row else None,
         "image": row.latest_image if row else "",
@@ -685,7 +897,7 @@ async def task_computer(task_id: str, user: User = Depends(current_user), sessio
         "observed_at": display.observed_at or None,
         "updated_at": row.updated_at.isoformat() if row else None,
         "error": row.error if row else None,
-        "dashboard_url": "https://e2b.dev/dashboard",
+        "dashboard_url": dashboard(provider_for(task)),
     }, headers={"Cache-Control": "no-store"})
 
 
@@ -695,7 +907,7 @@ NO_STORE = {"Cache-Control": "no-store"}
 @app.get("/api/agents/{agent_id}/computers")
 def agent_computers(agent_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
     """Discover this agent's computers only in channels the caller belongs to. Never starts one."""
-    _agent_or_404(session, agent_id)
+    profile = _agent_or_404(session, agent_id)
     member_channels = select(ChannelMember.channel_id).where(
         ChannelMember.member_type == "human", ChannelMember.member_id == user.id)
     agent_channels = select(ChannelMember.channel_id).where(
@@ -708,18 +920,26 @@ def agent_computers(agent_id: int, user: User = Depends(current_user), session: 
     ).order_by(Channel.id)).all()
     scopes = []
     for channel in channels:
-        task = session.exec(select(AgentTask).where(AgentTask.agent_id == agent_id, AgentTask.channel_id == channel.id)
-                            .order_by(AgentTask.created_at.desc(), AgentTask.id.desc())).first()
+        provider = scope_provider(session, profile, channel.id)
+        key = scope_computer_key(session, profile, channel.id, settings)
+        # Historical tasks keep their old machine; the profile shows the selected computer.
+        task = session.exec(select(AgentTask).join(TaskComputerBinding, TaskComputerBinding.task_id == AgentTask.id)
+            .where(AgentTask.agent_id == agent_id, AgentTask.channel_id == channel.id,
+                   TaskComputerBinding.provider == provider, TaskComputerBinding.computer_key == key)
+            .order_by(AgentTask.created_at.desc(), AgentTask.id.desc())).first()
         row = (sandbox_record(computer_key(task)) or sandbox_record(task.id)) if task else None
         working = session.exec(select(AgentTask.id).where(AgentTask.agent_id == agent_id,
             AgentTask.channel_id == channel.id, AgentTask.status == "running")).first()
         scopes.append({"channel_id": channel.id, "channel_name": channel.name,
                        "is_dm": session.get(DirectMessage, channel.id) is not None,
+                       "provider": provider, "configured": configured(provider, settings),
+                       "shared": is_shared(key), "computer_key": key,
                        "task_id": task.id if task else None, "status": row.status if row else "not_started",
                        "updated_at": row.updated_at.isoformat() if row else None,
-                       "agent_working": working is not None,
+                       "agent_working": running_on(key) if is_shared(key) else working is not None,
                        "can_control": allowed(session, user.id, channel.id, "computer_control")})
-    return JSONResponse({"configured": bool(settings.e2b_api_key), "computers": scopes}, headers=NO_STORE)
+    return JSONResponse({"configured": any(scope["configured"] for scope in scopes)
+        if scopes else configured(settings.computer_provider, settings), "computers": scopes}, headers=NO_STORE)
 
 
 @app.get("/api/channels/{channel_id}/computers")
@@ -729,17 +949,25 @@ async def channel_computers(channel_id: int, user: User = Depends(current_user),
     _channel_or_404(session, channel_id, user)
     computers = []
     for agent_id in session.exec(select(AgentTask.agent_id).where(AgentTask.channel_id == channel_id).distinct()).all():
-        latest = session.exec(select(AgentTask).where(AgentTask.channel_id == channel_id, AgentTask.agent_id == agent_id)
+        profile = session.get(AgentProfile, agent_id)
+        if not profile:
+            continue
+        key = scope_computer_key(session, profile, channel_id, settings)
+        latest = session.exec(select(AgentTask).join(TaskComputerBinding, TaskComputerBinding.task_id == AgentTask.id)
+                              .where(AgentTask.channel_id == channel_id, AgentTask.agent_id == agent_id,
+                                     TaskComputerBinding.computer_key == key)
                               .order_by(AgentTask.created_at.desc())).first()
         working = session.exec(select(AgentTask).where(AgentTask.channel_id == channel_id,
                                AgentTask.agent_id == agent_id, AgentTask.status == "running")
                                .order_by(AgentTask.created_at.desc())).first()
         computer_working = working is not None and used_computer(session, working.id)
         current = working if computer_working else latest
+        if current is None:
+            continue
         row = sandbox_record(computer_key(current))
         if row is None:
             continue
-        computers.append({"agent_id": agent_id, "task_id": current.id, "status": row.status,
+        computers.append({"agent_id": agent_id, "task_id": current.id, "computer_key": computer_key(current), "status": row.status,
                           "last_action": row.last_action, "updated_at": row.updated_at.isoformat(),
                           "agent_working": working is not None, "computer_working": computer_working})
     computers.sort(key=lambda c: c["updated_at"], reverse=True)
@@ -768,6 +996,10 @@ def _agent_name(session: Session, task: AgentTask) -> str:
     return agent.name if agent else "the agent"
 
 
+def _computer_name(session: Session, task: AgentTask) -> str:
+    return "the workspace computer" if is_shared(computer_key(task)) else f"{_agent_name(session, task)}'s computer"
+
+
 async def _on_computer(task: AgentTask, operation):
     """Run a person's request on the agent's computer without stopping it afterwards."""
     computer = computer_factory(task)
@@ -775,10 +1007,10 @@ async def _on_computer(task: AgentTask, operation):
         return await operation(computer)
     except ComputerUnavailable as exc:
         raise HTTPException(409, str(exc))
-    except (SandboxException, AuthenticationException, ServiceBusyException) as exc:
+    except (SandboxException, AuthenticationException, ServiceBusyException, ComputerProviderError) as exc:
         # E2B errors can include request details; show only the type.
-        logger.warning("E2B request for task %s failed: %s", task.id, type(exc).__name__)
-        raise HTTPException(502, f"E2B request failed ({type(exc).__name__})")
+        logger.warning("Computer request for task %s failed: %s", task.id, type(exc).__name__)
+        raise HTTPException(502, f"Computer request failed ({type(exc).__name__})")
     finally:
         await computer.detach()
 
@@ -798,14 +1030,22 @@ async def computer_live(task_id: str, body: LiveBody, user: User = Depends(curre
     """A short-lived noVNC link; input is enabled only for the active take-over owner."""
     task = _member_task(session, task_id, user)
     _require_computer_control(session, task, user)
-    view = await _on_computer(task, lambda computer: computer.live_view(user_id=user.id))
     key = computer_key(task)
+    async def connect(computer):
+        view = await computer.live_view(user_id=user.id)
+        if body.control:
+            # Wait for any in-flight agent command before granting interactive VNC.
+            async with computer.lock:
+                take_control(key, user_id=user.id, user_name=user.display_name, task_id=task.id)
+        return view
+    view = await _on_computer(task, connect)
     if body.control:
-        control = take_control(key, user_id=user.id, user_name=user.display_name)
+        control = active_control(key)
         _audit(user, "computer_taken_over", channel_id=task.channel_id, task_id=task.id,
                agent=_agent_name(session, task))
-        await service.system_message(task.channel_id, f"{user.display_name} took control of {_agent_name(session, task)}'s "
-                                                      "computer. The agent waits until it is handed back.")
+        waiting = "Agents wait" if is_shared(key) else "The agent waits"
+        await service.system_message(task.channel_id, f"{user.display_name} took control of {_computer_name(session, task)}. "
+                                                      f"{waiting} until it is handed back.")
     else:
         control = active_control(key)
     return JSONResponse({**view, "control": _control_json(control, user)}, headers=NO_STORE)
@@ -819,8 +1059,7 @@ async def computer_release(task_id: str, user: User = Depends(current_user), ses
         release_control(computer_key(task), user_name=user.display_name)
         _audit(user, "computer_handed_back", channel_id=task.channel_id, task_id=task.id,
                agent=_agent_name(session, task))
-        await service.system_message(task.channel_id, f"{user.display_name} handed {_agent_name(session, task)}'s "
-                                                      "computer back.")
+        await service.system_message(task.channel_id, f"{user.display_name} handed {_computer_name(session, task)} back.")
     return {"ok": True}
 
 
@@ -856,7 +1095,7 @@ async def computer_upload(task_id: str, name: str, request: Request, user: User 
     _audit(user, "computer_upload", channel_id=task.channel_id, task_id=task.id, path=path, bytes=len(content))
     # Agents read the channel, so this tells them where the file is.
     await service.system_message(task.channel_id, f"{user.display_name} uploaded {name} to "
-                                                  f"{_agent_name(session, task)}'s computer at {path}.")
+                                                  f"{_computer_name(session, task)} at {path}.")
     return {"path": path}
 
 
@@ -864,12 +1103,14 @@ async def computer_upload(task_id: str, name: str, request: Request, user: User 
 async def computer_stop(task_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     task = _member_task(session, task_id, user)
     _require_computer_control(session, task, user)
-    if session.exec(select(AgentTask.id).where(AgentTask.agent_id == task.agent_id,
-                    AgentTask.channel_id == task.channel_id, AgentTask.status == "running")).first():
+    if running_on(computer_key(task)):
         raise HTTPException(409, "The agent is using this computer. Cancel its task first.")
-    release_control(computer_key(task), user_name=user.display_name)
     computer = computer_factory(task)
-    await computer.close(force=True)
+    try:
+        await computer.close(force=True)
+    except ComputerUnavailable as exc:
+        raise HTTPException(409, str(exc)) from None
+    release_control(computer_key(task), user_name=user.display_name)
     _audit(user, "computer_stopped", channel_id=task.channel_id, task_id=task.id, agent=_agent_name(session, task))
     return {"ok": True}
 
@@ -915,7 +1156,10 @@ async def retry_task(task_id: str, user: User = Depends(current_user), session: 
     from app.persistence.models import TaskModel, TaskDocument
     from uuid import uuid4
     pinned = session.get(TaskModel, task_id)
-    if pinned and pinned.provider != "openai":
+    runtime = runtime_for(task.agent_id)
+    if pinned and pinned.provider in CONNECTED_PROVIDERS and (not runtime or runtime.provider != pinned.provider):
+        raise HTTPException(409, "This task's original runtime is no longer available")
+    if pinned and pinned.provider not in {"openai", *CONNECTED_PROVIDERS}:
         replacement = AgentTask(id=uuid4().hex, source_key=f"openai-restart:{task_id}:{uuid4().hex}",
                                 channel_id=task.channel_id, agent_id=task.agent_id, room_id=task.room_id,
                                 prompt=task.prompt, context=task.context, reply_to=task.reply_to,
@@ -1020,40 +1264,62 @@ async def forget_memory(channel_id: int, agent_id: int, key: str, user: User = D
 
 @app.websocket("/ws")
 async def websocket(ws: WebSocket, token: str = ""):
-    user_id = user_id_from_token(token)
-    if user_id is None:
+    with db() as session:
+        principal = authenticate(token, session) if token else None
+    if principal is None:
         await ws.close(code=4401)
         return
+    user, _session_id = principal
     await ws.accept()
-    await bus.connect(user_id, ws)
+    await bus.connect(user.id, ws)
     try:
         while True:
-            await ws.receive_text()
+            try:
+                await asyncio.wait_for(ws.receive_text(), timeout=5)
+            except asyncio.TimeoutError:
+                with db() as session:
+                    if authenticate(token, session) is None:
+                        await ws.close(code=4401)
+                        return
     except WebSocketDisconnect:
         pass
     finally:
-        await bus.disconnect(user_id, ws)
-
-
-def health_status() -> tuple[int, dict]:
-    band = service.org.status()
-    # A configured Band account that failed to register is not a healthy deploy.
-    ok = service.ready and not (band["configured"] and (band["error"] or not band["online"]))
-    return (200 if ok else 503), {"ok": ok, "band": band}
+        await bus.disconnect(user.id, ws)
 
 
 @app.get("/api/health")
 async def health():
-    status, body = health_status()
-    return JSONResponse(body, status_code=status)
+    band = service.org.status()
+    configured = bool(band.get("configured"))
+    online = bool(band.get("online"))
+    # A configured Band account that failed to register is not a healthy deploy.
+    # Keep the public body free of error text; signed-in /api/status covers worker detail.
+    ok = not (configured and (band.get("error") or not online))
+    return JSONResponse({"ok": ok, "band": {"configured": configured, "online": online}},
+                        status_code=200 if ok else 503)
+
+
+@app.get("/api/status")
+def workspace_status(user: User = Depends(current_user)):
+    from app.workspace.health import service_status
+    return service_status(user)
+
+
+def mount_frontend(application: FastAPI, directory: Path) -> None:
+    directory = directory.resolve()
+    application.mount("/assets", StaticFiles(directory=directory / "assets"), name="assets")
+
+    @application.get("/{path:path}")
+    async def spa(path: str):
+        if path == "api" or path.startswith("api/") or path == "auth" or path.startswith("auth/"):
+            raise HTTPException(404, "API endpoint not found. Check that the API and frontend versions match.")
+        candidate = (directory / path).resolve()
+        if not candidate.is_relative_to(directory):
+            raise HTTPException(404, "File not found")
+        if path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(directory / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 if FRONTEND_DIST.exists():
-    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
-
-    @app.get("/{path:path}")
-    async def spa(path: str):
-        candidate = FRONTEND_DIST / path
-        if path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(FRONTEND_DIST / "index.html")
+    mount_frontend(app, FRONTEND_DIST)

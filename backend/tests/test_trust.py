@@ -333,7 +333,7 @@ def test_admin_only_follow_ups(job):
         assert denied.status_code == 403 and "model" in denied.json()["detail"]
         assert client.patch(f"/api/agents/{agent.id}", json={"model": agent.model, "instructions": "Be brief"},
                             headers=member).status_code == 200
-        assert client.delete("/api/agents/999999", headers=member).status_code == 403
+        assert client.delete("/api/agents/999999", headers=member).status_code == 404
         assert client.delete("/api/agents/999999", headers=admin).status_code == 404
         client.put(f"/api/channels/{task.channel_id}/policy", json={"approvers": "admins"}, headers=admin)
         _pending_approval(task)

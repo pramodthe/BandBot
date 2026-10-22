@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
-from urllib.parse import urlparse
 
 from langchain.agents.middleware.internal_call_transformer import INTERNAL_CALL_METADATA_KEY
 from sqlalchemy import delete
@@ -21,22 +19,6 @@ MAX_DRAFT = 60000
 
 NOT_TOOLS = (None, "text", "reasoning")
 
-# Models sometimes emit hidden citation markup (U+E200 kind U+E202 ref ... U+E201) that browsers render as junk.
-MARKER = re.compile("(\\s?)\ue200([^\ue200\ue201]*)\ue201")
-UNFINISHED_MARKER = re.compile("\ue200[^\ue201]*$")
-PRIVATE_USE = re.compile("[\ue200-\ue2ff]")
-
-
-def _marker_links(match: re.Match) -> str:
-    refs = [ref.strip() for ref in match.group(2).split("\ue202")[1:]]
-    links = [f"[{urlparse(ref).hostname}]({ref})" for ref in refs
-             if ref.startswith(("https://", "http://")) and urlparse(ref).hostname]
-    return f" ({', '.join(links)})" if links else ""
-
-
-def clean_markers(text: str) -> str:
-    return PRIVATE_USE.sub("", UNFINISHED_MARKER.sub("", MARKER.sub(_marker_links, text)))
-
 
 def _after_tools(content) -> str | None:
     """Text after the last server-side tool block (e.g. code execution), or None when there is none."""
@@ -50,7 +32,7 @@ def _after_tools(content) -> str | None:
 def answer_text(message) -> str:
     """The reply without text the model wrote before running server-side tools."""
     after = _after_tools(getattr(message, "content", ""))
-    return clean_markers(after if after and after.strip() else message.text)
+    return after if after and after.strip() else message.text
 
 
 def save_draft(task: AgentTask, content: str) -> bool:
@@ -117,7 +99,7 @@ class Draft:
             return
         if not force and now - self.saved_at < DRAFT_INTERVAL:
             return
-        if not save_draft(self.task, clean_markers(self.text)):
+        if not save_draft(self.task, self.text):
             # Each locked write can block the event loop for the busy timeout, so back off before retrying.
             self.paused_until = now + LOCKED_PAUSE
             return

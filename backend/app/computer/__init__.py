@@ -1,4 +1,4 @@
-"""E2B desktop for one agent in one channel."""
+"""Persistent cloud computers and human take-over controls."""
 from app.computer.desktop import (
     CONTROL_MINUTES,
     TRANSFER_LIMIT,

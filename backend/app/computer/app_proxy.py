@@ -14,6 +14,7 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 
 from app.auth import user_id_from_token
+from app.computer.ingress import headers as ingress_headers
 from app.computer.app_previews import host_token, preview_url, resolve
 
 MAX_BODY = 32 * 1024 * 1024
@@ -26,7 +27,7 @@ def request_headers(headers, preview, traffic_token: str, origin: str) -> dict[s
     result = {}
     for key, value in headers.items():
         key = key.lower()
-        if key in blocked or key.startswith(("x-forwarded-", "e2b-", "sec-websocket-")):
+        if key in blocked or key.startswith(("x-forwarded-", "e2b-", "x-band-", "sec-websocket-")):
             continue
         # App login credentials are supported; workspace credentials never enter E2B.
         if key == "authorization" and value.lower().startswith("bearer ") and user_id_from_token(value[7:]) is not None:
@@ -36,7 +37,8 @@ def request_headers(headers, preview, traffic_token: str, origin: str) -> dict[s
         elif key == "referer":
             continue
         result[key] = value
-    result.update({"e2b-traffic-access-token": traffic_token, "x-forwarded-host": preview.request_host,
+    result.update(ingress_headers(preview.computer_key, traffic_token, preview.port))
+    result.update({"x-forwarded-host": preview.request_host,
                    "x-forwarded-proto": "http", "accept-encoding": "identity"})
     return result
 
@@ -62,7 +64,7 @@ def response_headers(upstream, lease, preview, upstream_host: str, origin: str):
             if policy.strip():
                 result.append((raw_key, policy.encode("latin-1")))
             continue
-        if key in blocked or key.startswith(("e2b-", "x-e2b-")):
+        if key in blocked or key.startswith(("e2b-", "x-e2b-", "x-band-")):
             continue
         value = raw_value.decode("latin-1")
         if key == "location":

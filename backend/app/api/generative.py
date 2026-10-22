@@ -72,13 +72,13 @@ async def sandbox_followup(channel_id: int, component_id: int, body: SandboxProm
     from app.workspace.service import serialize_messages, service
     with db() as session:
         result = check(followup, session, channel_id, component_id, user, body.request_id, body.text,
-                       service.org.owner.id if service.org.owner else "")
+                       service.message_reply_to(user.id, channel_id))
         message = serialize_messages(session, [result.message])[0]
         task_id = result.receipt.task_id
     await bus.publish({"type": "message", "message": message})
     if result.created:
         asyncio.create_task(service._relay(channel_id, result.message.id, user.display_name,
-                                           result.message.content, [result.agent]))
+                                           result.message.content, [result.agent], user.id))
     return {"message": message, "task_id": task_id}
 
 
@@ -106,7 +106,7 @@ async def respond(channel_id: int, component_id: int, body: ResponseBody, user: 
     from app.workspace.service import serialize_messages, service
     with db() as session:
         result = check(submit, session, channel_id, component_id, user, body.action_id, body.values,
-                       service.org.owner.id if service.org.owner else "")
+                       service.message_reply_to(user.id, channel_id))
         source, message = serialize_messages(session, [result.source, result.message])
     # Re-publish even on an idempotent retry, to repair clients after a lost HTTP/socket response.
     await bus.publish({"type": "message_updated", "message": source})
@@ -114,5 +114,5 @@ async def respond(channel_id: int, component_id: int, body: ResponseBody, user: 
     if result.created:
         await service.publish_channel(channel_id)
         asyncio.create_task(service._relay(channel_id, result.message.id, user.display_name,
-                                           result.message.content, [result.agent]))
+                                           result.message.content, [result.agent], user.id))
     return {"response": response_json(result.response), "message": message}

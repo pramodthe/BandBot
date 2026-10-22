@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -14,6 +15,11 @@ from app.band.org import BandOrg, Owner
 from app.persistence.models import (AgentPersona, AgentProfile, AgentTask, AuditEvent, Budget, Channel, ChannelMember, ChannelPolicy,
                                     DirectMessage, Message, TaskCacheUsage, TaskUsage, User, WorkspaceRole, db, init_db)
 from app.workspace.service import AppService
+from app.persistence.models import UserBandAccount, PrivateConversation, HumanDirectMessage, BandAgentOwner, ChannelInvitation
+from app.persistence.models import MessageComponent, ComponentResponse, TaskInput, AgentRuntime, AgentConnection, AgentOAuthAttempt
+from app.persistence.models import AppContact, AppContactRequest, BandRoomAccount
+from app.persistence.models import (AuthSession, ClientMessage, ConnectionHealth, ContactBlock, PasswordReset,
+                                    RecoveryAddress, WorkerHeartbeat)
 
 
 class FakeOrg(BandOrg):
@@ -47,14 +53,23 @@ class FakeOrg(BandOrg):
 
 
 @pytest.fixture
-def svc(monkeypatch) -> AppService:
+def svc(monkeypatch) -> Iterator[AppService]:
     init_db()
-    with db() as session:
-        for model in (AgentTask, DirectMessage, Message, ChannelMember, AgentPersona, AgentProfile, Channel, User, AuditEvent,
-                      TaskUsage, TaskCacheUsage, Budget, WorkspaceRole, ChannelPolicy):
-            for row in session.exec(select(model)).all():
-                session.delete(row)
-        session.commit()
+
+    def clear_database() -> None:
+        with db() as session:
+            for model in (ClientMessage, AuthSession, RecoveryAddress, PasswordReset, ContactBlock, ConnectionHealth,
+                          WorkerHeartbeat, AppContact, AppContactRequest, BandRoomAccount,
+                          ComponentResponse, TaskInput, MessageComponent, AgentRuntime, AgentOAuthAttempt, AgentConnection,
+                          ChannelInvitation, HumanDirectMessage, PrivateConversation, BandAgentOwner, UserBandAccount,
+                          AgentTask, DirectMessage, Message, ChannelMember, AgentPersona, AgentProfile,
+                          ChannelPolicy, WorkspaceRole, Channel, User, AuditEvent,
+                          TaskCacheUsage, TaskUsage, Budget):
+                for row in session.exec(select(model)).all():
+                    session.delete(row)
+            session.commit()
+
+    clear_database()
 
     async def identity(api_key: str) -> BandIdentity:
         name = api_key.removeprefix("key-")
@@ -63,7 +78,10 @@ def svc(monkeypatch) -> AppService:
     monkeypatch.setattr(service_module, "fetch_identity", identity)
     service = AppService()
     service.org = FakeOrg()
-    return service
+    try:
+        yield service
+    finally:
+        clear_database()
 
 
 def _messages(channel_id: int) -> list[Message]:
@@ -87,8 +105,9 @@ def test_channels_are_band_rooms_and_visible_agents_can_be_created(svc: AppServi
         channel = await svc.create_channel("launch", "", user)
         master = svc.master()
         assert svc.org.rooms == ["#launch"]
+        assert channel["agent_ids"] == []
+        await svc.add_agent_to_channel(channel["id"], master)
         assert master.band_agent_id in svc.org.participants[channel["band_room_id"]]
-        assert channel["agent_ids"] == [master.id]
         scout = await svc.create_agent(name="Scout", role="researcher", instructions="Find facts",
                                        model=master.model, channel_id=channel["id"], created_by=user.id)
         assert svc.org.registered == ["Master", "Scout"]

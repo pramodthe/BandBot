@@ -44,7 +44,7 @@ export default function SetupBanner({ state, connected }: { state: State; connec
   if (!state.openaiConfigured) {
     return (
       <Banner tone="warn">
-        Ask a workspace admin to connect OpenAI in workspace settings so agents can work.
+        Ask a workspace admin to connect OpenAI for custom agents and document analysis. Codex and Claude teammates use their own account connections.
       </Banner>
     );
   }

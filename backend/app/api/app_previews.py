@@ -77,7 +77,7 @@ async def connect_app(preview_id: str, request: Request, response: Response, use
     # Register the lease before connecting so a finishing worker keeps the computer awake.
     lease = create_lease(preview, user, origin)
     try:
-        await run_on_computer(task, lambda computer: prepare(computer, expected_sandbox=preview.sandbox_id))
+        await run_on_computer(task, lambda computer: prepare(computer, expected_sandbox=preview.sandbox_id, port=preview.port))
     except BaseException:
         with Session(session.bind) as cleanup:
             if row := cleanup.get(AppPreviewLease, lease["id"]):
@@ -104,7 +104,7 @@ async def renew_app(lease_id: str, response: Response, user: User = Depends(curr
     record = sandbox_record(preview.computer_key)
     if not record or record.sandbox_id != preview.sandbox_id or record.status != "running":
         raise HTTPException(409, "The computer is paused or has changed. Reconnect from chat.")
-    await run_on_computer(task, lambda computer: prepare(computer, expected_sandbox=preview.sandbox_id))
+    await run_on_computer(task, lambda computer: prepare(computer, expected_sandbox=preview.sandbox_id, port=preview.port))
     lease.until = utcnow() + timedelta(seconds=LEASE_SECONDS)
     session.add(lease)
     session.commit()

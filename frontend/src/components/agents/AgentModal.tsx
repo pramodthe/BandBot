@@ -52,11 +52,11 @@ export default function AgentModal({ state, agent, onClose, onUpdated }: {
           <p className="text-muted-foreground text-xs">Helps teammates understand this agent’s focus and guides how it works.</p>
         </Field>
         <Field id={`${id}-model`} label="Intelligence">
-          <Select value={model} onValueChange={setModel} disabled={busy || !isAdmin(state)}>
+          {agent.runtime && agent.runtime !== "deepagents" ? <Input id={`${id}-model`} value={model} maxLength={120} disabled={busy || !(isAdmin(state) || agent.owner_id === state.me.id)} onChange={(event) => setModel(event.target.value)} /> : <Select value={model} onValueChange={setModel} disabled={busy || !(isAdmin(state) || agent.owner_id === state.me.id)}>
             <SelectTrigger id={`${id}-model`} className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent position="popper"><SelectGroup>{state.models.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
-          </Select>
-          <p className="text-muted-foreground text-xs">{isAdmin(state) ? "Model changes apply to new tasks." : "Only workspace admins can change the model."}</p>
+          </Select>}
+          <p className="text-muted-foreground text-xs">{(isAdmin(state) || agent.owner_id === state.me.id) ? "Model changes apply to new tasks." : "Only workspace admins can change the model."}</p>
         </Field>
         {!agent.is_master ? <Field id={`${id}-role`} label="Base role">
           <Select value={role} onValueChange={setRole} disabled={busy}>

@@ -212,16 +212,25 @@ def test_search_suppresses_eventually_deleted_files_and_agent_revocation(space, 
         asyncio.run(search.ainvoke({"query": "budget"}))
 
 
-def test_calculation_receives_full_original_in_task_scoped_python_container(space, monkeypatch):
+@pytest.mark.parametrize("provider", ["openai", "codex", "claude"])
+def test_calculation_receives_full_original_in_task_scoped_python_container(space, monkeypatch, provider):
     import app.runtime.tools.documents as tools
     doc = upload(space, "sales.csv", b"amount\n" + b"2\n" * 1500)
     publish(space, doc)
     documents.patch(doc["id"], status="ready", file_id="full-original")
     fake = sdk_mock()
     monkeypatch.setattr(tools, "client", fake.client)
+    if provider != "openai":
+        with db() as session:
+            pinned = session.get(TaskModel, space.task.id)
+            pinned.provider, pinned.model = provider, "claude-test" if provider == "claude" else "gpt-connected-account"
+            session.add(pinned)
+            session.commit()
     analyze = {t.name: t for t in document_tools(space.task)}["analyze_documents"]
     result = asyncio.run(analyze.ainvoke({"document_ids": [doc["id"]], "question": "Sum every row", "calculate": True}))
     call = fake.sdk.responses.create.call_args.kwargs
+    if provider != "openai":
+        assert call["model"] == configuration()[2]
     assert call["tools"] == [{"type": "code_interpreter", "container": {"type": "auto", "file_ids": ["full-original"]}}]
     assert result["complete"] and "full-original" not in str(result)
 

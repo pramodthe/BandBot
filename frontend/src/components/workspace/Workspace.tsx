@@ -7,7 +7,7 @@ import AgentModal from "@/components/agents/AgentModal";
 import AgentProfilePanel from "@/components/agents/AgentProfilePanel";
 import ChannelView from "@/components/chat/ChannelView";
 import ComputerPanel from "@/components/computer/ComputerPanel";
-import CreateAgentModal from "@/components/agents/CreateAgentModal";
+import AddAgentModal from "@/components/agents/AddAgentModal";
 import CreateChannelModal from "@/components/chat/CreateChannelModal";
 import MembersPanel from "@/components/chat/MembersPanel";
 import MemberDirectory, { type SelectedMember } from "@/components/agents/MemberDirectory";
@@ -17,6 +17,7 @@ import Sidebar from "@/components/chat/Sidebar";
 import WorkspaceEmpty from "@/components/shared/WorkspaceEmpty";
 import WorkspaceNavigation from "./WorkspaceNavigation";
 import OpenAISettingsModal from "@/components/settings/OpenAISettingsModal";
+import PeopleModal from "@/components/people/PeopleModal";
 import type { Modal, OpenComputer, WorkspaceView } from "./types";
 
 const ElementsPanel = lazy(() => import("@/components/generated/ElementsPanel"));
@@ -202,12 +203,16 @@ export default function Workspace({
         />
       )}
       {modal?.kind === "new-agent" && (
-        <CreateAgentModal state={state} channel={channel?.is_dm ? null : channel} onClose={() => setModal(null)} />
+        <AddAgentModal state={state} channel={channel?.is_dm ? null : channel} onClose={() => setModal(null)} />
       )}
       {modal?.kind === "agent-settings" && state.agents[modal.agentId] && (
         <AgentModal key={modal.agentId} state={state} agent={state.agents[modal.agentId]} onUpdated={agentUpdated} onClose={() => setModal(null)} />
       )}
       {modal?.kind === "plugins" && <PluginsModal state={state} onClose={() => { setModal(null); setPluginsRevision((value) => value + 1); }} />}
+      {modal?.kind === "people" && <PeopleModal state={state} channelId={modal.channelId} personId={modal.personId} onClose={() => setModal(null)} onChannel={(next) => {
+        dispatch({ type: "event", event: { type: "channel", channel: next } });
+        setModal(null); selectChannel(next.id);
+      }} />}
       {modal?.kind === "openai" && <OpenAISettingsModal onClose={() => setModal(null)} />}
       {modal?.kind === "elements" && channel && <Suspense fallback={null}><ElementsPanel key={channel.id} channel={channel} state={state} open onClose={() => setModal(null)} /></Suspense>}
     </div>

@@ -2,21 +2,38 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import secrets
+from datetime import timedelta, timezone
 
 import bcrypt
 from cryptography.fernet import Fernet
 from fastapi import Depends, Header, HTTPException
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.config import settings
-from app.persistence.models import User, get_session
+from app.persistence.models import AuthSession, User, get_session, utcnow
 
 TOKEN_MAX_AGE = 60 * 60 * 24 * 30
 _PASSWORD_HASH_PREFIX = "bcrypt-sha256$"
+_UNSAFE_SECRETS = {"", "dev-secret-change-me", "changeme", "secret", "password"}
 
 _serializer = URLSafeTimedSerializer(settings.app_secret, salt="band-slack-session")
 _fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(settings.app_secret.encode()).digest()))
+
+
+def require_production_secret() -> None:
+    """Stop a production process that is still using a known or missing application secret."""
+    if settings.band_env != "production":
+        return
+    if settings.app_secret in _UNSAFE_SECRETS or len(settings.app_secret) < 32:
+        raise SystemExit("Refusing to start: APP_SECRET is missing or unsafe for production.")
+    if settings.recovery_delivery == "memory":
+        raise SystemExit("Refusing to start: recovery email cannot use memory delivery in production.")
+
+
+def _aware(value):
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def hash_password(password: str) -> str:
@@ -41,15 +58,67 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def issue_token(user_id: int) -> str:
-    return _serializer.dumps({"uid": user_id})
+    """Create a server-side session and return the browser token that names it."""
+    from app.persistence.migrate import upgrade_database
+    upgrade_database()
+    session_id = secrets.token_urlsafe(18)
+    from app.persistence.models import db
+    with db() as session:
+        session.add(AuthSession(id=session_id, user_id=user_id, expires_at=utcnow() + timedelta(seconds=TOKEN_MAX_AGE)))
+        session.commit()
+    return _serializer.dumps({"uid": user_id, "sid": session_id})
 
 
-def user_id_from_token(token: str) -> int | None:
+def token_payload(token: str) -> dict | None:
     try:
         data = _serializer.loads(token, max_age=TOKEN_MAX_AGE)
     except (BadSignature, SignatureExpired):
         return None
-    return data.get("uid")
+    return data if isinstance(data, dict) else None
+
+
+def user_id_from_token(token: str) -> int | None:
+    """Signature check used to keep workspace credentials out of proxied requests."""
+    data = token_payload(token)
+    uid = data.get("uid") if data else None
+    return uid if isinstance(uid, int) else None
+
+
+def authenticate(token: str, session: Session) -> tuple[User, str] | None:
+    data = token_payload(token)
+    if not data:
+        return None
+    uid, sid = data.get("uid"), data.get("sid")
+    if not isinstance(uid, int) or not isinstance(sid, str):
+        return None
+    user = session.get(User, uid)
+    row = session.get(AuthSession, sid)
+    if user is None or row is None or row.user_id != user.id or row.revoked_at is not None:
+        return None
+    if _aware(row.expires_at) <= utcnow():
+        return None
+    return user, sid
+
+
+def revoke_session(session_id: str) -> None:
+    from app.persistence.models import db
+    with db() as session:
+        row = session.get(AuthSession, session_id)
+        if row and row.revoked_at is None:
+            row.revoked_at = utcnow()
+            session.add(row)
+            session.commit()
+
+
+def revoke_user_sessions(user_id: int) -> None:
+    from app.persistence.models import db
+    with db() as session:
+        rows = session.exec(select(AuthSession).where(AuthSession.user_id == user_id, AuthSession.revoked_at == None)).all()  # noqa: E711
+        now = utcnow()
+        for row in rows:
+            row.revoked_at = now
+            session.add(row)
+        session.commit()
 
 
 def encrypt_secret(value: str) -> str:
@@ -65,8 +134,18 @@ def current_user(
     session: Session = Depends(get_session),
 ) -> User:
     token = authorization.removeprefix("Bearer ").strip()
-    uid = user_id_from_token(token) if token else None
-    user = session.get(User, uid) if uid else None
-    if user is None:
+    principal = authenticate(token, session) if token else None
+    if principal is None:
         raise HTTPException(status_code=401, detail="Not signed in")
-    return user
+    return principal[0]
+
+
+def current_session_id(
+    authorization: str = Header(default=""),
+    session: Session = Depends(get_session),
+) -> str:
+    token = authorization.removeprefix("Bearer ").strip()
+    principal = authenticate(token, session) if token else None
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Not signed in")
+    return principal[1]

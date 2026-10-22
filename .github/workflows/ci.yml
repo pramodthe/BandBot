@@ -58,3 +58,88 @@ jobs:
         run: npm test
       - name: Check types, UI catalogue, bundle budgets, and compiled worker
         run: npm run build
+
+  postgres:
+    name: PostgreSQL migrations and workspace behavior
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: band
+        ports:
+          - 5432:5432
+        # pg_isready takes no extra flags here: Docker would treat "-U" as its own option.
+        # 127.0.0.1 avoids the IPv6 localhost address, which has no published port.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/band
+      BAND_USE_ENV_DATABASE: "1"
+      AUTH_ATTEMPT_LIMIT: "100000"
+      RECOVERY_DELIVERY: memory
+      BAND_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.9.8"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Run migrations and workspace tests on PostgreSQL
+        run: uv run pytest -q tests/test_migrations.py tests/test_operations.py tests/test_reconnect.py tests/test_people.py tests/test_computer_bindings.py
+
+  browser:
+    name: Two-user browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.9.8"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --locked
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run two-user browser tests
+        working-directory: frontend
+        run: npm run e2e
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: playwright-results
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+          if-no-files-found: ignore

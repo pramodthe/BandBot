@@ -1,8 +1,9 @@
 import { useId, useState, type FormEvent } from "react";
-import { ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
 import { api } from "@/api";
 import type { State } from "@/store";
 import type { Channel } from "@/types";
+import RuntimeIcon from "./RuntimeIcon";
 import AgentAvatarPicker from "./AgentAvatarPicker";
 import { agentAvatar, AGENT_AVATARS } from "@/components/shared/Avatar";
 import Field from "@/components/shared/Field";
@@ -14,10 +15,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-export default function CreateAgentModal({ state, channel, onClose }: {
+export default function CreateAgentModal({ state, channel, onClose, onBack }: {
   state: State;
   channel: Channel | null;
   onClose: () => void;
+  onBack?: () => void;
 }) {
   const id = useId();
   const [name, setName] = useState("");
@@ -30,7 +32,8 @@ export default function CreateAgentModal({ state, channel, onClose }: {
     }
     return [...AGENT_AVATARS].sort((a, b) => counts.get(a)! - counts.get(b)!)[0];
   });
-  const [model, setModel] = useState(state.models.find((m) => m.default)?.id ?? state.models[0]?.id ?? "");
+  const defaultModel = state.models.find((m) => m.default)?.id ?? state.models[0]?.id ?? "";
+  const [model, setModel] = useState(defaultModel);
   const [instructions, setInstructions] = useState("");
   const [addToChannel, setAddToChannel] = useState(false);
   const [plugins, setPlugins] = useState<string[] | null>([]);
@@ -63,7 +66,8 @@ export default function CreateAgentModal({ state, channel, onClose }: {
       <DialogContent showCloseButton={!busy} className="flex max-h-[calc(100dvh-32px)] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-[512px]"
         onEscapeKeyDown={(e) => busy && e.preventDefault()} onPointerDownOutside={(e) => busy && e.preventDefault()}>
         <DialogHeader className="shrink-0 px-6 pt-6 pr-12 pb-2 text-left">
-          <DialogTitle className="text-lg">New agent</DialogTitle>
+          {onBack && <Button type="button" variant="ghost" size="sm" className="-ml-2 mb-2 self-start" disabled={busy} onClick={onBack}><ArrowLeftIcon />All agents</Button>}
+          <DialogTitle className="flex items-center gap-2 text-lg"><RuntimeIcon runtime="deepagents" />Create agent</DialogTitle>
           <DialogDescription className="mt-1 leading-relaxed">
             Name your agent and give it a face. Add it to a channel when you’re ready to work together.
           </DialogDescription>

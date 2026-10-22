@@ -1,4 +1,4 @@
-"""Persistent E2B desktop computers, one per agent per channel. No application credentials enter the sandbox."""
+"""Persistent cloud desktops. Application credentials never enter the sandbox."""
 from __future__ import annotations
 
 import asyncio
@@ -16,14 +16,19 @@ from e2b import NotFoundException, RateLimitException, SandboxException
 from fastapi import HTTPException
 
 from app.computer.e2b import DesktopOptions, E2BDesktopClient
+from app.computer.providers import ComputerMissing, ComputerProviderError, configured, key_for, provider_for
+from app.computer.providers import running_on
+from app.computer.identity import is_shared, shared_key
+from app.computer.locking import ComputerLock
 
 from sqlmodel import select
 
 from app import documents
 from app.config import settings
 from app.computer.display import display_state, record_step, update_display
-from app.persistence.models import (AgentProfile, AgentTask, ComputerControl, ComputerViewLease, Document, TaskSandbox,
-                                    db, utcnow)
+from app.persistence.models import (AgentProfile, AgentTask, ChannelMember, ComputerControl, ComputerControlContext,
+                                    ComputerViewLease, DirectMessage, Document, PrivateConversation, TaskSandbox, db,
+                                    utcnow)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +51,7 @@ def active_control(key: str) -> ComputerControl | None:
     return control if until > utcnow() else None
 
 
-def take_control(key: str, *, user_id: int, user_name: str) -> ComputerControl:
+def take_control(key: str, *, user_id: int, user_name: str, task_id: str | None = None) -> ComputerControl:
     """Pause the agent's input actions; its old screen ids become invalid because a person changes the screen."""
     with db() as session:
         control = session.get(ComputerControl, key) or ComputerControl(key=key, user_id=user_id, user_name=user_name,
@@ -54,6 +59,8 @@ def take_control(key: str, *, user_id: int, user_name: str) -> ComputerControl:
         control.user_id, control.user_name = user_id, user_name
         control.until = utcnow() + timedelta(minutes=CONTROL_MINUTES)
         session.add(control)
+        if task_id is not None:
+            session.merge(ComputerControlContext(key=key, task_id=task_id))
         session.commit()
         session.refresh(control)
     if sandbox_record(key):
@@ -102,12 +109,8 @@ def computer_owner(task: AgentTask) -> str:
 
 
 def computer_key(task: AgentTask) -> str:
-    """Computers persist per agent and channel, matching memory scope; files never cross channels.
-
-    The worker runs one task per agent per channel at a time, so a computer has one user at once.
-    Stored in TaskSandbox.task_id, which predates persistent computers.
-    """
-    return f"e2b-agent-{computer_owner(task)}-channel-{task.channel_id}"
+    """Pinned computer identity; Tenki can share a workspace disk across channel agents."""
+    return key_for(task)
 
 
 def sandbox_record(key: str) -> TaskSandbox | None:
@@ -131,16 +134,26 @@ def save_sandbox(key: str, **values) -> TaskSandbox:
 
 
 class TaskComputer:
-    def __init__(self, task: AgentTask, *, client_factory=E2BDesktopClient):
+    def __init__(self, task: AgentTask, *, client_factory=None):
         self.task = task
         self.owner = computer_owner(task)
         self.key = computer_key(task)
+        self.provider = provider_for(task)
+        if client_factory is None:
+            if self.provider == "tenki":
+                from app.computer.tenki import TenkiDesktopClient
+                client_factory = lambda: TenkiDesktopClient(config=settings)
+            elif self.provider == "e2b":
+                client_factory = E2BDesktopClient
+            else:
+                raise ComputerUnavailable("Unsupported computer provider")
         self.client_factory = client_factory
         self.notice = ""
         self.client = None
         self.sandbox = None
         self.desktop_started = False
-        self.lock = asyncio.Lock()
+        self.shared = is_shared(self.key)
+        self.lock = ComputerLock(self.key)
 
     async def __aenter__(self):
         return self
@@ -149,20 +162,39 @@ class TaskComputer:
         await self.close()
 
     def labels(self) -> dict[str, str]:
+        if self.shared:
+            return {"app": "band-slack", "workspace": workspace_id(), "scope": "workspace"}
         return {"app": "band-slack", "workspace": workspace_id(),
                 "agent": self.owner, "channel": str(self.task.channel_id)}
 
     def sandbox_name(self) -> str:
+        if self.shared:
+            return f"band-tenki-{workspace_id()}-shared"
         owner = hashlib.sha256(self.owner.encode()).hexdigest()[:12]
-        return f"band-e2b-{workspace_id()[:8]}-{owner}-c{self.task.channel_id}"
+        return f"band-{self.provider}-{workspace_id()[:8]}-{owner}-c{self.task.channel_id}"
 
     async def ensure(self, *, desktop: bool = False, create: bool = True):
         """Caller holds lock. Persist a deterministic name before allocating cloud resources.
 
         People viewing a computer pass create=False: looking must never allocate a new one.
         """
-        if not settings.e2b_api_key:
-            raise ComputerUnavailable("E2B is not configured. Set E2B_API_KEY to enable the computer.")
+        with db() as session:
+            profile = session.get(AgentProfile, self.task.agent_id)
+            shared_access = (self.shared and self.provider == "tenki" and self.key == shared_key(settings)
+                and session.get(DirectMessage, self.task.channel_id) is None
+                and session.get(PrivateConversation, self.task.channel_id) is None
+                and session.get(ChannelMember, (self.task.channel_id, "agent", self.task.agent_id)) is not None)
+        expected = f"{self.provider}-agent-{self.owner}-channel-{self.task.channel_id}"
+        if (not profile or self.owner != profile.band_agent_id
+                or self.task.created_at.replace(tzinfo=timezone.utc) < profile.created_at.replace(tzinfo=timezone.utc)
+                or (not shared_access if self.shared else self.key != expected)):
+            raise ComputerUnavailable("This task belongs to a removed or replaced agent. Start a new task.")
+        if not configured(self.provider, settings):
+            raise ComputerUnavailable(f"{self.provider.upper()} computer access is not configured. Ask a workspace admin to configure it.")
+        # Another process can pause/replace a shared VM between operations. Re-read its
+        # identity and state under the OS lock rather than trusting this SDK's cache.
+        if self.shared and self.sandbox is not None:
+            await self.detach()
         if self.sandbox is None:
             if self.client is None:
                 self.client = self.client_factory()
@@ -173,35 +205,46 @@ class TaskComputer:
             record = record or save_sandbox(self.key, name=self.sandbox_name())
             try:
                 sandbox = await self.client.get(record.sandbox_id or record.name, request_timeout=30)
-            except NotFoundException:
+            except (NotFoundException, ComputerMissing):
+                if record.status == "creation_unknown":
+                    raise ComputerUnavailable("Computer creation is uncertain. Check the provider dashboard before retrying; a duplicate will not be allocated.") from None
                 if not create:
                     raise ComputerUnavailable("This agent's computer in this channel has expired. "
                                               "It starts a fresh one when it next needs desktop or code tools.") from None
                 if record.sandbox_id:
-                    # The old computer was removed. Replace it, and tell the agent its files are gone.
+                    # Replace a removed VM; Tenki reattaches its verified saved disk.
                     record = save_sandbox(self.key, sandbox_id=None, status="provisioning", frame_id="",
                                           latest_image="", error=None)
                     update_display(self.key, steps=[], url="", network_warning="", observed_at="")
-                    self.notice = ("This agent's previous computer in this channel had expired, so a fresh one "
+                    self.notice = ("The previous computer expired. A fresh computer is using this channel's saved data disk; "
+                                   "background processes must be restarted and some websites may require sign-in."
+                                   if self.provider == "tenki" else
+                                   "This agent's previous computer in this channel had expired, so a fresh one "
                                    "was started. Files and logins from earlier tasks are gone.")
                 # A cloud timeout after allocation is recovered by the deterministic name on the next attempt.
                 try:
                     sandbox = await self.client.create(DesktopOptions(
-                        name=record.name, template=settings.e2b_template, labels=self.labels(),
-                        timeout=settings.e2b_timeout), timeout=60)
+                        name=record.name, template=settings.e2b_template if self.provider == "e2b" else settings.tenki_desktop_image, labels=self.labels(),
+                        timeout=settings.e2b_timeout if self.provider == "e2b" else settings.tenki_timeout), timeout=60)
                 except SandboxException as exc:
                     if is_quota_error(exc):
                         raise ComputerUnavailable(
                             "E2B storage or quota limit reached, so a new computer could not be created. "
                             "Check sandbox limits and usage in the E2B dashboard.") from None
                     raise
+                except BaseException:
+                    save_sandbox(self.key, status="creation_unknown", frame_id="")
+                    raise
             if any((sandbox.labels or {}).get(key) != value for key, value in self.labels().items()):
-                raise ComputerUnavailable("Sandbox ownership did not match this agent and channel. Refusing to attach.")
-            # Save identity before start; cancellation/restart can reattach without recreating it.
-            save_sandbox(self.key, sandbox_id=sandbox.id, status="starting", error=None, frame_id="")
-            self.sandbox = sandbox
+                raise ComputerUnavailable("Sandbox ownership did not match this computer's scope. Refusing to attach.")
             state = str(getattr(sandbox.state, "value", sandbox.state))
-            if state != "started":
+            # Merely reattaching a shared SDK must not consume the frame needed by
+            # the pending action. A resume/replacement invalidates it.
+            invalidate = record.sandbox_id != sandbox.id or record.status != "running" or state != "started"
+            save_sandbox(self.key, sandbox_id=sandbox.id, status="starting" if invalidate else "running", error=None,
+                         **({"frame_id": ""} if invalidate else {}))
+            self.sandbox = sandbox
+            if state != "started" or self.provider == "tenki":
                 await sandbox.start(timeout=60)
             save_sandbox(self.key, status="running")
         if desktop and not self.desktop_started:
@@ -211,7 +254,7 @@ class TaskComputer:
             if display is None and info.displays:
                 display = info.displays[0]
             if display is None or not display.width or not display.height:
-                raise ComputerUnavailable("Desktop has no display. Use the E2B desktop template or a compatible template.")
+                raise ComputerUnavailable("Desktop has no display. Use a prepared desktop template.")
             save_sandbox(self.key, width=display.width, height=display.height)
             self.desktop_started = True
         return self.sandbox
@@ -228,7 +271,7 @@ class TaskComputer:
         try:
             base64.b64decode(encoded, validate=True)
         except ValueError:
-            raise ComputerUnavailable("E2B returned an invalid screenshot.") from None
+            raise ComputerUnavailable("The computer returned an invalid screenshot.") from None
         frame = uuid4().hex
         row = save_sandbox(self.key, latest_image=f"data:image/jpeg;base64,{encoded}",
                            frame_id=frame, last_action=action, error=None)
@@ -317,9 +360,12 @@ class TaskComputer:
                 " >/tmp/band-browser.log 2>&1 </dev/null & "
                 "else echo 'No browser installed in this template'; exit 1; fi"
             )
-            result = await sandbox.process.exec(command, timeout=15)
-            if result.exit_code != 0:
-                raise ComputerUnavailable("No supported browser could be launched. Use a desktop template with Chromium or Firefox.")
+            if self.provider == "tenki":
+                await sandbox.open_browser(url)
+            else:
+                result = await sandbox.process.exec(command, timeout=15)
+                if result.exit_code != 0:
+                    raise ComputerUnavailable("No supported browser could be launched. Use a desktop template with Chromium or Firefox.")
             # Keep only the host in presentation metadata; URLs can contain passwords and signed query parameters.
             update_display(self.key, url=parsed.hostname, network_warning="")
             await asyncio.sleep(1)
@@ -471,10 +517,11 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
         if not name or len(content) > TRANSFER_LIMIT:
             raise ComputerUnavailable("Upload a named file of up to 25 MB.")
         async with self.lock:
+            self._check_control()
             sandbox = await self.ensure(create=False)
             try:
                 await sandbox.fs.create_folder("uploads", "755", request_timeout=30)
-            except SandboxException:
+            except (SandboxException, ComputerProviderError):
                 pass  # Usually it already exists; the upload below reports any real problem.
             await sandbox.fs.upload_file(content, f"uploads/{name}", timeout=120)
             # Relative paths resolve from the working directory; report an absolute path for the agent.
@@ -493,7 +540,18 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
         self.desktop_started = False
 
     async def close(self, *, force: bool = False) -> None:
+        async with self.lock:
+            await self._close(force=force)
+
+    async def _close(self, *, force: bool = False) -> None:
         from app.computer.app_previews import has_active_view
+        if self.shared and running_on(self.key, excluding=None if force else self.task.id):
+            if force:
+                raise ComputerUnavailable("An agent is using the shared computer. Wait for its task to finish or cancel it first.")
+            await self.detach()
+            return
+        if self.shared and self.sandbox is not None:
+            await self.detach()
         with db() as session:
             lease = session.get(ComputerViewLease, self.key)
             until = (lease.until if lease.until.tzinfo else lease.until.replace(tzinfo=timezone.utc)) if lease else None
@@ -501,15 +559,15 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
             if lease and (force or not watching):
                 session.delete(lease)
                 session.commit()
-        if (watching or has_active_view(self.key)) and not force:
+        if (watching or has_active_view(self.key) or active_control(self.key)) and not force:
             await self.detach()
             return  # E2B's configured timeout auto-pauses the desktop.
         # Also recover an allocation made just before a worker crash, even if the graph
         # is already complete and never calls a computer tool on its resumed attempt.
         try:
             record = sandbox_record(self.key)
-            if self.sandbox is None and record and settings.e2b_api_key and record.status in {
-                "running", "starting", "provisioning", "stop_failed"
+            if self.sandbox is None and record and configured(self.provider, settings) and record.status in {
+                "running", "starting", "provisioning", "stop_failed", "pausing", "creation_unknown"
             }:
                 try:
                     if self.client is None:
@@ -519,24 +577,27 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
                         raise ComputerUnavailable("Sandbox ownership did not match this agent and channel")
                     self.sandbox = sandbox
                     save_sandbox(self.key, sandbox_id=sandbox.id)
-                except NotFoundException:
-                    save_sandbox(self.key, status="missing", frame_id="")
+                except (NotFoundException, ComputerMissing):
+                    if record.status != "creation_unknown":
+                        save_sandbox(self.key, status="missing", frame_id="")
                 except Exception:
                     logger.warning("Could not recover task computer %s for cleanup", self.task.id)
                     save_sandbox(self.key, status="stop_failed", frame_id="",
-                                 error="Cleanup was not confirmed; check E2B dashboard")
+                                 error="Cleanup was not confirmed; check the provider dashboard")
             if self.sandbox is not None:
                 if has_active_view(self.key) and not force:
                     return  # A viewer connected while cleanup was recovering the SDK client.
                 try:
                     state = str(getattr(self.sandbox.state, "value", self.sandbox.state))
                     if state != "stopped":
-                        await self.sandbox.stop(timeout=20)
+                        if self.provider == "tenki":
+                            save_sandbox(self.key, status="pausing", frame_id="")
+                        await self.sandbox.stop(timeout=settings.tenki_lifecycle_timeout if self.provider == "tenki" else 20)
                     save_sandbox(self.key, status="stopped", frame_id="")
                 except Exception:
                     logger.warning("Could not stop task computer %s", self.task.id)
                     save_sandbox(self.key, status="stop_failed", frame_id="",
-                                 error="Stop was not confirmed; check E2B dashboard")
+                                 error="Stop was not confirmed; check the provider dashboard")
         finally:
             if self.client is not None:
                 try:

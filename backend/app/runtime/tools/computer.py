@@ -1,4 +1,4 @@
-"""E2B desktop, shell, and file tools for one task."""
+"""Cloud desktop, shell, and file tools for one task."""
 from __future__ import annotations
 
 import logging
@@ -28,22 +28,22 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
             return {"error": str(exc)}
         except Exception as exc:
             # SDK errors may contain full request headers. Expose only the type.
-            logger.warning("E2B tool failed for task %s: %s", task.id, type(exc).__name__)
-            return {"error": f"E2B operation failed ({type(exc).__name__}). Its outcome may be uncertain. "
+            logger.warning("Computer tool failed for task %s: %s", task.id, type(exc).__name__)
+            return {"error": f"Computer operation failed ({type(exc).__name__}). Its outcome may be uncertain. "
                              "For desktop actions, take a fresh screenshot before deciding what to do next."}
 
     @tool
     async def run_python(code: str) -> dict:
-        """Run Python on your E2B computer for this channel (30s limit). Never executes on the host.
+        """Run Python on the cloud computer (30s limit). Never executes on the host.
 
-        Files persist across calls and later tasks; Python variables do not. Requires E2B_API_KEY.
+        Files persist across calls and later tasks; Python variables do not. Requires configured computer access.
         Starting the computer can take a while: if you have code_interpreter, use it for quick calculations instead.
         """
         return await computer_call(lambda: computer.command(code, python=True))
 
     @tool
     async def sandbox_exec(command: str) -> dict:
-        """Run a shell command inside the task's E2B sandbox, with bounded output and a 30s limit.
+        """Run a shell command inside the task's cloud sandbox, with bounded output and a 30s limit.
 
         Use for installing packages, running tests, or inspecting sandbox files. Host secrets are not available.
         Long commands should start a background process with redirected output, then poll its log.
@@ -52,7 +52,7 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
 
     @tool
     async def computer_screenshot() -> list | dict:
-        """See the E2B desktop. Returns an actual image and screen_id required by computer_action.
+        """See the cloud desktop. Returns an actual image and screen_id required by computer_action.
 
         Use the image to choose coordinates. Never guess from an old screenshot. Starts a computer on first use.
         """
@@ -62,7 +62,7 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
     async def computer_open_browser(url: str) -> list | dict:
         """Open an HTTP(S) URL in the sandbox's graphical browser and see its desktop screenshot.
 
-        Requires the E2B desktop template or a compatible template with Chromium or Firefox.
+        Requires the cloud desktop template or a compatible template with Chromium or Firefox.
         Check the image to confirm the page loaded; a launch alone is not a successful visit.
         """
         return await computer_call(lambda: computer.open_browser(url))
@@ -90,7 +90,7 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
 
     @tool
     async def sandbox_write_file(path: str, content: str) -> dict:
-        """Write UTF-8 text to an absolute path in the E2B computer (up to 200000 bytes).
+        """Write UTF-8 text to an absolute path in the cloud computer (up to 200000 bytes).
 
         Deep Agents virtual files are separate. Use this tool to copy code or data onto the actual computer.
         """
@@ -98,11 +98,9 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
 
     @tool
     async def sandbox_export_file(path: str) -> dict:
-        """Make a file on the E2B computer downloadable by the humans in this conversation.
+        """Export a UTF-8 text file from the cloud computer to downloadable task results (up to 200000 bytes).
 
-        DOCX, XLSX, PDF, PNG, JPEG, and WebP files (up to 25 MB) become channel documents; link the returned
-        `link` in your reply. Other UTF-8 text files (up to 200000 bytes) go to task results. Export final
-        deliverables before finishing; never send sandbox: links. Paused computers retain files until deleted.
+        Export final deliverables before finishing. Paused computers retain files until explicitly deleted.
         """
         return await computer_call(lambda: computer.export_file(path))
 
@@ -111,12 +109,12 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
                           tool_call_id: Annotated[str, InjectedToolCallId], path: str = "/") -> dict:
         """Attach a live, interactive server-app preview to your chat reply.
 
-        First start the app in the existing E2B computer as a background server listening on 0.0.0.0.
+        First start the app in the existing cloud computer as a background server listening on 0.0.0.0.
         Serve frontend and API on this port (or configure a dev-server API proxy). Use relative browser
         API/WebSocket URLs, never sandbox localhost URLs or public tunnels. Keep the process running.
         This registers only the port; it does not start a server or allocate a computer. Verify the app
         in its browser before finishing. Existing computers may need the dev server's allowedHosts to
-        include its private E2B host. Users connect and resume the computer privately from the reply.
+        include its private gateway host. Users connect and resume the computer privately from the reply.
         """
         from app.computer.app_previews import publish
         return await computer_call(lambda: publish(computer, port=port, title=title, path=path, call_id=tool_call_id))

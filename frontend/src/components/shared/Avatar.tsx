@@ -1,4 +1,6 @@
 import type { CSSProperties } from "react";
+import type { AgentRuntime } from "@/types";
+import RuntimeIcon from "@/components/agents/RuntimeIcon";
 import { Avatar as AvatarRoot, AvatarFallback } from "@/components/ui/avatar";
 
 const PALETTE = ["#3d6c32", "#6c7753", "#8d6852", "#5a7286", "#89729b"];
@@ -51,6 +53,7 @@ export default function Avatar({
   avatar,
   size = 36,
   working = false,
+  runtime,
 }: {
   name: string;
   kind: "human" | "agent" | "system" | "external";
@@ -58,7 +61,12 @@ export default function Avatar({
   avatar?: string | null;
   size?: number;
   working?: boolean;
+  runtime?: AgentRuntime;
 }) {
+  if (kind === "agent" && runtime && runtime !== "deepagents") {
+    return <span title={name} className="bg-muted inline-flex shrink-0 items-center justify-center rounded-xl"
+      style={{ width: size, height: size }}><span style={{ width: size * 0.65, height: size * 0.65 }}><RuntimeIcon runtime={runtime} className="size-full" /></span></span>;
+  }
   if (kind === "agent") {
     const character = agentAvatar(avatar, role);
     const delay = Array.from(name).reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 7;

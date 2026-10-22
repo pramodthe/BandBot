@@ -692,7 +692,14 @@ def test_deleting_an_agent_leaves_nothing_for_a_reused_id(job):
         session.add(reused)
         session.commit()
     assert sandbox_record(old_key) is None
-    assert TaskComputer(work).key != old_key
+    # Old checkpoints retain their original owner and cannot attach as a reused row id.
+    assert TaskComputer(work).key == old_key
+    from app.computer import ComputerUnavailable
+    with pytest.raises(ComputerUnavailable, match="removed or replaced"):
+        asyncio.run(TaskComputer(work).ensure())
+    fresh = enqueue(agent_id=reused.id, channel_id=task.channel_id, room_id=task.room_id,
+                    source_id=uuid4().hex, prompt="New task")
+    assert TaskComputer(fresh).key != old_key
 
 
 def test_cancelling_a_waiting_task_closes_its_approval(tmp_path, job):

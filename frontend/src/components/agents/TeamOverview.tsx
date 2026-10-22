@@ -29,7 +29,7 @@ export default function TeamOverview({ state, onSelect, onMessage, opening, erro
             <h1 className="text-3xl font-semibold tracking-tight">Your team.</h1>
             <p className="text-muted-foreground mt-2 max-w-lg text-sm leading-relaxed">Find the right teammate. Start a conversation. Get something done.</p>
           </div>
-          <Button variant="outline" className="rounded-xl" onClick={() => openModal({ kind: "new-agent" })}><PlusIcon />New teammate</Button>
+          <Button variant="outline" className="rounded-xl" onClick={() => openModal({ kind: "new-agent" })}><PlusIcon />Add agents</Button>
         </header>
 
         <div className="mb-4 flex items-center justify-between gap-3">
@@ -48,7 +48,7 @@ export default function TeamOverview({ state, onSelect, onMessage, opening, erro
               <article key={agent.id} aria-label={`${agent.name} teammate`} className={`border-border bg-muted/30 rounded-2xl border p-5 transition-colors hover:bg-muted/65 ${leader ? "min-[1100px]:col-span-2 min-[1100px]:p-7" : ""}`}>
                 <div className={`flex items-start ${leader ? "gap-5 min-[1100px]:gap-7" : "gap-4"}`}>
                   <button aria-label={`Open ${agent.name} profile`} onClick={() => onSelect({ kind: "agent", id: agent.id })} className="shrink-0 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} size={leader ? 96 : 64} working={activity?.status === "running"} />
+                    <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} runtime={agent.runtime} size={leader ? 96 : 64} working={activity?.status === "running"} />
                   </button>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">

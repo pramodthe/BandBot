@@ -41,3 +41,5 @@ backend/documents/
 # Operating-system metadata
 .DS_Store
 Thumbs.db
+# Local cross-process computer operation locks.
+computer-locks/

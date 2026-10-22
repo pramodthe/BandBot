@@ -32,6 +32,10 @@ def is_admin(session: Session, user_id: int) -> bool:
     return role_of(session, user_id) in ADMIN_ROLES
 
 
+def can_connect_agents(session: Session, user_id: int) -> bool:
+    return session.get(User, user_id) is not None
+
+
 def workspace_roles(session: Session) -> dict[int, str]:
     """Roles of people above member; everyone else is a member."""
     return {row.user_id: row.role for row in session.exec(select(WorkspaceRole)).all()}

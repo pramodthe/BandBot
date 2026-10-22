@@ -31,8 +31,17 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(describe(data.detail), response.status);
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
+    throw new ApiError("The server returned a webpage instead of an API response. Restart the API and worker to load the latest app version, then retry.", response.status);
+  }
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiError("The server returned an unreadable response. Please retry.", response.status);
+  }
+  if (!response.ok) throw new ApiError(describe(data && typeof data === "object" && "detail" in data ? data.detail : undefined), response.status);
   return data as T;
 }
 

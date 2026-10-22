@@ -195,6 +195,11 @@ def test_summarization_output_never_reaches_the_draft(job):
     assert draft_row(task.id).content == "Partial answer"
 
 
+def _event_body(event: dict) -> dict:
+    assert isinstance(event.get("cursor"), int)
+    return {key: value for key, value in event.items() if key != "cursor"}
+
+
 def test_drafts_reach_websocket_and_clear_when_the_reply_lands(job):
     task, _, user = job
     with TestClient(app) as client:
@@ -203,8 +208,8 @@ def test_drafts_reach_websocket_and_clear_when_the_reply_lands(job):
             event = ws.receive_json()
             while not (event["type"] == "draft" and event["task_id"] == task.id):
                 event = ws.receive_json()
-            assert event == {"type": "draft", "task_id": task.id, "channel_id": task.channel_id,
-                             "agent_id": task.agent_id, "content": "Hello wor"}
+            assert _event_body(event) == {"type": "draft", "task_id": task.id, "channel_id": task.channel_id,
+                                           "agent_id": task.agent_id, "content": "Hello wor"}
             update_task(task.id, status="running")
             complete(task, "Hello world")
             seen = []
@@ -228,7 +233,7 @@ def test_drafts_stream_appended_text_and_resync_in_full(job, monkeypatch):
                 event = ws.receive_json()
                 while not (event["type"] in ("draft", "draft_append") and event["task_id"] == task.id):
                     event = ws.receive_json()
-                return event
+                return _event_body(event)
 
             base = {"task_id": task.id, "channel_id": task.channel_id, "agent_id": task.agent_id}
             assert written("😀 Hello") == {"type": "draft", **base, "content": "😀 Hello"}
@@ -252,17 +257,6 @@ def test_code_execution_text_before_the_tool_is_not_part_of_the_answer(job):
     draft.feed(("tools:helper",), AIMessageChunk(content="subagent text"), {"langgraph_node": "model"})
     draft.feed((), AIMessageChunk(content="17% is 397.8"), {"langgraph_node": "model"})
     assert draft.text == "17% is 397.8"
-
-
-def test_hidden_citation_markup_becomes_links_or_disappears(job):
-    cited = "Overcast. \ue200cite\ue202https://exa.ai/weather?d=1\ue202turn0search0\ue201"
-    assert answer_text(AIMessage(content=cited)) == "Overcast. ([exa.ai](https://exa.ai/weather?d=1))"
-    assert answer_text(AIMessage(content="A. \ue200cite\ue202turn0search0\ue201 B.")) == "A. B."
-    task, _, _ = job
-    draft = Draft(task, enabled=True)
-    draft.feed((), AIMessageChunk(content="Overcast. \ue200cite\ue202https://exa.ai/wea"), {"langgraph_node": "model"})
-    draft.flush(force=True)
-    assert draft_row(task.id).content == "Overcast. "
 
 
 def test_openai_code_interpreter_is_bound_when_enabled(tmp_path, monkeypatch, job):

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 
 from uuid import uuid4
 
@@ -11,9 +10,9 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 
-from app.auth import decrypt_secret
+from app.computer.ingress import endpoint, headers as ingress_headers
 from app.config import settings
-from app.persistence.models import AgentTask, ChannelMember, ComputerConnection, DirectMessage, User, db, utcnow
+from app.persistence.models import AgentTask, ChannelMember, DirectMessage, User, db, utcnow
 from app.workspace.permissions import allowed
 
 router = APIRouter()
@@ -43,28 +42,37 @@ def resolve_viewer(token: str) -> tuple[str, str, float]:
         if not allowed(session, user.id, task.channel_id, "computer_control"):
             raise HTTPException(403, "Desktop access unavailable")
         record = sandbox_record(computer_key(task))
-        connection = session.get(ComputerConnection, data.get("sandbox"))
-        if not record or record.sandbox_id != data.get("sandbox") or record.status != "running" or not connection:
+        if not record or record.sandbox_id != data.get("sandbox") or record.status != "running":
             raise HTTPException(409, "Desktop is paused or has changed. Reconnect from the computer panel.")
-        if not re.fullmatch(r"6080-[a-zA-Z0-9.-]+\.e2b\.app", connection.host):
-            raise HTTPException(502, "Invalid desktop host")
         control = active_control(computer_key(task))
         interactive = control is not None and control.user_id == user.id
         # A separate VNC server enforces view-only access even for a modified browser client.
-        host = connection.host if interactive else connection.host.replace("6080-", "6081-", 1)
-        return host, decrypt_secret(connection.access_token_enc), max(0, VIEW_SECONDS - (utcnow() - issued_at).total_seconds())
+        host, secret = endpoint(computer_key(task), record.sandbox_id, 6080 if interactive else 6081)
+        return host, secret, max(0, VIEW_SECONDS - (utcnow() - issued_at).total_seconds())
+
+
+def viewer_route(token):
+    from app.computer.desktop import active_control, computer_key
+    host, secret, remaining = resolve_viewer(token)
+    data = _signer.loads(token, max_age=VIEW_SECONDS)
+    with db() as session:
+        task = session.get(AgentTask, data["task"])
+    key = computer_key(task)
+    control = active_control(key)
+    port = 6080 if control and control.user_id == data["user"] else 6081
+    return host, ingress_headers(key, secret, port), remaining, (host, port)
 
 
 @router.websocket("/api/computers/view/{token}/websockify")
 async def desktop_socket(websocket: WebSocket, token: str):
     try:
-        host, traffic_token, remaining = resolve_viewer(token)
+        host, upstream_headers, remaining, route = viewer_route(token)
     except HTTPException:
         await websocket.close(code=1008)
         return
     # A signed URL is a bearer credential; never forward the user's app token or log either credential.
     try:
-        async with connect(f"wss://{host}/websockify", additional_headers={"e2b-traffic-access-token": traffic_token},
+        async with connect(f"wss://{host}/websockify", additional_headers=upstream_headers,
                            subprotocols=["binary"], open_timeout=20, max_size=8 * 1024 * 1024) as upstream:
             await websocket.accept(subprotocol="binary")
             async def send_upstream():
@@ -73,7 +81,7 @@ async def desktop_socket(websocket: WebSocket, token: str):
                     if event["type"] == "websocket.disconnect":
                         return
                     try:
-                        if resolve_viewer(token)[0] != host:
+                        if viewer_route(token)[3] != route:
                             return  # A take-over ended or changed owner; reconnect with the current permissions.
                     except HTTPException:
                         return
@@ -88,7 +96,7 @@ async def desktop_socket(websocket: WebSocket, token: str):
                 while True:
                     await asyncio.sleep(5)
                     try:
-                        if resolve_viewer(token)[0] != host:
+                        if viewer_route(token)[3] != route:
                             return
                     except HTTPException:
                         return
@@ -105,5 +113,5 @@ async def desktop_socket(websocket: WebSocket, token: str):
     finally:
         try:
             await websocket.close()
-        except RuntimeError:
+        except (RuntimeError, WebSocketDisconnect):
             pass

@@ -11,7 +11,8 @@ from band.client.rest import DEFAULT_REQUEST_OPTIONS, AsyncRestClient, aclose_re
 
 from app.auth import decrypt_secret
 from app.config import settings
-from app.persistence.models import AgentProfile, AgentTask, Channel, Message, db
+from app.persistence.models import (AgentProfile, AgentTask, Channel, ChannelMember, Message,
+                                    PrivateConversation, UserBandAccount, OutsideAgent, BandRoomAccount, db)
 from sqlmodel import select
 from app.tasks import display_names, enqueue
 from app.tasks.teammates import link_outside_reply, outside_reply
@@ -62,17 +63,30 @@ class QueuedAgentAdapter(SimpleAdapter):
                          is_session_bootstrap: bool, room_id: str) -> None:
         with db() as session:
             channel = session.exec(select(Channel).where(Channel.band_room_id == room_id)).first()
+            scope = session.get(PrivateConversation, channel.id) if channel else None
+            account = session.exec(select(UserBandAccount).where(UserBandAccount.band_user_id == msg.sender_id)).first()
+            if scope:
+                if not session.get(ChannelMember, (channel.id, "agent", self.profile_id)):
+                    return
+                sender = session.exec(select(AgentProfile).where(AgentProfile.band_agent_id == msg.sender_id)).first()
+                human_member = account and session.get(ChannelMember, (channel.id, "human", account.user_id))
+                agent_member = sender and session.get(ChannelMember, (channel.id, "agent", sender.id))
+                bridge = session.get(BandRoomAccount, channel.id)
+                bridge_owner = bridge and bridge.band_user_id == msg.sender_id
+                if not human_member and not agent_member and not bridge_owner and not session.get(OutsideAgent, (channel.id, msg.sender_id)):
+                    return
         if channel is None:
             logger.warning("Ignoring agent turn for unknown room %s", room_id)
             return
         # App-originated messages already committed their jobs before relay. Keep native
         # Band mentions while suppressing the transport echo, even if its receipt is racing.
-        if msg.sender_id == self.reply_to:
+        if msg.sender_id == self.reply_to or (scope and (account or bridge_owner)):
             with db() as session:
                 recent = session.exec(select(Message).where(Message.channel_id == channel.id,
                     Message.author_type == "human").order_by(Message.id.desc()).limit(100)).all()
                 for local in recent:
-                    if local.band_message_id == msg.id or msg.content == f"**{local.author_name}:** {local.content}":
+                    same_personal = scope and account and local.author_id == account.user_id and msg.content == local.content
+                    if local.band_message_id == msg.id or same_personal or msg.content == f"**{local.author_name}:** {local.content}":
                         key = f"{self.profile_id}:{room_id}:app-message-{local.id}"
                         if session.exec(select(AgentTask.id).where(AgentTask.source_key == key)).first():
                             return
@@ -86,7 +100,7 @@ class QueuedAgentAdapter(SimpleAdapter):
             prompt, origin = outside_reply(session, self.profile_id, channel.id, msg.sender_id, prompt)
         task = enqueue(agent_id=self.profile_id, channel_id=channel.id, room_id=room_id,
                        source_id=msg.id, prompt=prompt, context=context,
-                       reply_to=self.reply_to or msg.sender_id)
+                       reply_to=msg.sender_id if scope and account else self.reply_to or msg.sender_id)
         if origin:
             link_outside_reply(task, origin)
 

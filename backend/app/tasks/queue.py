@@ -12,6 +12,7 @@ from app.persistence.models import (AgentProfile, AgentTask, ChannelMember, Dire
                                     TaskApproval, TaskHandoff, db, utcnow)
 from app.tasks.usage import over_budget
 from app.workspace.audit import record, record_agent
+from app.workspace.access import channel_teammates
 
 # Teammate hand-offs (local or outside) allowed per original request; each also yields at most one report back.
 MAX_HANDOFFS = 6
@@ -178,7 +179,7 @@ def hand_off(task: AgentTask, *, teammate: str, request: str, report_back: bool,
             return {"error": "This is a private one-on-one conversation, so teammates can't join it. "
                              "Use internal helpers, or suggest the person ask the teammate in a shared channel."}
         sender = session.get(AgentProfile, task.agent_id)
-        others = [a for a in session.exec(select(AgentProfile)).all() if a.id != task.agent_id]
+        others = [a for a in channel_teammates(session, task.channel_id) if a.id != task.agent_id]
         wanted = teammate.strip().lstrip("@").lower()
         target = next((a for a in others if wanted in (a.name.lower(), (a.handle or "").lower())), None)
         if sender is None or target is None:
