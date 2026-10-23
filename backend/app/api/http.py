@@ -25,11 +25,11 @@ from app.api.openai_settings import router as openai_router
 from app.api.app_previews import router as app_previews_router
 from app.computer.app_proxy import AppPreviewDispatch
 from app.openai_provider import configuration, model_catalog, migrate_profiles
-from app.config import FRONTEND_DIST, settings
+from app.config import FRONTEND_DIST, settings, uses_workspace_band_key
 from app.workspace.events import bus
 from app.tasks.usage import channel_usage, task_usage
 from app.persistence.models import (AgentMemory, AgentPersona, AgentTask, AgentProfile, AuditEvent, Budget, Channel, ChannelMember,
-                                    ChannelPolicy, DirectMessage, Message, TaskApproval, User, WorkspaceRole, db,
+                                    ChannelPolicy, DirectMessage, Message, TaskApproval, User, UserBandAccount, WorkspaceRole, db,
                                     get_session, init_db, utcnow)
 from app.workspace.audit import record, serialize_event
 from app.workspace.permissions import allowed, can_connect_agents, ensure_owner, is_admin, role_of, serialize_policy, workspace_roles
@@ -129,6 +129,8 @@ class SignupBody(BaseModel):
 class LoginBody(BaseModel):
     username: str
     password: str
+    # Legacy accounts have no personal key yet. The server Band key is not a substitute.
+    band_api_key: SecretStr | None = None
 
 
 def _join_general(session: Session, user: User) -> None:
@@ -163,14 +165,16 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
         session.rollback()
         raise HTTPException(409, "This Band account is already connected to another app user") from None
     session.refresh(user)
-    _join_general(session, user)
-    session.commit()
     ensure_owner(session)
+    # #general belongs to the workspace Band room. Other accounts do not join it.
+    if role_of(session, user.id) == "owner":
+        _join_general(session, user)
+        session.commit()
     await bus.publish({"type": "user", "user": serialize_user(user)})
     if role_of(session, user.id) != "member":
         await bus.publish({"type": "workspace_role", "user_id": user.id, "role": role_of(session, user.id)})
     general = session.exec(select(Channel).where(Channel.name == "general")).first()
-    if general:
+    if general and role_of(session, user.id) == "owner":
         await service.publish_channel(general.id)
     return {"token": issue_token(user.id), "user": serialize_user(user)}
 
@@ -186,6 +190,19 @@ async def login(body: LoginBody, request: Request, session: Session = Depends(ge
         if login_limiter.too_many(key):
             raise HTTPException(429, GENERIC_LOCKOUT)
         raise HTTPException(401, "Wrong username or password")
+    account = session.get(UserBandAccount, user.id)
+    if uses_workspace_band_key() and not (account and account.secret_enc):
+        if body.band_api_key is None or not body.band_api_key.get_secret_value().strip():
+            raise HTTPException(409, "Add your Band human API key from your own Band account.")
+        from app.api.people import authenticate_human_key, save_band_account
+        key = body.band_api_key.get_secret_value().strip()
+        owner = await authenticate_human_key(key)
+        save_band_account(session, user.id, key, owner)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(409, "This Band account is already connected to another app user") from None
     return {"token": issue_token(user.id), "user": serialize_user(user)}
 
 
@@ -260,7 +277,7 @@ async def bootstrap(user: User = Depends(current_user), session: Session = Depen
     visible = [c for c in session.exec(select(Channel).order_by(Channel.name)).all()
                if channel_visible(session, c.id, user.id) and (c.id not in dms or dms[c.id].agent_id is not None)]
     account = session.get(UserBandAccount, user.id)
-    band = service.org.status()
+    band = {"configured": False, "online": False, "owner_name": None, "owner_handle": None, "error": None} if uses_workspace_band_key() else service.org.status()
     if account and account.secret_enc:
         cached = service._user_orgs.get(user.id)
         band = {"configured": bool(account.secret_enc), "online": bool(account.secret_enc),
@@ -497,7 +514,7 @@ async def list_channel_peers(channel_id: int, user: User = Depends(current_user)
     _channel_or_404(session, channel_id, user)
     _require_channel_owner(session, channel_id, user)
     _reject_dm(session, channel_id, "Direct messages are one person and one agent")
-    return await service.list_peers(channel_id)
+    return await service.list_peers(channel_id, user.id)
 
 
 class OutsideAgentBody(BaseModel):

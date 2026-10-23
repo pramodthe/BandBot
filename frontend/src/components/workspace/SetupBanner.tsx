@@ -30,11 +30,11 @@ export default function SetupBanner({ state, connected }: { state: State; connec
   if (!state.band.configured) {
     return (
       <Banner tone="warn">
-        Connect your Band organization: create a user API key (starts with <code>band_u_</code>) at{" "}
+        Add your own Band human API key (starts with <code>band_u_</code>) from{" "}
         <a className={link} href="https://app.band.ai/users/settings" target="_blank" rel="noreferrer">
-          app.band.ai/users/settings
+          Band settings
         </a>
-        , put it in <code>BAND_USER_API_KEY</code> in <code>.env</code> and restart the server.
+        . Open People and connect it. Agents you add use that account.
       </Banner>
     );
   }

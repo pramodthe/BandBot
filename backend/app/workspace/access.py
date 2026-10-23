@@ -2,29 +2,45 @@
 from sqlmodel import Session, select
 
 from app.persistence.models import (AgentProfile, BandAgentOwner, Channel, ChannelMember, DirectMessage,
-                                    PrivateConversation, db)
+                                    HumanDirectMessage, PrivateConversation, db)
+
+
+def _human_member(session: Session, channel_id: int, user_id: int) -> bool:
+    return session.get(ChannelMember, (channel_id, "human", user_id)) is not None
+
+
+def _members(session: Session, channel_id: int) -> set[int]:
+    return set(session.exec(select(ChannelMember.member_id).where(
+        ChannelMember.channel_id == channel_id, ChannelMember.member_type == "human")).all())
 
 
 def channel_visible(session: Session, channel_id: int, user_id: int) -> bool:
-    if not session.get(Channel, channel_id):
+    channel = session.get(Channel, channel_id)
+    if not channel:
         return False
     dm = session.get(DirectMessage, channel_id)
     if dm:
         return dm.user_id == user_id
-    if session.get(PrivateConversation, channel_id):
-        return session.get(ChannelMember, (channel_id, "human", user_id)) is not None
-    return True  # Existing shared-workspace channels retain their access model.
+    if session.get(PrivateConversation, channel_id) or session.get(HumanDirectMessage, channel_id):
+        return _human_member(session, channel_id, user_id)
+    # #general is the workspace Band room. Other logins do not inherit it.
+    if channel.name == "general":
+        return _human_member(session, channel_id, user_id)
+    return True
 
 
 def channel_audience(channel_id: int) -> set[int] | None:
     with db() as session:
+        channel = session.get(Channel, channel_id)
+        if not channel:
+            return set()
         dm = session.get(DirectMessage, channel_id)
         if dm:
             return {dm.user_id}
-        if session.get(PrivateConversation, channel_id):
-            return set(session.exec(select(ChannelMember.member_id).where(
-                ChannelMember.channel_id == channel_id, ChannelMember.member_type == "human")).all())
-        return None if session.get(Channel, channel_id) else set()
+        if (session.get(PrivateConversation, channel_id) or session.get(HumanDirectMessage, channel_id)
+                or channel.name == "general"):
+            return _members(session, channel_id)
+        return None
 
 
 def agent_owner(session: Session, profile: AgentProfile) -> int | None:

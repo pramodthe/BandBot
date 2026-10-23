@@ -74,6 +74,11 @@ class Settings:
 settings = Settings()
 
 
+def uses_workspace_band_key() -> bool:
+    """The server key runs the shared workspace agent. It is not a person's Band login."""
+    return bool(settings.band_user_api_key)
+
+
 def is_postgres(url: str) -> bool:
     return url.split(":", 1)[0] in {"postgres", "postgresql", "postgresql+psycopg"}
 

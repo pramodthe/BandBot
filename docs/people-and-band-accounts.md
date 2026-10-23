@@ -1,6 +1,6 @@
 # People, contacts, and shared channels
 
-People use ordinary app accounts. Creating an account requires that person's own Band human API key (`band_u_...`) from their Band settings. Agents and channels they create register on that Band account. The server `BAND_USER_API_KEY` stays with the shared workspace agent. The app does not import the operator's other Band agents. New accounts still join `#general`, where that shared workspace agent is available. Contacts, human chat, and channel invitations still stay in the app.
+People use ordinary app accounts. Creating an account requires that person's own Band human API key (`band_u_...`) from their Band settings. Agents and channels they create register on that Band account. The server `BAND_USER_API_KEY` stays with the shared workspace agent. A signed-in person uses only the key stored on their account. Signing in to an account that does not have one yet requires that person's key. The app does not import the operator's other Band agents. `#general` stays with the workspace owner. Contacts, human chat, and channel invitations still stay in the app.
 
 Open **People** using the person-plus navigation button or the user menu.
 

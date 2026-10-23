@@ -126,8 +126,8 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
         })}><UserPlusIcon />{sentIds.has(person.id) ? "Request sent" : receivedIds.has(person.id) ? "Request received" : `Add ${person.display_name}`}</Button>
       </div>)}</section> : null}
       <details className="space-y-3 rounded-xl border p-4">
-        <summary className="cursor-pointer text-sm font-semibold">Personal Band account (optional)</summary>
-        <p className="text-muted-foreground text-sm">{account?.connected ? `Connected as @${account.handle.replace(/^@/, "")}. New agents and channels use this account. Existing rooms and agents keep their original account.` : "Chat, contacts, and channel invitations work with your app account. Agents use the workspace Band connection by default. Connect a personal account to own new agents on your Band platform."}</p>
+        <summary className="cursor-pointer text-sm font-semibold">Your Band account</summary>
+        <p className="text-muted-foreground text-sm">{account?.connected ? `Connected as @${account.handle.replace(/^@/, "")}. New agents and channels use this account. Existing rooms and agents keep their original account.` : "Connect the human API key from your own Band account. This login does not use the server Band key, and it does not include that account's other agents."}</p>
         <form onSubmit={connect} className="space-y-2">
           <Label htmlFor="personal-band-key">{account?.connected ? "Update human API key" : "Band human API key"}</Label>
           <div className="flex flex-wrap gap-2">
