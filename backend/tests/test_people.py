@@ -393,3 +393,33 @@ def test_band_poll_waits_for_the_outbound_message_receipt(social, monkeypatch):
     with db() as session:
         messages = session.exec(select(Message).where(Message.channel_id == channel["id"])).all()
         assert len(messages) == 1 and messages[0].band_message_id == "outbound-receipt"
+
+
+def test_another_accounts_agent_is_added_by_the_room_owner(social, monkeypatch):
+    client, users, network, svc = social
+    (_, a), (bob, b), _ = users
+    friends(client, users)
+    bob_agent = client.post("/api/agents", json={"name": "Pixel", "role": "writer"}, headers=b)
+    assert bob_agent.status_code == 200, bob_agent.text
+    channel = client.post("/api/channels", json={"name": "lab"}, headers=a)
+    assert channel.status_code == 200, channel.text
+    invited = client.post(f"/api/channels/{channel.json()['id']}/invitations", json={"user_id": bob}, headers=a)
+    assert invited.status_code == 200, invited.text
+    invite = client.get("/api/people/invitations", headers=b).json()[0]
+    assert client.post(f"/api/people/invitations/{invite['id']}/decision", json={"accept": True}, headers=b).status_code == 200
+    callers = []
+
+    async def record(self, room, band_id):
+        callers.append(self.owner.id)
+        network["rooms"][room].add(band_id)
+
+    monkeypatch.setattr(type(svc.org), "add_participant", record)
+    added = client.post(
+        f"/api/channels/{channel.json()['id']}/agents",
+        json={"agent_id": bob_agent.json()["id"]},
+        headers=b,
+    )
+    assert added.status_code == 200, added.text
+    assert callers == ["alice"]
+    with db() as session:
+        assert session.get(ChannelMember, (channel.json()["id"], "agent", bob_agent.json()["id"])) is not None

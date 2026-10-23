@@ -687,13 +687,14 @@ class AppService:
             if not (os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key and not org.online):
                 room_id = await self._connect_channel_room(channel_id, org)
         if room_id and scope:
+            # The room lives on its owner's Band account. The other account cannot see that room,
+            # so the room owner adds the agent after Band's own contact rules allow it.
             try:
-                with db() as session:
-                    owned = session.get(BandAgentOwner, profile.id)
-                inviter = await self.agent_org(profile) if owned else org
-                await inviter.add_participant(room_id, profile.band_agent_id)
-            except Exception:
-                raise ServiceError("Band could not add this agent to the channel", 502) from None
+                await org.add_participant(room_id, profile.band_agent_id)
+            except Exception as exc:
+                raise ServiceError(
+                    f"Band could not add this agent to the channel: {describe_error(exc)}", 502
+                ) from exc
         with db() as session:
             if not session.get(ChannelMember, (channel_id, "agent", profile.id)):
                 session.add(ChannelMember(channel_id=channel_id, member_type="agent", member_id=profile.id))
