@@ -25,6 +25,14 @@ def serialize_task(task: AgentTask) -> dict:
             approval = session.exec(select(TaskApproval.id).where(TaskApproval.task_id == task.id,
                                                                   TaskApproval.status == "pending")).first()
         payload["waiting_for"] = "approval" if approval else "input"
+    from app.providers.models import ProviderBlock, ProviderOperation
+    with db() as session:
+        blocked = session.get(ProviderBlock, task.id)
+        restart = session.get(ProviderOperation, "restart:" + task.id)
+    if restart:
+        payload["restarted_from"] = restart.result.get("original_task_id")
+    if blocked:
+        payload["provider_block"] = {"service": blocked.service, "code": blocked.code, "detail": blocked.detail, "connection_id": blocked.connection_id}
     return payload
 
 
@@ -64,6 +72,8 @@ def update_task(task_id: str, **values) -> AgentTask:
 
 def recover_tasks() -> None:
     """Call only while holding the exclusive worker lock."""
+    from app.providers.verification import recover
+    recover()
     with db() as session:
         for task in session.exec(select(AgentTask).where(AgentTask.status == "running")).all():
             task.status = "cancelled" if task.cancel_requested else "queued"

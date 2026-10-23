@@ -27,11 +27,12 @@ class DesktopOptions:
 
 
 class E2BDesktopClient:
-    def __init__(self):
+    def __init__(self, *, config=None):
+        self.config = config or settings
         self.sessions: list[DesktopSession] = []
 
     def options(self, request_timeout: int = 30) -> dict:
-        return {"api_key": settings.e2b_api_key, "request_timeout": request_timeout}
+        return {"api_key": self.config.e2b_api_key, "request_timeout": request_timeout}
 
     async def get(self, reference: str, *, request_timeout: int = 30):
         if reference.startswith("band-e2b-"):
@@ -73,6 +74,7 @@ class E2BDesktopClient:
 class DesktopSession:
     def __init__(self, client, sandbox_id: str, labels: dict, state: str, sdk=None):
         self.client, self.id, self.labels, self.sdk = client, sandbox_id, labels, sdk
+        self.config = getattr(client, "config", settings)
         self.state = "started" if state == "running" else "stopped"
         self.process = SimpleNamespace(exec=self.exec)
         self.fs = SimpleNamespace(upload_file=self.write_file, list_files=self.list_files,
@@ -85,7 +87,7 @@ class DesktopSession:
 
     async def connection(self):
         if self.sdk is None:
-            self.sdk = await AsyncSandbox.connect(self.id, timeout=settings.e2b_timeout, **self.client.options())
+            self.sdk = await AsyncSandbox.connect(self.id, timeout=self.config.e2b_timeout, **self.client.options())
         return self.sdk
 
     async def start(self, *, timeout=60):
@@ -242,7 +244,7 @@ class DesktopSession:
             await asyncio.sleep(0.25)
         else:
             raise RuntimeError("Desktop viewer did not start")
-        await sdk.set_timeout(max(settings.e2b_timeout, expires_in_seconds), request_timeout=20)
+        await sdk.set_timeout(max(self.config.e2b_timeout, expires_in_seconds), request_timeout=20)
         with db() as session:
             session.merge(ComputerConnection(sandbox_id=self.id, host=sdk.get_host(port),
                                              access_token_enc=encrypt_secret(sdk.traffic_access_token)))
@@ -254,7 +256,7 @@ class DesktopSession:
         sdk = await self.connection()
         if not sdk.traffic_access_token:
             raise RuntimeError("App traffic authentication is unavailable")
-        await sdk.set_timeout(max(settings.e2b_timeout, seconds), request_timeout=20)
+        await sdk.set_timeout(max(self.config.e2b_timeout, seconds), request_timeout=20)
         with db() as session:
             session.merge(ComputerConnection(sandbox_id=self.id, host=sdk.get_host(6080),
                                              access_token_enc=encrypt_secret(sdk.traffic_access_token)))

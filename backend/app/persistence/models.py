@@ -707,6 +707,10 @@ class ConnectionHealth(SQLModel, table=True):
     detail: str = ""
 
 
+from app.providers.models import (ProviderConnection, ProviderRevision, ServiceSelection, TaskServiceBinding,
+                                  DocumentServiceBinding, ProviderBlock, ProviderOperation, DocumentProviderIndex, ServiceChange, ProviderUsage, ServiceSelectionHistory)
+
+
 _sqlite = settings.database_url.startswith("sqlite")
 connect_args = {"check_same_thread": False, "timeout": 30} if _sqlite else {}
 engine_kwargs: dict[str, Any] = {"connect_args": connect_args}
@@ -749,8 +753,13 @@ def bind_computer(session, task: AgentTask, *, legacy: bool = False) -> None:
             scope = ComputerScope(key=key, provider=provider)
             session.add(scope)
     provider = "e2b" if legacy else scope.provider
+    from app.providers.computers import identity_config
+    managed = identity_config(session, task, settings) if not legacy else None
+    computer_config = settings
+    if managed:
+        provider, computer_config = managed
     from app.computer.identity import selected_key
-    computer_key = f"{provider}-{key}" if legacy else selected_key(session, owner, task.channel_id, provider, settings)
+    computer_key = f"{provider}-{key}" if legacy else selected_key(session, owner, task.channel_id, provider, computer_config)
     values = {"task_id": task.id, "provider": provider, "computer_key": computer_key}
     dialect = session.get_bind().dialect.name
     if legacy and dialect in {"sqlite", "postgresql"}:
@@ -789,8 +798,12 @@ def _snapshot_task_model(session, _context, _instances):
             continue
         profile = session.get(AgentProfile, task.agent_id)
         runtime = session.get(AgentRuntime, task.agent_id)
+        from app.providers.bindings import snapshot_task
+        services = snapshot_task(session, task).bindings
+        selection = services.get("llm", {})
         model = profile.model if profile and (runtime or profile.model in models) else default
-        session.add(TaskModel(task_id=task.id, model=model, provider=runtime.provider if runtime else "openai"))
+        session.add(TaskModel(task_id=task.id, model=selection.get("model") or model,
+                              provider=selection.get("provider") or (runtime.provider if runtime else "openai")))
 
 
 def init_db() -> None:
@@ -801,6 +814,8 @@ def init_db() -> None:
                 AgentTask.id == TaskComputerBinding.task_id).where(TaskComputerBinding.task_id == None)).all():
             bind_computer(session, task, legacy=True)
         session.commit()
+    from app.providers.bootstrap import bootstrap
+    bootstrap()
 
 
 def db() -> Session:
@@ -812,6 +827,9 @@ def dm_owner(channel_id: int) -> int | None:
     with db() as session:
         dm = session.get(DirectMessage, channel_id)
         return dm.user_id if dm else None
+
+
+import app.providers.document_hooks  # register atomic document bindings
 
 
 def get_session():

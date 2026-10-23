@@ -85,7 +85,7 @@ export default function WorkspaceNavigation({ state, view, onView, onSearch, ope
         <RailButton label={pendingPeople ? `People, ${pendingPeople} pending` : "People"} icon={UserPlusIcon} badge={pendingPeople} onClick={() => openModal({ kind: "people" })} />
         <Separator className="mx-auto my-1 w-6" />
         <RailButton label="Connected apps" icon={BlocksIcon} onClick={() => openModal({ kind: "plugins" })} />
-        {isAdmin(state) && <RailButton label="OpenAI settings" icon={SettingsIcon} onClick={() => openModal({ kind: "openai" })} />}
+        {isAdmin(state) && <RailButton label="Providers & APIs" icon={SettingsIcon} onClick={() => openModal({ kind: "openai" })} />}
       </div>
       <div className="mt-auto flex flex-col items-center gap-2 pt-4">
         <ThemeToggle />

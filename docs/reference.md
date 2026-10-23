@@ -39,7 +39,7 @@ Copy `.env.example` to `.env` in the repository root and configure:
 | `E2B_API_KEY` | Enables isolated cloud desktops, browser/GUI operations, and Python/shell execution. |
 | `E2B_DESKTOP_TEMPLATE` | Official `desktop` template by default; custom templates must provide the same XFCE, Xvfb, Chromium, xdotool, scrot, x11vnc, and `/opt/noVNC` stack. |
 | `E2B_TIMEOUT_SECONDS` | Runtime fallback auto-pauses the computer; default 1200, range 60–3600. Keep above `AGENT_TASK_TIMEOUT`. Paused computers persist until explicitly deleted. |
-| `AGENT_CHECKPOINT_PATH` | Checkpoint store; defaults to the SQLite file `backend/agent_checkpoints.db`. May also be a PostgreSQL URL for diskless hosts. |
+| `AGENT_CHECKPOINT_PATH` | Checkpoint SQLite file; defaults to `backend/agent_checkpoints.db`. |
 | `AGENT_TASK_TIMEOUT` | Execution time limit per attempt in seconds; default 900. |
 | `AGENT_RECURSION_LIMIT` | Graph step limit per invocation; default 100. |
 | `WORKER_CONCURRENCY` | Tasks the worker runs at once; default 4. Each agent still runs one task at a time per channel. |
@@ -61,7 +61,7 @@ The worker extracts source locations, transcribes scanned pages/images with Open
 
 Questions about uploaded or saved conversation files go directly to the built-in document tools, including follow-ups without new attachments. Connected-app discovery is for external sources such as Google Drive or Gmail. Missing or processing conversation files do not automatically trigger a search of external accounts.
 
-Originals and metadata must be backed up together. `DOCUMENTS_PATH` defaults to `backend/documents`; keep it on the shared persistent filesystem used by API and worker, or set it to `database` so originals live in the application database. Abandoned staged uploads expire after a day. Removal hides documents immediately and schedules provider cleanup; stale retrieval results are filtered against local access and deletion state. Uploaders and admins can remove files. Ingestion jobs recover after worker restarts, and processing tokens count against channel budgets. Token cost estimates exclude OpenAI storage and hosted tool charges.
+Originals and metadata must be backed up together. `DOCUMENTS_PATH` defaults to `backend/documents`; keep it on the shared persistent filesystem used by API and worker. Abandoned staged uploads expire after a day. Removal hides documents immediately and schedules provider cleanup; stale retrieval results are filtered against local access and deletion state. Uploaders and admins can remove files. Ingestion jobs recover after worker restarts, and processing tokens count against channel budgets. Token cost estimates exclude OpenAI storage and hosted tool charges.
 
 Before the first OpenAI deployment, let running Claude tasks finish and back up both databases. Agent identities, conversations, memories and computers remain. Old paused/failed Claude checkpoints are retained for inspection; cancel a waiting task and choose Retry/Resume to explicitly start a new OpenAI task. They are never automatically replayed through the new provider. New OpenAI tasks retain normal checkpoint resume behavior.
 
@@ -265,7 +265,7 @@ See [the architecture guide](architecture.md) for the source map and runtime bou
 
 The product is now called **BAND_BOTS**. Existing database filenames, browser storage keys, session signatures, and cloud-computer ownership labels retain their earlier identifiers so upgrades keep accounts, preferences, and saved computers connected. Renaming the display brand does not require a data migration.
 
-`DATABASE_URL` can name SQLite or PostgreSQL. `AGENT_CHECKPOINT_PATH` may be a SQLite file or a PostgreSQL URL. Changing the application database does not enable a second API or a second worker. See [Operations](operations.md) for the migration, backup, and rollback steps.
+`DATABASE_URL` can name SQLite or PostgreSQL. Checkpoints remain the SQLite file at `AGENT_CHECKPOINT_PATH` in this phase. Changing the application database does not enable a second API or a second worker. See [Operations](operations.md) for the migration, backup, and rollback steps.
 
 This version supports **one API process and one worker on a shared local filesystem**. The worker runs up to `WORKER_CONCURRENCY` tasks at once, at most one per agent per channel, so messages to the same agent in a channel are answered in order. Parallel tasks multiply concurrent OpenAI requests and can start several E2B computers at once; lower the setting if you hit rate limits or cost limits. An exclusive lock prevents a second worker using the same checkpoint file. Run the worker under a process supervisor for automatic restart. Do not run independent worker replicas or different checkpoint paths against the same queue. Multi-host workers need a transactional leased queue and a shared checkpoint backend before deployment.
 

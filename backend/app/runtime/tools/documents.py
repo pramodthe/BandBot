@@ -148,12 +148,20 @@ def document_tools(task):
 
     @tool
     async def search_documents(query: str) -> dict:
-        """Search files uploaded or saved in this conversation's Documents library using OpenAI retrieval.
+        """Search files uploaded or saved in this conversation's Documents library using the selected retrieval service.
 
         Call directly for targeted questions, including follow-ups without new attachments. No connected-app
         discovery or schema lookup is needed. An empty result does not authorize searching external accounts.
         Results alone do not cover an entire document. Cite returned source links.
         """
+        from app.providers.context import selection
+        binding = selection("retrieval", task)
+        if binding and not binding.get("legacy"):
+            from app.providers.retrieval import search
+            result = await search(task, binding, query)
+            for match in result["results"]:
+                source_used(match["document_id"])
+            return result
         with db() as session:
             documents.agent_authorize(session, task)
             collection = session.get(DocumentCollection, task.channel_id)
@@ -190,6 +198,17 @@ def document_tools(task):
             docs = [accessible(i) for i in document_ids]
         except ValueError as exc:
             return {"error": str(exc)}
+        from app.providers.context import selection
+        binding = selection("document_analysis", task)
+        if binding and not binding.get("legacy"):
+            if sum(d.size for d in docs) >= 50 * 1024 * 1024:
+                return {"error": "Analyze these files in separate batches under 50 MiB"}
+            if any(d.status != "ready" for d in docs):
+                return {"error": "Some documents are still processing"}
+            from app.providers.document_analysis import analyze
+            result = await analyze(task, docs, binding, question, calculate)
+            for doc in docs: source_used(doc.id)
+            return result
         if any(not d.file_id for d in docs):
             return {"error": "Some documents are still processing or failed. Check their status first."}
         if sum(d.size for d in docs) >= 50 * 1024 * 1024:

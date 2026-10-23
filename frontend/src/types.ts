@@ -103,6 +103,7 @@ export interface AgentConnectionsResponse {
 }
 
 export interface Agent {
+  model_ref?: { connection_id: string; revision: number; provider: string; model: string } | null;
   id: number;
   owner_id?: number | null;
   name: string;
@@ -338,6 +339,8 @@ export interface TaskActivity {
 }
 
 export interface Task {
+  restarted_from?: string;
+  provider_block?: { service: string; code: string; connection_id: string; detail: string };
   waiting_for?: "input" | "approval";
   id: string;
   agent_id: number;
@@ -518,6 +521,7 @@ export interface Bootstrap {
   models: Model[];
   band: BandStatus;
   openai_configured: boolean;
+  llm_configured?: boolean;
   /** Monotonic snapshot cursor. Events with an equal or lower cursor are already included. */
   cursor?: number;
   invitations?: ChannelInvitation[];
@@ -534,6 +538,7 @@ export interface Draft {
 
 export type ServerEvent = (
   | { type: "document_removed"; channel_id: number; document_id: string }
+  | { type: "provider_settings_changed" }
   | { type: "openai_settings"; models: Model[]; configured: boolean }
   | { type: "skills_changed" }
   | { type: "message"; message: Message }

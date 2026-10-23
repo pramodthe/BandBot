@@ -41,10 +41,10 @@ export default function SetupBanner({ state, connected }: { state: State; connec
   if (!state.band.online) {
     return <Banner tone="error">Band rejected the organization key{state.band.error ? `: ${state.band.error}` : "."}</Banner>;
   }
-  if (!state.openaiConfigured) {
+  if (!state.llmConfigured) {
     return (
       <Banner tone="warn">
-        Ask a workspace admin to connect OpenAI for custom agents and document analysis. Codex and Claude teammates use their own account connections.
+        Human chat is ready. Ask a workspace admin to set up Providers & APIs for AI services. Connected teammates retain their own account connections.
       </Banner>
     );
   }

@@ -32,6 +32,12 @@ from test_tasks import ScriptedModel
 @pytest.fixture
 def desktop_job(monkeypatch):
     init_db()
+    from app.providers.models import ServiceSelection
+    with db() as session:
+        selection = session.get(ServiceSelection, "workspace")
+        previous_computer = selection.bindings.get("computer", {"disabled": True})
+        selection.bindings = {**selection.bindings, "computer": {"legacy": True}}
+        session.add(selection); session.commit()
     def forbid_live_e2b(*args, **kwargs):
         raise AssertionError("Offline tests must not initialize a live E2B client")
     monkeypatch.setattr(computer_module.E2BDesktopClient, "__init__", forbid_live_e2b)
@@ -90,7 +96,11 @@ def desktop_job(monkeypatch):
     client.create = AsyncMock(side_effect=create)
     client.close = AsyncMock()
     controller = TaskComputer(task, client_factory=lambda: client)
-    return task, agent, user, controller, client, sandbox
+    yield task, agent, user, controller, client, sandbox
+    with db() as session:
+        selection = session.get(ServiceSelection, "workspace")
+        selection.bindings = {**selection.bindings, "computer": previous_computer}
+        session.add(selection); session.commit()
 
 
 def frame_id(blocks):

@@ -18,8 +18,8 @@ def test_fresh_database_reaches_head(tmp_path: Path):
     with engine.connect() as connection:
         tables = set(inspect(connection).get_table_names())
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert version == "0004_document_blobs"
-    assert {"user", "auth_session", "contact_block", "worker_heartbeat", "client_message", "documentblob"} <= tables
+    assert version == "0005_provider_services"
+    assert {"user", "auth_session", "contact_block", "worker_heartbeat", "client_message"} <= tables
 
 
 def test_existing_create_all_database_keeps_its_rows(tmp_path: Path):
@@ -47,8 +47,8 @@ def test_existing_create_all_database_keeps_its_rows(tmp_path: Path):
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
         tables = set(inspect(connection).get_table_names())
     assert row[0] == "kept-hash"
-    assert version == "0004_document_blobs"
-    assert "auth_session" in tables and "contact_block" in tables and "documentblob" in tables
+    assert version == "0005_provider_services"
+    assert "auth_session" in tables and "contact_block" in tables
 
 
 def test_backup_restores_messages_membership_tasks_checkpoints_and_documents(tmp_path: Path):
@@ -120,8 +120,7 @@ def test_database_at_previous_head_gains_provider_tables_without_losing_vm(tmp_p
     with engine.connect() as connection:
         assert set(provider_tables) <= set(inspect(connection).get_table_names())
         assert connection.execute(text("SELECT sandbox_id FROM tasksandbox WHERE task_id = 'kept'")).scalar() == "same-vm"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004_document_blobs"
-        assert "documentblob" in set(inspect(connection).get_table_names())
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005_provider_services"
 
 
 def test_alembic_url_preserves_percent_encoded_credentials(monkeypatch):

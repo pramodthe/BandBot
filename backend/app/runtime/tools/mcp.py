@@ -78,16 +78,42 @@ def needs_approval(tool: BaseTool, mode: str) -> bool:
     return not (tool.metadata or {}).get("readOnlyHint", False)
 
 
+def agent_name_for(task_id):
+    from app.persistence.models import db, AgentTask, AgentProfile
+    with db() as session:
+        task = session.get(AgentTask, task_id)
+        profile = session.get(AgentProfile, task.agent_id) if task else None
+        return profile.name if profile else ""
+
 def _wrap(server: str, tool: BaseTool, approval: bool, agent_id: int | None = None) -> BaseTool:
     name = re.sub(r"[^A-Za-z0-9_-]", "_", f"{server}__{tool.name}")[:64]
     upstream = tool.name
 
     async def call(**arguments):
+        from app.providers.context import selection, current_task_id
+        from app.providers.connections import resolve
+        from app.providers.contracts import ProviderError
+        from app.persistence.models import db, AgentTask
+        from app.documents import agent_authorize
+        binding = selection("integrations")
+        if binding and not binding.get("legacy") and (server == "composio" or binding.get("provider") == "mcp" or binding.get("disabled")):
+            resolve(binding, "integrations")
+        task_id = current_task_id()
+        if task_id:
+            with db() as session:
+                task = session.get(AgentTask, task_id)
+                if not task: raise ValueError("Task is no longer available")
+                agent_authorize(session, task)
+        if server != "composio":
+            current = load_servers().get(server)
+            if task_id and (not current or current["agents"] is not None and agent_name_for(task_id) not in current["agents"]):
+                raise ProviderError("integrations", "access_revoked")
         if server == "composio" and agent_id is not None:
             refusal = call_refusal(agent_id, upstream, arguments)
             if refusal:
                 return (refusal, None)
-        if approval:
+        effective_approval = approval if server == "composio" or not task_id else needs_approval(tool, current["approval"])
+        if effective_approval:
             decision = interrupt({"action": f"Use the {server} integration: {tool.name}",
                                   "details": json.dumps(arguments, default=str)[:4000]})
             if not decision.get("approved"):
@@ -109,7 +135,18 @@ async def integration_tools(agent_name: str, servers: dict[str, dict] | None = N
     """Tools for this agent from every reachable server. Unreachable servers are skipped and logged."""
     own = servers is None
     servers = load_servers() if own else dict(servers)
-    if own and settings.composio_api_key:
+    from app.runtime.tools.composio import configured as composio_configured
+    from app.providers.context import selection
+    integration_binding = selection("integrations")
+    if own and integration_binding.get("disabled"):
+        return []
+    try:
+        use_composio = own and composio_configured()
+    except Exception:
+        use_composio = False
+        # Discovery failure must not block reasoning or unrelated services.
+        servers = {name: value for name, value in servers.items() if name != "composio"}
+    if use_composio:
         # The workspace session replaces a hand-written composio server, so the key is not mounted twice.
         servers = {name: server for name, server in servers.items() if name != "composio"}
         try:

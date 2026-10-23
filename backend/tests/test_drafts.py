@@ -277,6 +277,11 @@ def test_openai_code_interpreter_is_bound_when_enabled(tmp_path, monkeypatch, jo
                 await saver.setup()
                 attempt = enqueue(agent_id=task.agent_id, channel_id=task.channel_id, room_id=task.room_id,
                                   source_id=f"hosted-{name}", prompt="What is 17% of 2,340?")
+                from app.providers.models import TaskServiceBinding
+                with db() as session:
+                    binding = session.get(TaskServiceBinding, attempt.id)
+                    binding.bindings = {**binding.bindings, "llm": {"legacy": True, "provider": "openai"}}
+                    session.add(binding); session.commit()
                 return await run(attempt, saver, model)
         assert asyncio.run(scenario()) == "397.8"
         return model.bound

@@ -68,7 +68,9 @@ def record_usage(task: AgentTask, message, default_model: str, *, fallback_id: s
         return
     details = usage.get("input_token_details") or {}
     cache_read, cache_write = int(details.get("cache_read") or 0), int(details.get("cache_creation") or 0)
-    model = (getattr(message, "response_metadata", None) or {}).get("model_name") or default_model
+    from app.providers.context import usage_selection
+    explicit = usage_selection()
+    model = (getattr(message, "response_metadata", None) or {}).get("model_name") or (explicit[0].get("model") if explicit else None) or default_model
     with db() as session:
         row = TaskUsage(task_id=task.id, channel_id=task.channel_id, agent_id=task.agent_id,
                         message_id=getattr(message, "id", None) or fallback_id or f"anonymous-{uuid4().hex}",
@@ -77,6 +79,14 @@ def record_usage(task: AgentTask, message, default_model: str, *, fallback_id: s
         session.add(row)
         try:
             session.flush()
+            from app.providers.bindings import bindings_for
+            from app.providers.models import ProviderUsage
+            binding = explicit[0] if explicit else bindings_for(task).get("llm", {})
+            if binding.get("revision") and binding.get("provider") != "openai":
+                row.model = binding["provider"] + ":" + model
+                session.add(row)
+            session.merge(ProviderUsage(usage_id=row.id, provider=binding.get("provider", "openai"),
+                                     connection_id=binding.get("connection_id", ""), revision=binding.get("revision", 0), service=explicit[1] if explicit else "llm"))
             if cache_read or cache_write:
                 session.add(TaskCacheUsage(usage_id=row.id, cache_read_tokens=cache_read,
                                            cache_write_tokens=cache_write))

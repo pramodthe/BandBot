@@ -226,9 +226,6 @@ class AppService:
         await org.connect()
         if not org.online or not org.owner or org.owner.id != account.band_user_id:
             await org.close()
-            # Browser tests have no live Band account. Human chat and the local fake agent still run.
-            if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
-                return self.org
             raise ServiceError("Your Band connection needs to be reconnected", 409)
         self._user_orgs[user_id] = (account.secret_enc, org)
         return org
@@ -491,11 +488,13 @@ class AppService:
     # --- serialization ---
 
     def serialize_agent(self, profile: AgentProfile) -> dict[str, Any]:
+        from app.providers.display import model_reference
         status = self.agents.status.get(profile.id or 0, {"state": "stopped", "error": None})
         with db() as session:
             persona = session.get(AgentPersona, profile.id) if profile.id else None
             runtime = session.get(AgentRuntime, profile.id) if profile.id else None
             owner_id = agent_owner(session, profile)
+        reference = model_reference(profile.id) if not runtime else None
         return {
             "id": profile.id,
             "name": profile.name,
@@ -507,9 +506,10 @@ class AppService:
             "specialty": persona.specialty if persona else "",
             "avatar": persona.avatar if persona else None,
             "instructions": profile.instructions,
-            "model": profile.model,
+            "model": reference.get("model", profile.model) if reference else profile.model,
             "runtime": runtime.provider if runtime else "deepagents",
             "connection_id": runtime.connection_id if runtime else None,
+            "model_ref": reference,
             "band_agent_id": profile.band_agent_id,
             "is_master": profile.is_master,
             "status": status,
@@ -733,7 +733,7 @@ class AppService:
                 logger.exception("Couldn't remove %s from room %s", profile.name, room_id)
 
     async def list_peers(self, channel_id: int, user_id: int | None = None) -> list[dict[str, Any]]:
-        """Band agents the caller can invite. The server key's other agents stay with admins."""
+        """Band agents outside this app that could be invited to the channel."""
         org = await self.room_org(channel_id)
         from app.config import uses_workspace_band_key
         if user_id is not None and org is self.org and uses_workspace_band_key():
@@ -770,7 +770,7 @@ class AppService:
                 return
             if session.exec(select(AgentProfile.id).where(AgentProfile.band_agent_id == band_id)).first():
                 raise ServiceError("That agent belongs to this workspace; add it as a teammate instead", 409)
-        peers = await self.list_peers(channel_id, user.id)
+        peers = await self.list_peers(channel_id)
         peer = next((p for p in peers if p["band_id"] == band_id), None)
         if peer is None:
             raise ServiceError("That Band agent isn't available to invite", 404)
@@ -818,9 +818,10 @@ class AppService:
 
     async def start_agent(self, profile: AgentProfile) -> None:
         assert profile.id is not None
-        if not runtime_for(profile.id) and not configuration()[0]:
-            self.agents.status[profile.id] = {"state": "error", "error": "Configure OpenAI in workspace settings"}
-            await self.agent_status(profile.id, "error", "Configure OpenAI in workspace settings")
+        from app.providers.connections import has_llm
+        if not runtime_for(profile.id) and not has_llm(profile.id) and not configuration()[0]:
+            self.agents.status[profile.id] = {"state": "error", "error": "Configure an agent model in Providers & APIs"}
+            await self.agent_status(profile.id, "error", "Configure an agent model in Providers & APIs")
             return
         org = await self.agent_org(profile)
         if not org.online:
@@ -1069,6 +1070,8 @@ class AppService:
             for dm in session.exec(select(DirectMessage).where(DirectMessage.agent_id == profile.id)).all():
                 dm.agent_id = None
                 session.add(dm)
+            from app.providers.management import clear_agent_overrides
+            clear_agent_overrides(session, profile)
             session.delete(session.get(AgentProfile, profile.id))
             session.commit()
             rooms = [c.band_room_id for c in session.exec(select(Channel)).all() if c.band_room_id]

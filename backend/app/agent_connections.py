@@ -83,6 +83,19 @@ def save_connection(provider: str, label: str, secret: dict, user_id: int, metho
 
 
 async def credential(connection_id: str) -> tuple[AgentConnection, str]:
+    if connection_id.startswith("task:"):
+        from app.providers.models import TaskServiceBinding
+        from app.providers.contracts import ProviderError
+        with db() as session:
+            binding = session.get(TaskServiceBinding, connection_id[5:])
+            selection = binding.bindings.get("llm", {}) if binding else {}
+            row = session.get(AgentConnection, selection.get("connection_id")) if selection else None
+        if row is None or row.provider != selection.get("provider"):
+            raise ProviderError("llm", "missing", connection_id=selection.get("connection_id", ""))
+        if row.auth_method in {"api_key", "gateway_token"}:
+            secret = json.loads(decrypt_secret(binding.connected_secret_enc))
+            return row.model_copy(update={"secret_enc": binding.connected_secret_enc}), secret["api_key"]
+        return await credential(row.id)  # OAuth token refresh stays serialized on its original connection.
     # A single worker owns model execution. Serialize refreshes so rotating refresh tokens aren't reused.
     async with _refresh_lock:
         with db() as session:

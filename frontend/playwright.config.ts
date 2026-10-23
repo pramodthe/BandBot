@@ -9,7 +9,7 @@ export default defineConfig({
   timeout: 180_000,
   expect: { timeout: 20_000 },
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:18173",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -18,8 +18,8 @@ export default defineConfig({
     { name: "compact", use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } } },
   ],
   webServer: {
-    command: "bash scripts/e2e-serve.sh",
-    url: "http://127.0.0.1:5173",
+    command: "node scripts/e2e-serve.mjs",
+    url: "http://127.0.0.1:18173",
     reuseExistingServer: false,
     timeout: 120_000,
   },

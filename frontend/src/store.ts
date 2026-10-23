@@ -43,6 +43,7 @@ export interface State {
   models: Model[];
   band: BandStatus;
   openaiConfigured: boolean;
+  llmConfigured: boolean;
   activeChannelId: number | null;
 }
 
@@ -107,6 +108,7 @@ export function initialState(boot: Bootstrap): State {
     models: boot.models,
     band: boot.band,
     openaiConfigured: boot.openai_configured,
+    llmConfigured: boot.llm_configured ?? boot.openai_configured,
     activeChannelId: general?.id ?? null,
   };
 }
@@ -191,6 +193,8 @@ function applyEventBody(state: State, event: ServerEvent): State {
         ...message, attachments: message.attachments?.filter((doc) => doc.id !== event.document_id),
       })) } } : state;
     }
+    case "provider_settings_changed":
+      return state;
     case "openai_settings":
       return { ...state, models: event.models, openaiConfigured: event.configured };
     case "skills_changed":
@@ -346,6 +350,7 @@ function applySnapshot(state: State, boot: Bootstrap): State {
     models: boot.models,
     band: boot.band,
     openaiConfigured: boot.openai_configured,
+    llmConfigured: boot.llm_configured ?? boot.openai_configured,
     activeChannelId,
     cursor: boot.cursor ?? kept.cursor,
     invitations: boot.invitations ?? kept.invitations,

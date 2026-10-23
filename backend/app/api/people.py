@@ -1,7 +1,6 @@
-"""App contacts and private conversations. A personal Band key is optional."""
+"""App contacts and private conversations, with an optional personal Band connection."""
 from __future__ import annotations
 
-import os
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,8 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.auth import current_user, encrypt_secret
-from app.band.org import BandOrg, Owner
-from app.config import settings
+from app.band.org import BandOrg
 from app.persistence.models import (Channel, ChannelInvitation, ChannelMember, ContactBlock, HumanDirectMessage,
                                     AppContact, AppContactRequest, PrivateConversation, User, UserBandAccount,
                                     db, get_session, utcnow)
@@ -30,50 +28,6 @@ class BandAccountBody(BaseModel):
     api_key: SecretStr = Field(min_length=10, max_length=2000)
 
 
-HUMAN_KEY_HINT = "Use a Band human API key (band_u_...) from your Band settings."
-BAND_AUTH_FAILED = "Band authentication failed. Use your human API key from Band settings and check Human API access."
-
-
-def _e2e_without_provider_keys() -> bool:
-    return os.getenv("E2E_FAKE_AGENT") == "1" and not settings.band_user_api_key and not settings.openai_api_key
-
-
-async def authenticate_human_key(api_key: str) -> Owner:
-    """Confirm this is the caller's own Band human key. The key is not logged or returned."""
-    key = api_key.strip()
-    if _e2e_without_provider_keys():
-        if not key.startswith("band_u_"):
-            raise HTTPException(422, HUMAN_KEY_HINT)
-        identity = key.removeprefix("band_u_")
-        return Owner(id=identity, name=identity, handle=identity)
-    org = BandOrg(key)
-    try:
-        await org.connect()
-        if not org.online or not org.owner:
-            detail = org.error or BAND_AUTH_FAILED
-            if key and key in detail:
-                detail = BAND_AUTH_FAILED
-            raise HTTPException(422, detail)
-        return org.owner
-    finally:
-        await org.close()
-
-
-def save_band_account(session: Session, user_id: int, api_key: str, owner: Owner) -> UserBandAccount:
-    """Bind one app user to one Band identity. Raises HTTPException on a conflict."""
-    row = session.get(UserBandAccount, user_id) or UserBandAccount(user_id=user_id)
-    if row.band_user_id and row.band_user_id != owner.id:
-        raise HTTPException(409, "This account is linked to another Band identity. Reconnect the same Band account.")
-    duplicate = session.exec(select(UserBandAccount).where(UserBandAccount.band_user_id == owner.id,
-                                                          UserBandAccount.user_id != user_id)).first()
-    if duplicate:
-        raise HTTPException(409, "This Band account is already connected to another app user")
-    row.band_user_id, row.handle, row.name = owner.id, owner.handle, owner.name
-    row.secret_enc = encrypt_secret(api_key.strip())
-    session.add(row)
-    return row
-
-
 @router.get("/api/band/account")
 def band_account(user: User = Depends(current_user), session: Session = Depends(get_session)):
     return account_status(session.get(UserBandAccount, user.id))
@@ -81,22 +35,33 @@ def band_account(user: User = Depends(current_user), session: Session = Depends(
 
 @router.put("/api/band/account")
 async def connect_account(body: BandAccountBody, user: User = Depends(current_user)):
-    key = body.api_key.get_secret_value().strip()
-    owner = await authenticate_human_key(key)
-    # Rooms and agents must stay bound to the Band identity that created them.
-    with db() as session:
-        row = save_band_account(session, user.id, key, owner)
-        try:
-            session.commit()
-        except IntegrityError:
-            session.rollback()
-            raise HTTPException(409, "This Band account is already connected to another app user") from None
-        session.refresh(row)
-        result = account_status(row)
-    await bus.publish({"type": "band_status", "band": {
-        "configured": True, "online": True, "owner_name": owner.name, "owner_handle": owner.handle, "error": None,
-    }}, users={user.id})
-    return result
+    org = BandOrg(body.api_key.get_secret_value().strip())
+    await org.connect()
+    try:
+        if not org.online or not org.owner:
+            raise HTTPException(422, "Band authentication failed. Use your human API key from Band settings and check Human API access.")
+        # Rooms and agents must stay bound to the Band identity that created them.
+        with db() as session:
+            row = session.get(UserBandAccount, user.id) or UserBandAccount(user_id=user.id)
+            if row.band_user_id and row.band_user_id != org.owner.id:
+                raise HTTPException(409, "This account is linked to another Band identity. Reconnect the same Band account.")
+            duplicate = session.exec(select(UserBandAccount).where(UserBandAccount.band_user_id == org.owner.id,
+                                                                  UserBandAccount.user_id != user.id)).first()
+            if duplicate:
+                raise HTTPException(409, "This Band account is already connected to another app user")
+            row.band_user_id, row.handle, row.name = org.owner.id, org.owner.handle, org.owner.name
+            row.secret_enc = encrypt_secret(body.api_key.get_secret_value().strip())
+            session.add(row)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                raise HTTPException(409, "This Band account is already connected to another app user") from None
+            result = account_status(row)
+        await bus.publish({"type": "band_status", "band": org.status()}, users={user.id})
+        return result
+    finally:
+        await org.close()
 
 
 class ContactBody(BaseModel):

@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/api";
-import { policyBlock, type State, type Action } from "@/store";
+import { isAdmin, policyBlock, type State, type Action } from "@/store";
 import type { Memory, Message, Schedule, Task, TaskDetail } from "@/types";
 import type { OpenComputer } from "@/components/workspace/types";
 import RichText from "@/components/shared/RichText";
@@ -67,6 +67,7 @@ function usageFor(task: Task) {
 
 function verbFor(task: Task) {
   if (task.status === "running" && task.cancel_requested) return "Cancelling…";
+  if (task.provider_block) return "Needs connection";
   if (task.status === "failed") return "Failed";
   if (task.status === "cancelled") return "Cancelled";
   return clip(task.progress);
@@ -194,6 +195,23 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
     finally { setBusy(null); }
   };
 
+  const restartWithProviders = async (id: string) => {
+    setBusy(id);
+    try {
+      const replacement = await api<Task>("POST", `/api/tasks/${id}/restart-with-providers`);
+      setTasks((rows) => rows.some((t) => t.id === replacement.id) ? rows.map((t) => t.id === replacement.id ? replacement : t) : [...rows, replacement]); setError("");
+    } catch (err) { setError((err as Error).message); }
+    finally { setBusy(null); }
+  };
+
+  const openOriginal = async (id: string) => {
+    try {
+      const original = await api<TaskDetail>("GET", `/api/tasks/${id}`);
+      setTasks((rows) => rows.some((t) => t.id === id) ? rows : [...rows, original]);
+      setResults((rows) => ({ ...rows, [id]: original })); setDetailId(id);
+    } catch (err) { setError((err as Error).message); }
+  };
+
   const cancelSchedule = async (schedule: Schedule) => {
     try {
       await api("DELETE", `/api/channels/${channelId}/schedules/${schedule.id}`);
@@ -256,7 +274,10 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
           {task.status === "completed" ? <Button variant="ghost" size="sm" className="text-xs" onClick={() => showDetail(task)}>View result</Button> : null}
           {task.status === "failed" ? <Button variant="ghost" size="sm" className="text-xs" disabled={busy === task.id} onClick={() => void control(task.id, "retry")}>Retry</Button> : null}
           {task.status === "running" || task.status === "queued" ? <Button variant="ghost" size="sm" className="text-xs" disabled={busy === task.id || task.cancel_requested} onClick={() => void control(task.id, "cancel")}>{task.cancel_requested ? "Stopping…" : "Stop"}</Button> : null}
+          {task.provider_block && isAdmin(state) && <Button variant="ghost" size="sm" onClick={() => window.dispatchEvent(new Event("open-provider-settings"))}>Reconnect</Button>}
+          {task.provider_block && <Button variant="ghost" size="sm" disabled={busy === task.id} onClick={() => void restartWithProviders(task.id)}>New task with current providers</Button>}
           <RowMenu label={`${agentName(task.agent_id)}: ${verb}`}>
+            {task.restarted_from && <DropdownMenuItem onSelect={() => void openOriginal(task.restarted_from!)}>View original task</DropdownMenuItem>}
             {task.status === "completed" && <DropdownMenuItem onSelect={() => showDetail(task)}>View result</DropdownMenuItem>}
             {task.status === "failed" && <DropdownMenuItem onSelect={() => showDetail(task)}>View error</DropdownMenuItem>}
             {task.status === "failed" && (

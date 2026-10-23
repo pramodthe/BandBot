@@ -1,0 +1,43 @@
+// Isolated API, worker and Vite; no shell-specific process management.
+import { mkdtempSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+const frontend = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const backend = resolve(frontend, "..", "backend");
+const run = mkdtempSync(resolve(tmpdir(), "band-provider-e2e-"));
+const env = { ...process.env, DATABASE_URL: `sqlite:///${run.replaceAll("\\", "/")}/app.db`,
+  AGENT_CHECKPOINT_PATH: resolve(run, "checkpoints.db"), DOCUMENTS_PATH: resolve(run, "documents"),
+  APP_SECRET: "e2e-app-secret-e2e-app-secret-32b", BAND_ENV: "test", AUTH_ATTEMPT_LIMIT: "100000",
+  RECOVERY_DELIVERY: "memory", E2E_FAKE_AGENT: "1", BAND_E2E_API_PORT: "18019" };
+for (const key of ["BAND_USER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "TAVILY_API_KEY", "CURSOR_API_KEY", "E2B_API_KEY", "TENKI_API_KEY", "TENKI_AUTH_TOKEN", "TENKI_DESKTOP_IMAGE", "EXA_API_KEY", "COMPOSIO_API_KEY", "MODEL_PRICES", "OPENCLAW_GATEWAY_URLS", "PROVIDER_ENDPOINT_ALLOWLIST"]) env[key] = "";
+mkdirSync(env.DOCUMENTS_PATH, { recursive: true });
+const children = [];
+function start(command, args, cwd) {
+  const child = spawn(command, args, { cwd, env, stdio: "inherit", windowsHide: true });
+  children.push(child);
+  child.on("error", (error) => { console.error(error); stop(1); });
+  child.on("exit", (code) => { if (!stopping) stop(code ?? 1); });
+  return child;
+}
+let stopping = false;
+function stop(code = 0) {
+  if (stopping) return; stopping = true;
+  for (const child of children) {
+    if (process.platform === "win32") spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    else child.kill("SIGTERM");
+  }
+  setTimeout(() => process.exit(code), 1000);
+}
+process.on("SIGTERM", () => stop()); process.on("SIGINT", () => stop());
+start("uv", ["run", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", env.BAND_E2E_API_PORT], backend);
+start("uv", ["run", "python", "-m", "app.worker"], backend);
+let ready = false;
+for (let attempt = 0; attempt < 120 && !stopping; attempt++) {
+  try { ready = (await fetch(`http://127.0.0.1:${env.BAND_E2E_API_PORT}/api/health`)).ok; } catch { /* starting */ }
+  if (ready) break;
+  await new Promise((resolve) => setTimeout(resolve, 500));
+}
+if (!ready) stop(1);
+else start(process.execPath, [resolve(frontend, "node_modules/vite/bin/vite.js"), "--host", "127.0.0.1", "--port", "18173", "--strictPort"], frontend);

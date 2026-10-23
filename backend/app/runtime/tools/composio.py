@@ -11,6 +11,7 @@ import httpx
 from sqlmodel import select
 
 from app.config import settings
+from app.providers.integrations import api_key as provider_api_key, selected_composio
 from app.persistence.models import AgentPluginAccess, ComposioSession, db
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class ComposioError(Exception):
 
 
 def configured() -> bool:
-    return bool(settings.composio_api_key)
+    return bool(provider_api_key())
 
 
 def trusted_mcp_url(value: str) -> bool:
@@ -175,7 +176,7 @@ async def mcp_connection() -> dict[str, Any] | None:
     return {
         "transport": "streamable_http",
         "url": session["mcp_url"],
-        "headers": {"x-api-key": settings.composio_api_key},
+        "headers": {"x-api-key": provider_api_key()},
     }
 
 
@@ -231,7 +232,7 @@ async def disconnect_plugin(slug: str) -> None:
 
 async def ensure_session() -> dict[str, str]:
     if not configured():
-        raise ComposioError("Add COMPOSIO_API_KEY to the server environment", 409)
+        raise ComposioError("Ask an admin to configure the app-integrations connection", 409)
     row = _stored_session()
     if row is not None:
         existing = await _read_session(row.session_id)
@@ -243,11 +244,22 @@ async def ensure_session() -> dict[str, str]:
 
 def _stored_session() -> ComposioSession | None:
     with db() as session:
+        connection = selected_composio()
+        if connection and (connection.id != "imported-composio" or connection.revision != 1):
+            from app.providers.models import ProviderIntegrationSession
+            return session.get(ProviderIntegrationSession, (connection.id, connection.revision))
         return session.exec(select(ComposioSession).order_by(ComposioSession.id)).first()
 
 
 def _save_session(user_id: str, session_id: str) -> None:
     with db() as session:
+        connection = selected_composio()
+        if connection and (connection.id != "imported-composio" or connection.revision != 1):
+            from app.providers.models import ProviderIntegrationSession
+            session.merge(ProviderIntegrationSession(connection_id=connection.id, revision=connection.revision,
+                user_id=user_id, session_id=session_id))
+            session.commit()
+            return
         row = session.exec(select(ComposioSession).order_by(ComposioSession.id)).first()
         if row is None:
             session.add(ComposioSession(user_id=user_id, session_id=session_id))
@@ -404,7 +416,7 @@ def _trusted(value: str) -> bool:
 
 
 def _public(text: str) -> str:
-    key = settings.composio_api_key
+    key = provider_api_key()
     if key:
         text = text.replace(key, "[key]")
     return " ".join(text.split())[:300] or "Composio request failed"
@@ -432,10 +444,10 @@ def _json(response: httpx.Response, fallback: str) -> Any:
 
 async def _send(method: str, url: str, *, json_body: Any = None, params: dict[str, str] | None = None) -> httpx.Response:
     if not configured():
-        raise ComposioError("Add COMPOSIO_API_KEY to the server environment", 409)
+        raise ComposioError("Ask an admin to configure the app-integrations connection", 409)
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-            return await client.request(method, url, headers={"x-api-key": settings.composio_api_key},
+            return await client.request(method, url, headers={"x-api-key": provider_api_key()},
                                         json=json_body, params=params)
     except httpx.HTTPError as exc:
         logger.warning("Composio request failed (%s)", type(exc).__name__)

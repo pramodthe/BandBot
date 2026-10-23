@@ -14,6 +14,7 @@ async function showList(page: Page) {
   const dialog = page.getByRole("dialog");
   if (await dialog.isVisible()) {
     await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toBeHidden();
   }
   const back = page.getByRole("button", { name: "Back to conversations" });
   if (await back.isVisible()) await back.click();
@@ -95,6 +96,7 @@ test("two people consent, talk, invite, and reach a workspace agent", async ({ b
   await expect(bobPage.getByText(`Invitation from ${aliceDisplay}`)).toBeVisible();
   await bobPage.getByText(`Invitation from ${aliceDisplay}`).click();
   await bobPage.getByRole("button", { name: "Join channel" }).click();
+  await expect(bobPage.getByText(`Invitation from ${aliceDisplay}`)).toHaveCount(0);
   await showList(bobPage);
   await bobPage.getByRole("button", { name: channelName }).click();
 

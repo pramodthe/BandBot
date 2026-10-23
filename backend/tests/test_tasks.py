@@ -240,9 +240,15 @@ def test_missing_optional_tools_report_unavailable(job, monkeypatch):
     task, _, _ = job
     monkeypatch.setattr(module, "settings", SimpleNamespace(exa_api_key=""))
     tools = {tool.name: tool for tool in tools_for(task)}
+    from app.providers.contracts import ProviderError
     async def scenario():
-        assert "not configured" in (await tools["web_search"].ainvoke({"query": "test"}))["error"]
-        assert "not configured" in (await tools["run_python"].ainvoke({"code": "print(2)"}))["error"]
+        for name, arguments, service in (
+            ("web_search", {"query": "test"}, "research"),
+            ("run_python", {"code": "print(2)"}, "computer"),
+        ):
+            with pytest.raises(ProviderError) as failure:
+                await tools[name].ainvoke(arguments)
+            assert (failure.value.service, failure.value.code) == (service, "not_configured")
     asyncio.run(scenario())
 
 

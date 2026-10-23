@@ -28,6 +28,9 @@ def model_catalog() -> list[dict]:
 
 
 def client() -> AsyncOpenAI:
+    from app.providers.openai_resources import resource_client
+    if sdk := resource_client():
+        return sdk
     key, _, _ = configuration()
     if not key:
         raise ValueError("Configure OpenAI in workspace settings first")
@@ -57,6 +60,11 @@ def migrate_profiles() -> None:
     _, _, default = configuration()
     with db() as session:
         for profile in session.exec(select(AgentProfile).where(AgentProfile.model.like("claude-%"))).all():
+            from app.providers.models import ServiceSelection
+            from app.providers.bindings import selected
+            selection = selected(session, profile.id).get("llm", {})
+            if selection and selection.get("provider") != "openai":
+                continue
             if runtime_for(profile.id):
                 continue
             for task in session.exec(select(AgentTask).where(AgentTask.agent_id == profile.id,

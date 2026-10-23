@@ -74,6 +74,7 @@ function Loaded({ boot, onSignOut }: { boot: Bootstrap; onSignOut: () => void })
       ws.onopen = () => { void catchUp(); };
       ws.onmessage = (e) => {
         const event = JSON.parse(e.data) as ServerEvent;
+        if (event.type === "provider_settings_changed") { void catchUp(); return; }
         log.current.push({ seq: ++seq.current, event });
         if (!catchingUp.current) dispatch({ type: "event", event });
       };

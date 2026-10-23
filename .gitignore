@@ -31,6 +31,8 @@ htmlcov/
 *.db-shm
 *.db-wal
 *.worker.lock
+backend/schema-*.lock
+backend/providers-*.lock
 output/playwright/
 playwright-report/
 test-results/

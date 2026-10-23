@@ -20,7 +20,7 @@
 
 BAND_BOTS brings team conversation and agent execution into one place. Give an AI teammate a task in a channel or private chat, follow its progress, review its results, and step in when it needs you. Teammates have their own identities, roles, and channel-scoped memory, so the work can continue beyond a single prompt.
 
-**Band** handles messaging and agent identity. **OpenAI + Deep Agents** power execution. **E2B**, or the optional [persistent Tenki computer](docs/tenki-computers.md), gives agents private cloud computers when a task needs a browser, terminal, or running application.
+**Band** handles messaging and agent identity. **Deep Agents** run tasks using the selected OpenAI, Anthropic, Gemini, or verified compatible model connection. **E2B**, or the optional [persistent Tenki computer](docs/tenki-computers.md), gives agents private cloud computers when a task needs a browser, terminal, or running application.
 
 ## What you can do
 
@@ -57,8 +57,8 @@ Research and computer work require their optional services to be configured. See
 
 - **Python 3.12+** and **uv**.
 - **Node.js 20+** and **npm**.
-- A **Band user API key** with Human API access.
-- An **OpenAI API key** with access to your chosen agent models.
+- A workspace **Band user API key** with Human API access for Band-backed agents. Local human chat, contacts and channels work without it; individual users do not need their own Band key.
+- A model-provider account for AI execution: configure OpenAI, Anthropic, Gemini, or a verified compatible endpoint in **Providers & APIs** after signing in. Human chat works before optional provider setup.
 
 ### 2. Install and configure
 
@@ -79,11 +79,12 @@ Edit the root `.env` file and set:
 
 ```dotenv
 BAND_USER_API_KEY=your_band_user_api_key
-OPENAI_API_KEY=your_openai_api_key
+# Optional legacy bootstrap; provider connections can be configured in the admin UI.
+OPENAI_API_KEY=
 APP_SECRET=replace_with_a_long_random_secret
 ```
 
-Keep `APP_SECRET` stable: it protects sessions and stored credentials. Never commit your `.env` file.
+Keep `APP_SECRET` stable: it protects sessions, stored credentials and provider configuration. Never commit your `.env` file. Admins configure named connections and independent service defaults in **Providers & APIs**; see [safe provider switching](docs/providers.md).
 
 ### 3. Start the workspace
 
@@ -110,7 +111,7 @@ cd frontend
 npm run dev
 ```
 
-Open **[localhost:5173](http://localhost:5173)**, create an account, and mention **`@Master`** in **`#general`**. A Band human API key is not part of signup or sign-in. `BAND_USER_API_KEY` stays on the server for the workspace agent.
+Open **[localhost:5173](http://localhost:5173)**, create an account, and mention **`@Master`** in **`#general`**.
 
 > The worker is required for agents to run. The API accepts messages and queues tasks; the separate worker executes them.
 
@@ -137,7 +138,7 @@ flowchart TB
     API <--> State[(SQLite workspace and task queue)]
     Worker[Deep Agents worker] <--> State
     Worker <--> Checkpoints[(LangGraph checkpoints)]
-    Worker <--> OpenAI[OpenAI models and document tools]
+    Worker <--> OpenAI[Selected model and document services]
     Worker <--> E2B[E2B cloud computers]
 ```
 
@@ -173,7 +174,7 @@ On a local installation, **Codex → Sign in with ChatGPT** uses the installed C
 
 The separate, optional Sign in with ChatGPT client integration remains gated by `CODEX_CHATGPT_SIGN_IN=on`, with `AGENT_OAUTH_REDIRECT_URI=http://127.0.0.1:8000/auth/callback`. It uses PKCE, single-use state and verified ID tokens. This is distinct from Codex's native port-1455 login. Hosted or paid products must obtain the appropriate provider access before offering subscription usage; these local login routes reject remote hostnames.
 
-Connected agents run in the existing worker. Codex app-server, Claude Agent SDK, Cursor Agent SDK, and the OpenClaw Gateway supply reasoning steps using structured responses; Deep Agents owns checkpointed conversation state and executes the selected app tools. Native vendor shell/file tools, personal CLI configuration, plugins and MCP servers are disabled. Local children receive only their own connection credential in a clean temporary home; OpenClaw's dedicated native tool policy is checked before every step. Code execution, files and computer actions use the existing per-agent/per-channel E2B computer. App tools retain approvals, cancellation, memory isolation, connected-app restrictions and token budgets. Hosted OpenAI Code Interpreter is not attached to connected runtimes. Vendor output arrives at model-step boundaries rather than as live token deltas.
+Connected agents run in the existing worker. Codex app-server, Claude Agent SDK, Cursor Agent SDK, and the OpenClaw Gateway supply reasoning steps using structured responses; Deep Agents owns checkpointed conversation state and executes the selected app tools. Native vendor shell/file tools, personal CLI configuration, plugins and MCP servers are disabled. Local children receive only their own connection credential in a clean temporary home; OpenClaw's dedicated native tool policy is checked before every step. Code execution, files and computer actions use the selected E2B or Tenki computer. Tenki workspace sharing keeps private-chat computers separate. App tools retain approvals, cancellation, memory isolation, connected-app restrictions and token budgets. Hosted OpenAI Code Interpreter is not attached to connected runtimes. Vendor output arrives at model-step boundaries rather than as live token deltas.
 
 This is an embedded runtime integration, not a mirror of the user's Codex or Claude desktop chats. Conversation recovery comes from LangGraph checkpoints, not vendor session files. Codex app-server is an evolving interface; the optional offline CLI contract test checks its output and ensures native execution tools stay disabled. Provider sign-in and live model execution require a real account and have not been exercised by the offline suite.
 
@@ -199,3 +200,5 @@ Contributions that make agent work clearer, more reliable, or easier to review a
 A project-wide license has not yet been selected. Third-party code retains its own notices, including the [Assistant UI component license](frontend/src/components/assistant-ui/LICENSE) and [adapted workflow provenance](backend/app/runtime/builtin_skills/PROVENANCE.md).
 
 Built with Band, OpenAI, Deep Agents, LangGraph, E2B, FastAPI, React, assistant-ui, Tailwind CSS, and shadcn/ui.
+
+Provider selection and safe switching: see [Providers & APIs](docs/providers.md). Existing environment settings are imported once; defaults stay unchanged until explicit admin activation. Human chat does not require an OpenAI key.

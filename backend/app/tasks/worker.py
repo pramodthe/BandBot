@@ -1,4 +1,4 @@
-"""Run separately: uv run python -m app.worker (one worker per checkpoint store, several tasks at once)."""
+"""Run separately: uv run python -m app.worker (one worker per checkpoint file, several tasks at once)."""
 from __future__ import annotations
 
 import asyncio
@@ -6,8 +6,6 @@ import logging
 import os
 import signal
 import sys
-import tempfile
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from band.client.rest import AsyncRestClient, ChatMessageRequest, ChatMessageRequestMentionsItem, aclose_rest_client
@@ -18,7 +16,7 @@ from sqlmodel import select
 from sqlalchemy import delete, update
 
 from app.auth import decrypt_secret
-from app.config import is_postgres, postgres_conninfo, settings
+from app.config import settings
 from app import documents
 from app.openai_provider import LegacyCheckpoint, migrate_profiles, pin_task
 from app.runtime.harness import build_harness
@@ -103,7 +101,9 @@ async def execute(task: AgentTask, checkpointer, *, factory=build_harness, compu
     # Browser tests answer without a model provider. A real key disables the shortcut.
     if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
         return "I can help with that."
-    async with (computer or TaskComputer(task)) as computer:
+    from app.providers.context import task_services
+    computer = computer or TaskComputer(task)
+    async with task_services(task, computer), computer:
         return await _execute_on_computer(task, checkpointer, factory=factory, computer=computer)
 
 
@@ -114,10 +114,23 @@ async def _execute_on_computer(task: AgentTask, checkpointer, *, factory, comput
         draft = Draft(task, enabled=report_target(session, task) is None and not is_interim(session, task))
     if profile is None:
         raise ValueError("Agent was deleted before this task could finish")
+    from app.providers.bindings import bindings_for
+    identity = bindings_for(task).get("_agent", {}).get("band_id")
+    if identity and identity != profile.band_agent_id:
+        from app.providers.contracts import ProviderError
+        raise ProviderError("llm", "agent_identity", detail="This task belongs to a removed teammate. Its saved progress cannot run under another teammate's identity.")
     if factory is build_harness:
         from app.agent_connections import pin_runtime, runtime_for
+        from app.providers.bindings import bindings_for
+        binding = bindings_for(task).get("llm", {})
         runtime = runtime_for(profile.id)
-        profile.model = pin_runtime(task, profile, runtime) if runtime else pin_task(task, profile)
+        if binding and not binding.get("legacy"):
+            if binding.get("unresolved"):
+                from app.providers.language_models import for_binding
+                for_binding(binding)
+            profile.model = binding.get("model") or profile.model
+        else:
+            profile.model = pin_runtime(task, profile, runtime) if runtime else pin_task(task, profile)
     clear_draft(task.id)
     extra_tools = await integration_tools(profile.name, agent_id=profile.id)
     graph = factory(task, profile, checkpointer, computer=computer, extra_tools=extra_tools)
@@ -286,9 +299,12 @@ async def process(task: AgentTask, saver, *, executor=execute) -> None:
         clear_draft(task.id)
         stop_for_budget(task, spent.reason)
     except LegacyCheckpoint:
+        from app.providers.contracts import ProviderError
+        from app.providers.errors import block
+        block(task, ProviderError("llm", "legacy_checkpoint", detail="The original provider binding is ambiguous. Start a linked new task; saved progress is preserved."))
         clear_draft(task.id)
-        update_task(task.id, status="failed", progress="Restart this task under OpenAI",
-                    error="Saved Claude progress is preserved. Cancel any pending request, then retry to start a new OpenAI task.")
+        update_task(task.id, status="failed", progress="Needs connection",
+                    error="The original provider binding is ambiguous. Saved progress is preserved; explicitly start a linked new task with current providers.")
     except asyncio.CancelledError:
         runner.cancel()
         await asyncio.gather(runner, return_exceptions=True)
@@ -298,6 +314,11 @@ async def process(task: AgentTask, saver, *, executor=execute) -> None:
         runner.cancel()
         await asyncio.gather(runner, return_exceptions=True)
         clear_draft(task.id)
+        from app.providers.errors import classify, block
+        if provider_error := classify(exc, task):
+            block(task, provider_error)
+            update_task(task.id, status="failed", progress="Needs connection", error=provider_error.detail)
+            return
         # Keep raw provider errors out of the UI (they can include credentials/headers).
         logger.exception("Task %s failed", task.id)
         update_task(task.id, status="failed", progress="Task failed; retry to resume saved progress",
@@ -318,22 +339,6 @@ def _lock_exclusively(lock) -> None:
         raise SystemExit("A worker already owns this checkpoint file")
 
 
-@asynccontextmanager
-async def open_checkpointer(path: str):
-    if is_postgres(path):
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-        async with AsyncPostgresSaver.from_conn_string(postgres_conninfo(path)) as saver:
-            await saver.setup()
-            yield saver
-        return
-    file = Path(path)
-    file.parent.mkdir(parents=True, exist_ok=True)
-    async with AsyncSqliteSaver.from_conn_string(str(file)) as saver:
-        await saver.setup()
-        yield saver
-
-
 async def work() -> None:
     # A supervisor's SIGTERM gets the same cancellation/cleanup path as Ctrl+C.
     # Windows event loops don't support signal handlers; Ctrl+C still works there.
@@ -342,14 +347,9 @@ async def work() -> None:
         asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, current.cancel)
     init_db()
     migrate_profiles()
-    path = settings.checkpoint_path
-    if is_postgres(path):
-        lock_path = Path(tempfile.gettempdir()) / "band-bots-worker.lock"
-    else:
-        file = Path(path)
-        file.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = Path(str(file) + ".worker.lock")
-    with open(lock_path, "w") as lock:
+    path = Path(settings.checkpoint_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path) + ".worker.lock", "w") as lock:
         _lock_exclusively(lock)
         recover_tasks()
         documents.recover_jobs()
@@ -361,7 +361,8 @@ async def work() -> None:
                 task.updated_at = utcnow()
                 session.add(task)
             session.commit()
-        async with open_checkpointer(path) as saver:
+        async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
+            await saver.setup()
             logger.info("Deep Agents worker ready (up to %d concurrent tasks)", settings.worker_concurrency)
             await run_queue(saver, concurrency=settings.worker_concurrency)
 
@@ -374,9 +375,19 @@ async def run_queue(saver, *, concurrency: int, executor=execute, stop_when_idle
     running: dict[str, asyncio.Task] = {}
     delivering: dict[str, asyncio.Task] = {}
     document_job = None
+    provider_job = None
+    from app.providers.verification import process_one as verify_one
+    from app.providers.retrieval import process_change
     document_poll_at = 0.0
     try:
         while True:
+            if provider_job is None or provider_job.done():
+                if provider_job and not provider_job.cancelled() and provider_job.exception():
+                    logger.error("Provider job failed (%s)", type(provider_job.exception()).__name__)
+                async def service_jobs():
+                    await verify_one()
+                    await process_change()
+                provider_job = asyncio.create_task(service_jobs(), name="provider-services")
             if (document_job is None or document_job.done()) and asyncio.get_running_loop().time() >= document_poll_at:
                 if document_job and not document_job.cancelled() and document_job.exception():
                     logger.error("Document processing failed (%s)", type(document_job.exception()).__name__)
@@ -416,7 +427,7 @@ async def run_queue(saver, *, concurrency: int, executor=execute, stop_when_idle
                         if not job.cancelled() and job.exception():
                             logger.error("Worker job %s crashed", key, exc_info=job.exception())
     finally:
-        jobs = [*running.values(), *delivering.values(), *([document_job] if document_job else [])]
+        jobs = [*running.values(), *delivering.values(), *([document_job] if document_job else []), *([provider_job] if provider_job else [])]
         for job in jobs:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)

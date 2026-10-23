@@ -20,6 +20,8 @@ dependencies = [
     "langchain-core>=1.6.11",
     "langchain-mcp-adapters>=0.3.2",
     "langchain-openai>=1.7.2",
+    "langchain-anthropic>=1.7.6",
+    "langchain-google-genai>=4.4.2",
     "langgraph>=1.2.15",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=3.1.2",
@@ -36,6 +38,7 @@ dependencies = [
     "tenki[async]==1.4.1",
     "tzdata>=2026.5",
     "uvicorn[standard]>=0.54.0",
+    "filelock>=3.20",
     "websockets>=15.0.1",
 ]
 

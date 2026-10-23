@@ -9,8 +9,15 @@ def workspace_id(config=settings) -> str:
 
 
 def shared_key(config=settings) -> str:
-    return f"tenki-workspace-{workspace_id(config)}"
+    return f"tenki-workspace-{workspace_id(config)}" + namespace(config)
 
+
+def namespace(config=settings):
+    value = getattr(config, "computer_namespace", "")
+    return f"-account-{value}" if value else ""
+
+def isolated_key(owner, channel_id, provider, config=settings):
+    return f"{provider}-agent-{owner}-channel-{channel_id}" + namespace(config)
 
 def is_shared(key: str) -> bool:
     return key.startswith("tenki-workspace-")
@@ -27,10 +34,10 @@ def selected_key(session, owner: str, channel_id: int, provider: str, config=set
             and session.get(DirectMessage, channel_id) is None
             and session.get(PrivateConversation, channel_id) is None):
         return shared_key(config)
-    return f"{provider}-agent-{owner}-channel-{channel_id}"
+    return isolated_key(owner, channel_id, provider, config)
 
 
 def key_from_labels(labels: dict) -> str:
     if labels.get("scope") == "workspace":
-        return f"tenki-workspace-{labels['workspace']}"
-    return f"tenki-agent-{labels.get('agent')}-channel-{labels.get('channel')}"
+        return f"tenki-workspace-{labels['workspace']}" + ("-account-" + labels["account_namespace"] if labels.get("account_namespace") else "")
+    return f"tenki-agent-{labels.get('agent')}-channel-{labels.get('channel')}" + ("-account-" + labels["account_namespace"] if labels.get("account_namespace") else "")

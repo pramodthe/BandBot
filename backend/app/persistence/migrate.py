@@ -29,6 +29,15 @@ def alembic_config() -> Config:
 def upgrade_database(bind: Engine | None = None) -> None:
     """Bring ``bind`` (or the application engine) to the current revision."""
     target = bind or engine
+    from filelock import FileLock
+    import hashlib
+    identity = target.url.render_as_string(hide_password=False)
+    root = Path(target.url.database).resolve().parent if target.url.drivername.startswith("sqlite") else Path(settings.checkpoint_path).resolve().parent
+    root.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(root / ("schema-" + hashlib.sha256(identity.encode()).hexdigest()[:16] + ".lock")), timeout=120):
+        _upgrade_locked(target)
+
+def _upgrade_locked(target):
     cfg = alembic_config()
     # ConfigParser interprets percent signs; URLs can contain encoded drive letters
     # on Windows and percent-encoded PostgreSQL credentials.

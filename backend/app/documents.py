@@ -1,4 +1,4 @@
-"""Durable, channel-scoped documents. OpenAI owns retrieval; originals stay in app storage."""
+"""Durable, channel-scoped documents. Originals and citations are provider-neutral."""
 from __future__ import annotations
 
 import asyncio
@@ -14,15 +14,13 @@ from zipfile import ZipFile
 from fastapi import HTTPException
 from PIL import Image
 from sqlalchemy import and_, func, or_, update
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 from sqlmodel import select
 
 from app.config import settings
 from app.openai_provider import client, configuration
-from app.persistence.models import (Budget, Channel, ChannelMember, DirectMessage, Document, DocumentBlob,
-                                    DocumentCollection, DocumentUsage, MessageAttachment, TaskDocument,
-                                    TaskDocumentSource, TaskUsage, db, utcnow)
+from app.persistence.models import (Budget, Channel, ChannelMember, DirectMessage, Document, DocumentBlob, DocumentCollection,
+                                    DocumentUsage, MessageAttachment, TaskDocument, TaskDocumentSource, TaskUsage, db, utcnow)
 
 LIMIT = 25 * 1024 * 1024
 TYPES = {".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -139,38 +137,6 @@ def finalize_document_links(task, text: str) -> str:
     return validate_citations(task, text)
 
 
-def store_generated(task, document_id: str, name: str, media: str, data: bytes, authorize=None) -> dict | None:
-    """Persist an agent-made file once, even when a checkpoint is replayed by a new worker."""
-    authorize = authorize or (lambda session: agent_authorize(session, task))
-    artifact = Document(id=document_id, channel_id=task.channel_id, uploaded_by=0, name=name,
-                        media_type=media, size=len(data), status="queued")
-    file_written = False
-    try:
-        with db() as session:
-            authorize(session)
-            # Publish complete bytes atomically. A replay repairs files left before a metadata commit.
-            file_written = save_original(session, artifact, data)
-            if media.startswith("text/"):
-                artifact.units = extract(artifact, data)
-            session.add(artifact)
-            session.add(TaskDocument(task_id=task.id, document_id=artifact.id))
-            session.add(TaskDocumentSource(task_id=task.id, document_id=artifact.id))
-            session.commit()
-    except IntegrityError:
-        # Parallel helpers can receive the same file. The first atomic commit owns it.
-        with db() as session:
-            existing = session.get(Document, document_id)
-            if not existing:
-                raise
-            if existing.status in {"deleting", "deleted"}:
-                return None
-    except Exception:
-        if file_written:
-            path_for(artifact).unlink(missing_ok=True)
-        raise
-    return {"name": name, "url": f"/api/documents/{artifact.id}/download"}
-
-
 def link_attachments(session, message, ids: list[str], task_ids: list[str]) -> None:
     if len(ids) > 10 or len(set(ids)) != len(ids):
         raise HTTPException(422, "Attach at most 10 different documents")
@@ -217,11 +183,24 @@ def check_budget(channel_id: int) -> None:
 
 
 def record_document_usage(channel_id: int, model: str, response) -> None:
-    usage = response.usage
+    usage = getattr(response, "usage", None)
+    if usage is None and (metadata := getattr(response, "usage_metadata", None)):
+        from types import SimpleNamespace
+        usage = SimpleNamespace(input_tokens=metadata.get("input_tokens", 0), output_tokens=metadata.get("output_tokens", 0))
     if usage:
+        from app.providers.context import usage_selection
+        if explicit := usage_selection():
+            if explicit[0].get("revision") and explicit[0].get("provider") != "openai":
+                model = explicit[0]["provider"] + ":" + model
         with db() as session:
             session.merge(DocumentUsage(id=response.id, channel_id=channel_id, model=model,
                                         input_tokens=usage.input_tokens, output_tokens=usage.output_tokens))
+            from app.providers.context import usage_selection
+            from app.providers.models import ProviderDocumentUsage
+            if explicit := usage_selection():
+                binding = explicit[0]
+                session.merge(ProviderDocumentUsage(usage_id=response.id, provider=binding["provider"],
+                    connection_id=binding.get("connection_id", ""), revision=binding.get("revision", 0)))
             session.commit()
 
 
@@ -270,9 +249,9 @@ def validate_file(name: str, data: bytes) -> tuple[str, str]:
     return name, TYPES[suffix]
 
 
-def extract(doc: Document, data: bytes | None = None) -> list[dict[str, str]]:
+def extract(doc: Document) -> list[dict[str, str]]:
     """Bounded, non-executing extraction. A vision field is transient, never stored in metadata."""
-    data = read_original(doc) if data is None else data
+    data = read_original(doc)
     suffix = Path(doc.name).suffix.lower()
     units = []
     characters = 0
@@ -355,7 +334,7 @@ def extract(doc: Document, data: bytes | None = None) -> list[dict[str, str]]:
     return units
 
 
-async def ingest(document_id: str) -> None:
+async def _legacy_ingest(document_id: str) -> None:
     doc = patch(document_id, status="processing", error="")
     async with client() as sdk:
         if not doc.units:
@@ -402,11 +381,46 @@ async def ingest(document_id: str) -> None:
     patch(doc.id, status="ready")
 
 
+async def ingest(document_id: str) -> None:
+    from app.providers.retrieval import index_lock
+    async with index_lock():
+        return await _ingest_bound(document_id)
+
+async def _ingest_bound(document_id: str) -> None:
+    from app.providers.bindings import document_bindings
+    from app.providers.document_analysis import transcribe
+    from app.providers.retrieval import index_document
+    bindings = document_bindings(document_id)
+    if bindings.get("retrieval", {}).get("legacy"):
+        return await _legacy_ingest(document_id)
+    doc = patch(document_id, status="processing", error="")
+    if not doc.units:
+        units = await asyncio.to_thread(extract, doc)
+        complete = []
+        for unit in units:
+            complete.append(await transcribe(bindings.get("document_analysis", {}), unit, doc.channel_id) if unit.get("vision") else unit)
+        if sum(len(u.get("text", "")) for u in complete) > 3000000:
+            raise ValueError("Extracted content exceeds the processing limit; split the file")
+        doc = patch(document_id, units=complete)
+    if not bindings.get("retrieval", {}).get("disabled"):
+        await index_document(doc, bindings.get("retrieval", {}))
+    # An upload queued just before activation also prepares the current index.
+    from app.providers.bindings import workspace_bindings
+    with db() as session:
+        current = workspace_bindings(session).get("retrieval", {})
+    if current != bindings.get("retrieval") and current and not current.get("disabled"):
+        await index_document(doc, current)
+    patch(document_id, status="ready")
+
+
 def recover_jobs() -> None:
     with db() as session:
         for doc in session.exec(select(Document).where(Document.status == "processing")).all():
             doc.status = "queued"
             session.add(doc)
+        from app.providers.models import DocumentProviderIndex
+        for index in session.exec(select(DocumentProviderIndex).where(DocumentProviderIndex.status == "uploading")).all():
+            index.status = "uncertain"; session.add(index)
         session.commit()
 
 
@@ -424,6 +438,11 @@ async def process_one() -> bool:
         return False
     try:
         if doc.status == "deleting":
+            from app.providers.bindings import document_bindings
+            if not document_bindings(doc.id).get("retrieval", {}).get("legacy"):
+                from app.providers.retrieval import delete_resources
+                await delete_resources(doc)
+                return True
             if doc.file_id or doc.index_file_id:
                 async with client() as sdk:
                     for file_id in filter(None, dict.fromkeys([doc.file_id, doc.index_file_id])):
@@ -432,11 +451,13 @@ async def process_one() -> bool:
                             await sdk.files.delete(file_id)
                         except NotFoundError:
                             pass
-            delete_original(doc)
+            path_for(doc).unlink(missing_ok=True)
             patch(doc.id, status="deleted", units=[], file_id="", index_file_id="")
         else:
             async with asyncio.timeout(settings.task_timeout):
-                await ingest(doc.id)
+                from app.providers.context import document_services
+                async with document_services(doc.id):
+                    await ingest(doc.id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -448,6 +469,6 @@ async def process_one() -> bool:
                 session.commit()
                 return True
         # Only our own validation messages are safe to show; never expose raw SDK errors.
-        detail = str(exc) if type(exc) is ValueError else "Processing failed. Check OpenAI configuration and retry."
+        detail = str(exc) if type(exc) is ValueError else "Processing needs a working document-service connection. Ask an administrator to reconnect it, then retry."
         patch(doc.id, status="error", error=detail[:300])
     return True

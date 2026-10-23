@@ -42,6 +42,8 @@ def _clear_session() -> None:
 
 
 def _enable(monkeypatch):
+    monkeypatch.setattr(composio, "provider_api_key", lambda: "ak_test")
+    monkeypatch.setattr(composio, "selected_composio", lambda: None)
     monkeypatch.setattr(composio, "settings", replace(composio.settings, composio_api_key="ak_test"))
 
 

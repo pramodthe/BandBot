@@ -24,6 +24,13 @@ from app.tasks.usage import over_budget
 @pytest.fixture
 def space(monkeypatch):
     init_db()
+    from app.providers.models import ServiceSelection
+    with db() as session:
+        selection = session.get(ServiceSelection, "workspace")
+        original_bindings = selection.bindings
+        selection.bindings = {**selection.bindings, "llm": {"legacy": True, "provider": "openai"}, "retrieval": {"legacy": True, "provider": "openai"},
+                              "document_analysis": {"legacy": True, "provider": "openai"}}
+        session.add(selection); session.commit()
     uid = uuid4().hex
     with db() as session:
         for row in session.exec(select(OpenAISettings)).all():
@@ -48,6 +55,9 @@ def space(monkeypatch):
         for doc in session.exec(select(Document).where(Document.channel_id == channel.id)).all():
             documents.path_for(doc).unlink(missing_ok=True)
             session.delete(doc)
+        selection = session.get(ServiceSelection, "workspace")
+        selection.bindings = original_bindings
+        session.add(selection)
         session.delete(session.get(AgentTask, task.id))
         for row in session.exec(select(OpenAISettings)).all():
             session.delete(row)
@@ -379,4 +389,6 @@ def test_model_snapshot_survives_profile_changes_and_legacy_restart_is_fresh(spa
     with pytest.raises(LegacyCheckpoint):
         pin_task(space.task, space.agent)
     response = space.api.post(f"/api/tasks/{space.task.id}/retry", headers=space.auth)
+    assert response.status_code == 409
+    response = space.api.post(f"/api/tasks/{space.task.id}/restart-with-providers", headers=space.auth)
     assert response.status_code == 200 and response.json()["id"] != space.task.id

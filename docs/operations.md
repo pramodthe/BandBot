@@ -52,7 +52,7 @@ uv run alembic upgrade head
 
 The API calls the same upgrade on startup. A database that already has the `user` table and no `alembic_version` table is stamped at `0001_baseline` and is not rebuilt. Later revisions add missing tables. Fresh databases run every revision. Production startup does not apply unversioned column changes.
 
-`DATABASE_URL` may be SQLite (`sqlite:////absolute/path.db`) or PostgreSQL (`postgresql://…` or `postgresql+psycopg://…`). Install the locked dependencies so `psycopg` is present. `AGENT_CHECKPOINT_PATH` may be a SQLite file or a PostgreSQL URL; a hosted deploy without a durable disk can point it at the same database as `DATABASE_URL`. `DOCUMENTS_PATH` may be a directory or the value `database`, which stores original file bytes in the application database.
+`DATABASE_URL` may be SQLite (`sqlite:////absolute/path.db`) or PostgreSQL (`postgresql+psycopg://user:password@host:5432/band`). Install the locked dependencies so `psycopg` is present. Checkpoints stay in the SQLite file named by `AGENT_CHECKPOINT_PATH`. They are not moved when the application database is PostgreSQL.
 
 Copy an existing SQLite installation by leaving its file in place and starting the new process against that `DATABASE_URL`. The stamp-then-upgrade path keeps users, contacts, requests, memberships, Band ownership, encrypted connections, tasks, and audit rows. Take a backup first.
 

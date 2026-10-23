@@ -14,6 +14,7 @@ from app.runtime.tools.schedules import schedule_tools
 from app.runtime.tools.teammates import teammate_tools
 from app.runtime.tools.web import web_tools
 from app.runtime.tools.documents import document_tools
+from app.runtime.tools.provider_images import image_tools
 from app.runtime.ui_request import custom_ui_requested
 
 
@@ -24,6 +25,7 @@ def tools_for(task: AgentTask, computer: TaskComputer | None = None):
         *channel_tools(task),
         *web_tools(task),
         *document_tools(task),
+        *image_tools(task),
         *teammate_tools(task),
         *approval_tools(task),
         *schedule_tools(task),

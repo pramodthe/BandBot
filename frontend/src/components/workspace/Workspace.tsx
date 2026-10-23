@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState, type Dispatch } from "react";
 import { api } from "@/api";
-import { policyBlock, type Action, type State } from "@/store";
+import { isAdmin, policyBlock, type Action, type State } from "@/store";
 import type { Agent, Channel, ChannelComputer } from "@/types";
 import { cn } from "@/lib/utils";
 import AgentModal from "@/components/agents/AgentModal";
@@ -16,7 +16,7 @@ import PluginsModal from "@/components/settings/PluginsModal";
 import Sidebar from "@/components/chat/Sidebar";
 import WorkspaceEmpty from "@/components/shared/WorkspaceEmpty";
 import WorkspaceNavigation from "./WorkspaceNavigation";
-import OpenAISettingsModal from "@/components/settings/OpenAISettingsModal";
+import ProvidersModal from "@/components/settings/ProvidersModal";
 import PeopleModal from "@/components/people/PeopleModal";
 import type { Modal, OpenComputer, WorkspaceView } from "./types";
 
@@ -58,6 +58,11 @@ export default function Workspace({
   onSignOut: () => void;
 }) {
   const [modal, setModal] = useState<Modal>(null);
+  useEffect(() => {
+    const open = () => { if (isAdmin(state)) setModal({ kind: "openai" }); };
+    window.addEventListener("open-provider-settings", open);
+    return () => window.removeEventListener("open-provider-settings", open);
+  }, [state.workspaceRoles, state.me.id]);
   const [showMembers, setShowMembers] = useState(false);
   const [view, setView] = useState<WorkspaceView>("chat");
   const [member, setMember] = useState<SelectedMember>(null);
@@ -213,7 +218,7 @@ export default function Workspace({
         dispatch({ type: "event", event: { type: "channel", channel: next } });
         setModal(null); selectChannel(next.id);
       }} />}
-      {modal?.kind === "openai" && <OpenAISettingsModal onClose={() => setModal(null)} />}
+      {modal?.kind === "openai" && <ProvidersModal agents={Object.values(state.agents)} onClose={() => setModal(null)} />}
       {modal?.kind === "elements" && channel && <Suspense fallback={null}><ElementsPanel key={channel.id} channel={channel} state={state} open onClose={() => setModal(null)} /></Suspense>}
     </div>
   );

@@ -13,15 +13,24 @@ from sqlmodel import select
 
 import app.runtime.tools.mcp as integrations
 from app.runtime.tools.mcp import integration_tools, load_servers
-from app.persistence.models import TaskApproval, db
+from app.persistence.models import TaskApproval, ChannelMember, db, init_db
 from app.tasks import decide_approval
 from test_tasks import RecordingModel, ScriptedModel, job, run_attempt  # noqa: F401  (job is a fixture)
 
 SERVER = Path(__file__).with_name("mcp_test_server.py")
 
 
+@pytest.fixture(autouse=True)
+def database_ready():
+    init_db()
+
 @pytest.fixture
-def tickets(tmp_path, monkeypatch):
+def tickets(tmp_path, monkeypatch, request):
+    if "job" in request.fixturenames:
+        task, _, _ = request.getfixturevalue("job")
+        with db() as session:
+            session.merge(ChannelMember(channel_id=task.channel_id, member_type="agent", member_id=task.agent_id))
+            session.commit()
     log = tmp_path / "calls.log"
     log.touch()
     monkeypatch.setenv("MCP_TEST_PYTHON", sys.executable)

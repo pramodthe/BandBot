@@ -9,11 +9,9 @@ import logging
 import re
 import shlex
 from datetime import timedelta, timezone
-from pathlib import PurePosixPath
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 from e2b import NotFoundException, RateLimitException, SandboxException
-from fastapi import HTTPException
 
 from app.computer.e2b import DesktopOptions, E2BDesktopClient
 from app.computer.providers import ComputerMissing, ComputerProviderError, configured, key_for, provider_for
@@ -23,12 +21,10 @@ from app.computer.locking import ComputerLock
 
 from sqlmodel import select
 
-from app import documents
 from app.config import settings
 from app.computer.display import display_state, record_step, update_display
 from app.persistence.models import (AgentProfile, AgentTask, ChannelMember, ComputerControl, ComputerControlContext,
-                                    ComputerViewLease, DirectMessage, Document, PrivateConversation, TaskSandbox, db,
-                                    utcnow)
+                                    ComputerViewLease, DirectMessage, PrivateConversation, TaskSandbox, db, utcnow)
 
 logger = logging.getLogger(__name__)
 
@@ -136,15 +132,17 @@ def save_sandbox(key: str, **values) -> TaskSandbox:
 class TaskComputer:
     def __init__(self, task: AgentTask, *, client_factory=None):
         self.task = task
+        from app.providers.computers import config_for_task
+        self.config = config_for_task(task, defaults=settings, safe=True)
         self.owner = computer_owner(task)
         self.key = computer_key(task)
         self.provider = provider_for(task)
         if client_factory is None:
             if self.provider == "tenki":
                 from app.computer.tenki import TenkiDesktopClient
-                client_factory = lambda: TenkiDesktopClient(config=settings)
+                client_factory = lambda: TenkiDesktopClient(config=self.config)
             elif self.provider == "e2b":
-                client_factory = E2BDesktopClient
+                client_factory = lambda: E2BDesktopClient(config=self.config)
             else:
                 raise ComputerUnavailable("Unsupported computer provider")
         self.client_factory = client_factory
@@ -162,34 +160,39 @@ class TaskComputer:
         await self.close()
 
     def labels(self) -> dict[str, str]:
+        account = {"account_namespace": self.config.computer_namespace} if getattr(self.config, "computer_namespace", "") else {}
         if self.shared:
-            return {"app": "band-slack", "workspace": workspace_id(), "scope": "workspace"}
+            return {"app": "band-slack", "workspace": workspace_id(), "scope": "workspace", **account}
         return {"app": "band-slack", "workspace": workspace_id(),
-                "agent": self.owner, "channel": str(self.task.channel_id)}
+                "agent": self.owner, "channel": str(self.task.channel_id), **account}
 
     def sandbox_name(self) -> str:
+        suffix = ("-" + self.config.computer_namespace) if getattr(self.config, "computer_namespace", "") else ""
         if self.shared:
-            return f"band-tenki-{workspace_id()}-shared"
+            return f"band-tenki-{workspace_id()}-shared{suffix}"
         owner = hashlib.sha256(self.owner.encode()).hexdigest()[:12]
-        return f"band-{self.provider}-{workspace_id()[:8]}-{owner}-c{self.task.channel_id}"
+        return f"band-{self.provider}-{workspace_id()[:8]}-{owner}-c{self.task.channel_id}{suffix}"
 
     async def ensure(self, *, desktop: bool = False, create: bool = True):
         """Caller holds lock. Persist a deterministic name before allocating cloud resources.
 
         People viewing a computer pass create=False: looking must never allocate a new one.
         """
+        from app.providers.computers import config_for_task
         with db() as session:
             profile = session.get(AgentProfile, self.task.agent_id)
-            shared_access = (self.shared and self.provider == "tenki" and self.key == shared_key(settings)
+            shared_access = (self.shared and self.provider == "tenki" and self.key == shared_key(self.config)
                 and session.get(DirectMessage, self.task.channel_id) is None
                 and session.get(PrivateConversation, self.task.channel_id) is None
                 and session.get(ChannelMember, (self.task.channel_id, "agent", self.task.agent_id)) is not None)
-        expected = f"{self.provider}-agent-{self.owner}-channel-{self.task.channel_id}"
+        from app.computer.identity import isolated_key
+        expected = isolated_key(self.owner, self.task.channel_id, self.provider, self.config)
         if (not profile or self.owner != profile.band_agent_id
                 or self.task.created_at.replace(tzinfo=timezone.utc) < profile.created_at.replace(tzinfo=timezone.utc)
                 or (not shared_access if self.shared else self.key != expected)):
             raise ComputerUnavailable("This task belongs to a removed or replaced agent. Start a new task.")
-        if not configured(self.provider, settings):
+        self.config = config_for_task(self.task, defaults=settings)
+        if not configured(self.provider, self.config):
             raise ComputerUnavailable(f"{self.provider.upper()} computer access is not configured. Ask a workspace admin to configure it.")
         # Another process can pause/replace a shared VM between operations. Re-read its
         # identity and state under the OS lock rather than trusting this SDK's cache.
@@ -224,8 +227,8 @@ class TaskComputer:
                 # A cloud timeout after allocation is recovered by the deterministic name on the next attempt.
                 try:
                     sandbox = await self.client.create(DesktopOptions(
-                        name=record.name, template=settings.e2b_template if self.provider == "e2b" else settings.tenki_desktop_image, labels=self.labels(),
-                        timeout=settings.e2b_timeout if self.provider == "e2b" else settings.tenki_timeout), timeout=60)
+                        name=record.name, template=self.config.e2b_template if self.provider == "e2b" else self.config.tenki_desktop_image, labels=self.labels(),
+                        timeout=self.config.e2b_timeout if self.provider == "e2b" else self.config.tenki_timeout), timeout=60)
                 except SandboxException as exc:
                     if is_quota_error(exc):
                         raise ComputerUnavailable(
@@ -431,9 +434,6 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
     async def export_file(self, path: str) -> dict:
         if not path.startswith("/") or len(path) > 500:
             raise ComputerUnavailable("Use an absolute sandbox file path")
-        media = documents.TYPES.get(PurePosixPath(path).suffix.lower(), "")
-        if media and not media.startswith("text/"):
-            return await self._export_document(path)
         code = f"import base64;print(base64.b64encode(open({path!r},'rb').read(200001)).decode())"
         async with self.lock:
             sandbox = await self.ensure()
@@ -446,7 +446,7 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
             try:
                 content = data.decode("utf-8")
             except UnicodeDecodeError:
-                raise ComputerUnavailable("Export supports UTF-8 text and DOCX, XLSX, PDF, PNG, JPEG, or WebP files") from None
+                raise ComputerUnavailable("Export currently supports UTF-8 text files") from None
             with db() as session:
                 task = session.get(AgentTask, self.task.id)
                 artifacts = [a for a in task.artifacts if a["path"] != path]
@@ -456,29 +456,6 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
                 session.add(task)
                 session.commit()
             return {"path": path, "bytes": len(data), "download": "Available in task results"}
-
-    async def _export_document(self, path: str) -> dict:
-        """Binary deliverables (DOCX, XLSX, PDF, images) become durable channel documents."""
-        async with self.lock:
-            sandbox = await self.ensure()
-            info = await sandbox.fs.get_file_info(path, request_timeout=30)
-            if info.is_dir or info.size > documents.LIMIT:
-                raise ComputerUnavailable("Export supports document files up to 25 MB")
-            data = bytes(await sandbox.fs.download_file(path, 120))
-        try:
-            name, media = documents.validate_file(PurePosixPath(path).name, data)
-        except HTTPException as exc:
-            raise ComputerUnavailable(f"Could not export {PurePosixPath(path).name}: {exc.detail}") from None
-        # Content-addressed: replays reuse the document, while a re-edited file becomes a new version.
-        document_id = uuid5(NAMESPACE_URL, f"band:{self.task.id}:sandbox:{path}:{hashlib.sha256(data).hexdigest()}").hex
-        with db() as session:
-            existing = session.get(Document, document_id)
-        saved = ({"name": existing.name, "url": f"/api/documents/{existing.id}/download"} if existing
-                 else documents.store_generated(self.task, document_id, name, media, data))
-        if saved is None:
-            raise ComputerUnavailable("That exported file was deleted")
-        return {"path": path, "bytes": len(data), "name": saved["name"], "download": saved["url"],
-                "link": f"[{saved['name']}]({saved['url']})"}
 
     async def live_view(self, *, minutes: int = CONTROL_MINUTES, user_id: int | None = None) -> dict:
         """A signed noVNC link for people. The token is in the link, so treat it as a short-lived secret."""
@@ -544,6 +521,13 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
             await self._close(force=force)
 
     async def _close(self, *, force: bool = False) -> None:
+        from app.providers.computers import config_for_task
+        from app.providers.contracts import ProviderError
+        try:
+            self.config = config_for_task(self.task, defaults=settings)
+        except ProviderError:
+            await self.detach()
+            return
         from app.computer.app_previews import has_active_view
         if self.shared and running_on(self.key, excluding=None if force else self.task.id):
             if force:
@@ -566,7 +550,7 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
         # is already complete and never calls a computer tool on its resumed attempt.
         try:
             record = sandbox_record(self.key)
-            if self.sandbox is None and record and configured(self.provider, settings) and record.status in {
+            if self.sandbox is None and record and configured(self.provider, self.config) and record.status in {
                 "running", "starting", "provisioning", "stop_failed", "pausing", "creation_unknown"
             }:
                 try:
@@ -592,7 +576,7 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
                     if state != "stopped":
                         if self.provider == "tenki":
                             save_sandbox(self.key, status="pausing", frame_id="")
-                        await self.sandbox.stop(timeout=settings.tenki_lifecycle_timeout if self.provider == "tenki" else 20)
+                        await self.sandbox.stop(timeout=self.config.tenki_lifecycle_timeout if self.provider == "tenki" else 20)
                     save_sandbox(self.key, status="stopped", frame_id="")
                 except Exception:
                     logger.warning("Could not stop task computer %s", self.task.id)

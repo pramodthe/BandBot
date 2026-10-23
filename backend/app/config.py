@@ -51,6 +51,7 @@ class Settings:
     e2b_api_key: str = _env("E2B_API_KEY")
     e2b_template: str = _env("E2B_DESKTOP_TEMPLATE", "desktop")
     e2b_timeout: int = max(60, min(3600, int(_env("E2B_TIMEOUT_SECONDS", "1200"))))
+    provider_endpoint_allowlist: str = _env("PROVIDER_ENDPOINT_ALLOWLIST")
     computer_provider: str = _env("COMPUTER_PROVIDER", "e2b").lower()
     tenki_api_key: str = _env("TENKI_API_KEY")
     tenki_desktop_image: str = _env("TENKI_DESKTOP_IMAGE")

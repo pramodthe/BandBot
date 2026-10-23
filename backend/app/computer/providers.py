@@ -28,13 +28,18 @@ def key_for(task) -> str:
 
 
 def scope_provider(session, profile, channel_id: int) -> str:
+    from app.providers.bindings import selected
+    binding = selected(session, profile.id, channel_id).get("computer", {})
+    if binding and not binding.get("legacy"):
+        return binding.get("provider", "disabled")
     scope = session.get(ComputerScope, f"agent-{profile.band_agent_id}-channel-{channel_id}")
     return scope.provider if scope else settings.computer_provider
 
 
 def scope_computer_key(session, profile, channel_id: int, config=None) -> str:
     from app.computer.identity import selected_key
-    config = config or settings
+    from app.providers.computers import scope_config
+    config = scope_config(session, profile, channel_id, config or settings, safe=True)
     return selected_key(session, profile.band_agent_id, channel_id, scope_provider(session, profile, channel_id), config)
 
 

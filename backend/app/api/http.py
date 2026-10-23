@@ -21,6 +21,7 @@ from app.api.skills import router as skills_router
 from app.api.generative import router as generative_router
 from app.api.documents import router as documents_router
 from app.api.openai_settings import router as openai_router
+from app.providers.display import configured as llm_configured, model_catalog as provider_model_catalog
 from app.api.app_previews import router as app_previews_router
 from app.computer.app_proxy import AppPreviewDispatch
 from app.openai_provider import configuration, model_catalog, migrate_profiles
@@ -28,7 +29,7 @@ from app.config import FRONTEND_DIST, settings
 from app.workspace.events import bus
 from app.tasks.usage import channel_usage, task_usage
 from app.persistence.models import (AgentMemory, AgentPersona, AgentTask, AgentProfile, AuditEvent, Budget, Channel, ChannelMember,
-                                    ChannelPolicy, DirectMessage, Message, TaskApproval, User, UserBandAccount, WorkspaceRole, db,
+                                    ChannelPolicy, DirectMessage, Message, TaskApproval, User, WorkspaceRole, db,
                                     get_session, init_db, utcnow)
 from app.workspace.audit import record, serialize_event
 from app.workspace.permissions import allowed, can_connect_agents, ensure_owner, is_admin, role_of, serialize_policy, workspace_roles
@@ -39,6 +40,8 @@ from e2b import AuthenticationException, SandboxException, ServiceBusyException
 from app.computer.providers import (ComputerProviderError, configured, dashboard, provider_for, scope_provider,
                                     scope_computer_key, running_on)
 from app.computer.identity import is_shared
+from app.providers.contracts import ProviderError
+from app.providers.computers import config_for_task, scope_config
 from app.persistence.models import TaskComputerBinding
 
 from app.computer import (TRANSFER_LIMIT, ComputerUnavailable, TaskComputer, active_control, computer_key,
@@ -79,9 +82,11 @@ async def lifespan(_app: FastAPI):
             session.commit()
         ensure_owner(session)
     startup = asyncio.create_task(service.startup())
+    from app.providers.notifications import watch_settings
+    provider_watch = asyncio.create_task(watch_settings(), name="provider-settings")
     yield
-    startup.cancel()
-    await asyncio.gather(startup, return_exceptions=True)
+    startup.cancel(); provider_watch.cancel()
+    await asyncio.gather(startup, provider_watch, return_exceptions=True)
     from app.codex_login import shutdown as close_codex_logins
     await close_codex_logins()
     await service.shutdown()
@@ -95,6 +100,8 @@ app.include_router(generative_router)
 app.include_router(computer_viewer_router)
 app.include_router(documents_router)
 app.include_router(openai_router)
+from app.api.providers import router as providers_router
+app.include_router(providers_router)
 app.include_router(agent_connections_router)
 app.include_router(people_router)
 
@@ -102,10 +109,16 @@ app.include_router(people_router)
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
     # FastAPI's default validation response includes rejected input values, including pasted credentials.
-    if request.url.path.startswith(("/api/agent-connections", "/api/band/account")):
+    if request.url.path.startswith(("/api/agent-connections", "/api/band/account", "/api/settings/connections", "/api/settings/openai")):
         return JSONResponse({"detail": "Invalid connection details. Check the provider, name and credential."}, status_code=422)
     return await request_validation_exception_handler(request, exc)
 
+
+from app.providers.contracts import ProviderError
+
+@app.exception_handler(ProviderError)
+async def provider_error(_request: Request, exc: ProviderError):
+    return JSONResponse({"detail": exc.detail, "service": exc.service, "code": exc.code}, status_code=409)
 
 @app.exception_handler(ServiceError)
 async def service_error(_request: Request, exc: ServiceError):
@@ -149,9 +162,9 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
     session.add(user)
     session.commit()
     session.refresh(user)
-    ensure_owner(session)
     _join_general(session, user)
     session.commit()
+    ensure_owner(session)
     await bus.publish({"type": "user", "user": serialize_user(user)})
     if role_of(session, user.id) != "member":
         await bus.publish({"type": "workspace_role", "user_id": user.id, "role": role_of(session, user.id)})
@@ -261,9 +274,10 @@ async def bootstrap(user: User = Depends(current_user), session: Session = Depen
         "agents": [service.serialize_agent(a) for a in session.exec(select(AgentProfile)).all() if agent_visible(session, a, user.id)],
         "roles": [{"id": k, **v} for k, v in ROLES.items()],
         "workspace_roles": workspace_roles(session),
-        "models": model_catalog(),
+        "models": provider_model_catalog(),
         "band": band,
         "openai_configured": bool(configuration()[0]),
+        "llm_configured": llm_configured(),
         "cursor": cursor,
         "invitations": pending_invitations(session, user.id),
         "contact_requests": incoming_contact_requests(session, user.id),
@@ -587,6 +601,7 @@ class AgentCreateBody(BaseModel):
     specialty: str = Field(default="", max_length=160)
     avatar: AvatarStyle | None = None
     model: str | None = None
+    model_ref: dict | None = None
     runtime: Literal["deepagents", "codex", "claude", "cursor", "openclaw"] = "deepagents"
     connection_id: str | None = None
     channel_id: int | None = None
@@ -600,6 +615,7 @@ class AgentUpdateBody(BaseModel):
     specialty: str | None = Field(default=None, max_length=160)
     avatar: AvatarStyle | None = None
     model: str | None = None
+    model_ref: dict | None = None
     plugins: list[str] | None = None
 
 
@@ -640,9 +656,29 @@ async def create_agent(body: AgentCreateBody, user: User = Depends(current_user)
         _validate_role_and_model(body.role, None)
     else:
         if body.connection_id:
-            raise HTTPException(422, "A custom agent uses the workspace OpenAI connection")
-        body.model = body.model or configuration()[2]
-        _validate_role_and_model(body.role, body.model)
+            raise HTTPException(422, "Use model_ref to select a workspace provider connection")
+        from app.providers.bindings import selected
+        from app.providers.management import validate_bindings
+        from app.providers.display import set_agent_model
+        ref = body.model_ref or selected(session).get("llm")
+        if body.model_ref:
+            _require_admin(session, user, "Only admins can select workspace provider connections")
+            try: validate_bindings(session, {"llm": body.model_ref})
+            except (ValueError, RuntimeError) as error: raise HTTPException(422, str(error)) from None
+        if ref and not ref.get("disabled"):
+            from app.providers.models import ProviderRevision
+            revision = session.get(ProviderRevision, (ref.get("connection_id"), ref.get("revision")))
+            chosen = body.model or ref.get("model")
+            if not revision or chosen not in revision.config.get("models", []):
+                raise HTTPException(422, "Choose an allowed model from the selected provider")
+            body.model = chosen
+            if chosen != ref.get("model"):
+                _require_admin(session, user, "Only admins can override the default provider model")
+                body.model_ref = {**ref, "model": chosen}
+            _validate_role_and_model(body.role, None)
+        else:
+            body.model = body.model or configuration()[2]
+            _validate_role_and_model(body.role, body.model)
     channel_id = body.channel_id
     if channel_id is not None:
         _channel_or_404(session, channel_id, user)
@@ -663,6 +699,11 @@ async def create_agent(body: AgentCreateBody, user: User = Depends(current_user)
         runtime=body.runtime,
         connection_id=body.connection_id,
     )
+    if body.model_ref:
+        from app.providers.display import set_agent_model
+        try: set_agent_model(session, profile.id, body.model_ref, user)
+        except ValueError as error: raise HTTPException(422, str(error)) from None
+        session.commit()
     _audit(user, "agent_created", channel_id=channel_id, agent=profile.name, role=profile.role, model=profile.model)
     return service.serialize_agent(profile)
 
@@ -692,7 +733,21 @@ async def update_agent(
             raise HTTPException(422, "Choose a specific Cursor model; Router parameters are not supported yet")
         if not MODEL_ID.fullmatch(body.model) or (runtime.provider == "claude" and not body.model.startswith("claude-")):
             raise HTTPException(422, "Enter a valid model ID for this agent runtime")
-    _validate_role_and_model(body.role, None if runtime else body.model)
+    from app.providers.bindings import selected
+    from app.providers.models import ProviderRevision, ServiceSelection
+    if "model_ref" in body.model_fields_set:
+        if runtime: raise HTTPException(422, "Connected agents retain their personal runtime connection")
+        from app.providers.display import set_agent_model
+        try: set_agent_model(session, profile.id, body.model_ref, user)
+        except ValueError as error: raise HTTPException(422, str(error)) from None
+    managed_ref = body.model_ref or selected(session, profile.id).get("llm", {})
+    if body.model is not None and not runtime and managed_ref.get("connection_id"):
+        revision = session.get(ProviderRevision, (managed_ref["connection_id"], managed_ref["revision"]))
+        if body.model not in revision.config.get("models", []): raise HTTPException(422, "Choose an allowed provider model")
+        from app.providers.display import set_agent_model
+        try: set_agent_model(session, profile.id, {**managed_ref, "model": body.model}, user)
+        except ValueError as error: raise HTTPException(422, str(error)) from None
+    _validate_role_and_model(body.role, None if runtime or managed_ref.get("connection_id") else body.model)
     if body.model is not None and body.model != profile.model and agent_owner(session, profile) != user.id:
         _require_admin(session, user, "Only workspace admins can change an agent's model")
     changed = {name: value for name, value in (("role", body.role), ("model", body.model))
@@ -882,7 +937,7 @@ async def task_computer(task_id: str, user: User = Depends(current_user), sessio
     display = display_state(computer_key(task))
     return JSONResponse({
         "control": _control_json(active_control(computer_key(task)), user),
-        "configured": configured(provider_for(task), settings),
+        "configured": configured(provider_for(task), config_for_task(task, settings, safe=True)),
         "provider": provider_for(task),
         "shared": is_shared(computer_key(task)),
         "status": row.status if row else "not_started",
@@ -932,7 +987,7 @@ def agent_computers(agent_id: int, user: User = Depends(current_user), session: 
             AgentTask.channel_id == channel.id, AgentTask.status == "running")).first()
         scopes.append({"channel_id": channel.id, "channel_name": channel.name,
                        "is_dm": session.get(DirectMessage, channel.id) is not None,
-                       "provider": provider, "configured": configured(provider, settings),
+                       "provider": provider, "configured": configured(provider, scope_config(session, profile, channel.id, settings, safe=True)),
                        "shared": is_shared(key), "computer_key": key,
                        "task_id": task.id if task else None, "status": row.status if row else "not_started",
                        "updated_at": row.updated_at.isoformat() if row else None,
@@ -1005,7 +1060,7 @@ async def _on_computer(task: AgentTask, operation):
     computer = computer_factory(task)
     try:
         return await operation(computer)
-    except ComputerUnavailable as exc:
+    except (ComputerUnavailable, ProviderError) as exc:
         raise HTTPException(409, str(exc))
     except (SandboxException, AuthenticationException, ServiceBusyException, ComputerProviderError) as exc:
         # E2B errors can include request details; show only the type.
@@ -1108,7 +1163,7 @@ async def computer_stop(task_id: str, user: User = Depends(current_user), sessio
     computer = computer_factory(task)
     try:
         await computer.close(force=True)
-    except ComputerUnavailable as exc:
+    except (ComputerUnavailable, ProviderError) as exc:
         raise HTTPException(409, str(exc)) from None
     release_control(computer_key(task), user_name=user.display_name)
     _audit(user, "computer_stopped", channel_id=task.channel_id, task_id=task.id, agent=_agent_name(session, task))
@@ -1157,24 +1212,20 @@ async def retry_task(task_id: str, user: User = Depends(current_user), session: 
     from uuid import uuid4
     pinned = session.get(TaskModel, task_id)
     runtime = runtime_for(task.agent_id)
-    if pinned and pinned.provider in CONNECTED_PROVIDERS and (not runtime or runtime.provider != pinned.provider):
+    from app.providers.models import TaskServiceBinding, ProviderBlock
+    saved_services = session.get(TaskServiceBinding, task.id)
+    saved_connected = saved_services and saved_services.bindings.get("llm", {}).get("connected")
+    if not saved_connected and pinned and pinned.provider in CONNECTED_PROVIDERS and (not runtime or runtime.provider != pinned.provider):
         raise HTTPException(409, "This task's original runtime is no longer available")
-    if pinned and pinned.provider not in {"openai", *CONNECTED_PROVIDERS}:
-        replacement = AgentTask(id=uuid4().hex, source_key=f"openai-restart:{task_id}:{uuid4().hex}",
-                                channel_id=task.channel_id, agent_id=task.agent_id, room_id=task.room_id,
-                                prompt=task.prompt, context=task.context, reply_to=task.reply_to,
-                                progress="Restarted under OpenAI with a new checkpoint")
-        task.status, task.progress = "cancelled", "Restarted under OpenAI; original checkpoint preserved"
-        session.add(task)
-        session.add(replacement)
-        for link in session.exec(select(TaskDocument).where(TaskDocument.task_id == task_id)).all():
-            session.add(TaskDocument(task_id=replacement.id, document_id=link.document_id))
-        _audit(user, "task_restarted", channel_id=task.channel_id, task_id=task_id, session=session)
-        session.commit()
-        return serialize_task(replacement)
+    services = session.get(TaskServiceBinding, task_id)
+    managed = services and services.bindings.get("llm", {}).get("connection_id") and not services.bindings.get("llm", {}).get("connected")
+    if (services and services.bindings.get("llm", {}).get("unresolved")) or (pinned and pinned.provider not in {"openai", *CONNECTED_PROVIDERS} and not managed):
+        raise HTTPException(409, "The original provider binding is ambiguous. Its checkpoint is preserved. Explicitly start a linked new task with current providers.")
     session.exec(update(AgentTask).where(AgentTask.id == task_id, AgentTask.status.in_(["failed", "cancelled"]))
                  .values(status="queued", cancel_requested=False, error=None,
                          progress="Queued to resume saved progress", updated_at=utcnow()))
+    if blocked := session.get(ProviderBlock, task_id):
+        session.delete(blocked)
     _audit(user, "task_retried", channel_id=task.channel_id, task_id=task_id, session=session)
     session.commit()
     session.expire_all()

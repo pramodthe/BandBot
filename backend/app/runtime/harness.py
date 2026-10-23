@@ -28,11 +28,18 @@ from app.workspace.access import channel_teammates
 
 def build_harness(task: AgentTask, profile: AgentProfile, checkpointer, *, model=None, computer: TaskComputer | None = None,
                   extra_tools=()):
-    runtime = runtime_for(profile.id) if profile.id is not None else None
+    from types import SimpleNamespace
+    from app.providers.bindings import bindings_for
+    from app.providers.language_models import for_binding, supports_hosted
+    binding = bindings_for(task).get("llm", {})
+    runtime = (SimpleNamespace(provider=binding["provider"], connection_id="task:" + task.id)
+               if binding.get("connected") else None) if binding else runtime_for(profile.id) if profile.id is not None else None
     if model is None:
         if runtime:
             selected = pin_runtime(task, profile, runtime)
             model = ConnectedRuntimeModel(provider=runtime.provider, model_name=selected, connection_id=runtime.connection_id)
+        elif binding and not binding.get("legacy"):
+            model = for_binding(binding)
         else:
             selected = pin_task(task, profile)
             model = ChatOpenAI(model=selected, api_key=configuration()[0], use_responses_api=True,
@@ -54,7 +61,7 @@ def build_harness(task: AgentTask, profile: AgentProfile, checkpointer, *, model
             f"This agent may use {scope}. A refused tool is not granted; ask the humans to change it in Plugins "
             "or on this agent. Do not invent tool slugs. "
         )
-    hosted = [] if runtime else hosted_tools()
+    hosted = [] if runtime or (binding and not supports_hosted(binding)) else hosted_tools()
     by_name = {t.name: t for t in tools} | {t["type"]: t for t in hosted}
     code_tools = ("For calculations, checking numbers, and self-contained data work, use code_interpreter: it runs "
                   "instantly in a separate cloud sandbox that cannot see your computer's files. Use the coder helper "
