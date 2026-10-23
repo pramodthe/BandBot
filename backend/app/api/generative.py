@@ -5,11 +5,14 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
 
 from app.auth import current_user
-from app.persistence.models import ComponentResponse, Message, MessageComponent, TaskInput, User, db, get_session
+from app.persistence.models import (AgentTask, ComponentResponse, Document, ImageGeneration, ImageGenerationDisplay,
+                                    Message, MessageComponent, TaskInput, User, db, get_session)
+from app.providers.models import ProviderOperation
 from app.workspace.components import current_components
 from app.tasks.inputs import answer_input, input_state
 from app.workspace.events import bus
@@ -42,6 +45,48 @@ def views(channel_id: int, user: User = Depends(current_user), session: Session 
     return [{"id": component.id, "kind": component.kind, "props": component.props,
              "message_id": message.id, "author_name": message.author_name,
              "created_at": message.created_at.isoformat()} for component, message in rows]
+
+
+@router.get("/image-generations")
+def image_generations(channel_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
+    check(member_channel, session, channel_id, user)
+    result = []
+
+    def append(identity, display, task, state, document_id, model):
+        status = "generating" if state in {"pending", "running"} and task.status == "running" else "error"
+        error = "Image generation stopped or paused. Check the task before trying again."
+        if state == "completed":
+            doc = session.get(Document, document_id)
+            if doc and doc.channel_id == channel_id and doc.status not in {"deleting", "deleted"}:
+                status, document_id = "ready", doc.id
+            else:
+                error = "The generated image is no longer available."
+                document_id = None
+        elif state in {"failed", "uncertain"}:
+            error = "Image generation could not finish. Check the agent's response before trying again."
+        result.append({"id": identity, "task_id": task.id, "agent_id": task.agent_id,
+                       "title": display.title, "size": display.size, "status": status,
+                       "document_id": document_id, "model": model,
+                       "error": error if status == "error" else ""})
+
+    # Retain display/recovery compatibility with images created by the local preview.
+    legacy = session.exec(select(ImageGeneration, ImageGenerationDisplay, AgentTask)
+        .join(ImageGenerationDisplay, ImageGenerationDisplay.id == ImageGeneration.id)
+        .join(AgentTask, AgentTask.id == ImageGeneration.task_id)
+        .where(AgentTask.channel_id == channel_id, AgentTask.reply_message_id == None,
+               AgentTask.status.in_(["queued", "running", "waiting"]))
+        .order_by(ImageGeneration.created_at).limit(20)).all()
+    for receipt, display, task in legacy:
+        append(receipt.id, display, task, receipt.status, receipt.document_id, receipt.model)
+    rows = session.exec(select(ProviderOperation, ImageGenerationDisplay, AgentTask)
+        .join(ImageGenerationDisplay, ImageGenerationDisplay.id == ProviderOperation.id)
+        .join(AgentTask, AgentTask.id == ProviderOperation.task_id)
+        .where(AgentTask.channel_id == channel_id, AgentTask.reply_message_id == None,
+               AgentTask.status.in_(["queued", "running", "waiting"]), ProviderOperation.service == "images")
+        .order_by(ProviderOperation.created_at).limit(20)).all()
+    for receipt, display, task in rows:
+        append(receipt.id, display, task, receipt.status, receipt.result.get("document_id"), receipt.binding.get("model", ""))
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/components/{component_id}")

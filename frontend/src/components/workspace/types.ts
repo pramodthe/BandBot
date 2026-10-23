@@ -6,7 +6,6 @@ export type Modal =
   | { kind: "agent-settings"; agentId: number }
   | { kind: "plugins" }
   | { kind: "openai" }
-  | { kind: "elements" }
   | null;
 
 export type WorkspaceView = "chat" | "members";

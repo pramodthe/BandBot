@@ -40,23 +40,15 @@ Upstream `$type`/`$key` node spellings are accepted by agent tools and normalize
 
 ## Backend bindings
 
-Admins can open **Workspace interfaces** from their user menu for the selected
-channel. The panel provides:
+Agents discover the 151 installed entries and 22 example compositions through
+`ui_elements` and render supported components in ordinary chat. Task progress,
+results and controls remain in the conversation's Team activity panel; saved
+interactive answers open from **Views**.
 
-- Activity using existing task, usage, schedule, and result APIs. Stop and retry
-  actions use the existing server permission checks and task transitions.
-- An optional Assistant UI conversation backed by BAND_BOTS's message store and
-  WebSocket drafts. Sending uses the existing message endpoint; stopping uses the
-  task endpoint. Agent identity, approvals, generated inputs, attachments, and
-  artifacts retain BAND_BOTS's renderers and permission checks.
-- Browser speech synthesis and dictation adapters when supported by the browser.
-- All 22 example compositions and a searchable index of all 151 entries.
-
-The panel's catalogue endpoint is
-`GET /api/channels/{channel_id}/elements`; authentication, channel membership,
-and private conversation ownership are checked before returning it. It contains
-public library metadata only. Agent output remains available through ordinary
-chat, regardless of whether a human opens this admin panel.
+The catalogue endpoint `GET /api/channels/{channel_id}/elements` remains available.
+Authentication, channel membership and private conversation ownership are checked
+before returning its public library metadata. There is no separate component
+library or alternative conversation panel in the workspace navigation.
 
 ## Capability boundaries and remaining integration
 

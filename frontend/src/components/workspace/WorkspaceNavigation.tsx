@@ -1,9 +1,10 @@
 import { useState, type ComponentType, type FormEvent, type SVGProps } from "react";
-import { BlocksIcon, LayersIcon, LogOutIcon, MessageCircleIcon, SearchIcon, SquarePenIcon, UsersIcon, UserPlusIcon, SettingsIcon } from "lucide-react";
+import { BlocksIcon, LogOutIcon, MessageCircleIcon, SearchIcon, SquarePenIcon, UsersIcon, UserPlusIcon, SettingsIcon } from "lucide-react";
 import { api } from "@/api";
 import type { State } from "@/store";
 import { isAdmin } from "@/store";
 import Avatar from "@/components/shared/Avatar";
+import { BrandMark } from "@/components/shared/Brand";
 import Field from "@/components/shared/Field";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -15,8 +16,9 @@ import type { Modal, WorkspaceView } from "./types";
 import ThemeToggle from "./ThemeToggle";
 import { cn } from "@/lib/utils";
 
-function RailButton({ label, icon: Icon, active, badge, onClick }: {
+function RailButton({ label, caption, icon: Icon, active, badge, onClick }: {
   label: string;
+  caption?: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   active?: boolean;
   badge?: number;
@@ -25,8 +27,8 @@ function RailButton({ label, icon: Icon, active, badge, onClick }: {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="rail" size="icon-lg" className="relative" aria-label={label} aria-pressed={active} onClick={onClick}>
-          <Icon />
+        <Button variant="rail" size="icon-lg" className={cn("relative", active && "aria-pressed:bg-brand-soft aria-pressed:text-brand-soft-foreground", caption && "h-12 w-11 flex-col gap-1 rounded-xl text-[9px] leading-none [&_svg]:size-[18px]")} aria-label={label} aria-pressed={active} onClick={onClick}>
+          <Icon />{caption && <span>{caption}</span>}
           {badge ? <span className="bg-primary text-primary-foreground absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">{badge > 9 ? "9+" : badge}</span> : null}
         </Button>
       </TooltipTrigger>
@@ -72,19 +74,19 @@ export default function WorkspaceNavigation({ state, view, onView, onSearch, ope
     <nav aria-label="Workspace navigation" className={cn("border-border bg-sidebar flex w-[52px] shrink-0 flex-col items-center border-r py-3", detailOpen && "max-sm:hidden")}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-lg" className="text-primary mb-2" aria-label="BAND_BOTS workspace" onClick={() => onView("members")}><LayersIcon className="size-[22px]" strokeWidth={2.5} /></Button>
+          <Button variant="ghost" size="icon-lg" className="mb-4 p-1" aria-label="Band Bots workspace" onClick={() => onView("chat")}><BrandMark className="size-8" /></Button>
         </TooltipTrigger>
-        <TooltipContent side="right">BAND_BOTS</TooltipContent>
+        <TooltipContent side="right">Band Bots · Your workspace</TooltipContent>
       </Tooltip>
       <div className="flex flex-col gap-1">
         <RailButton label="New channel" icon={SquarePenIcon} onClick={() => openModal({ kind: "new-channel" })} />
         <RailButton label={view === "chat" ? "Find a conversation" : "Find a member"} icon={SearchIcon} onClick={onSearch} />
         <Separator className="mx-auto my-1 w-6" />
-        <RailButton label="Chat" icon={MessageCircleIcon} active={view === "chat"} onClick={() => onView("chat")} />
-        <RailButton label="Members" icon={UsersIcon} active={view === "members"} onClick={() => onView("members")} />
+        <RailButton label="Chat" caption="Chat" icon={MessageCircleIcon} active={view === "chat"} onClick={() => onView("chat")} />
+        <RailButton label="Members" caption="Team" icon={UsersIcon} active={view === "members"} onClick={() => onView("members")} />
         <RailButton label={pendingPeople ? `People, ${pendingPeople} pending` : "People"} icon={UserPlusIcon} badge={pendingPeople} onClick={() => openModal({ kind: "people" })} />
         <Separator className="mx-auto my-1 w-6" />
-        <RailButton label="Connected apps" icon={BlocksIcon} onClick={() => openModal({ kind: "plugins" })} />
+        <RailButton label="Connected apps" caption="Apps" icon={BlocksIcon} onClick={() => openModal({ kind: "plugins" })} />
         {isAdmin(state) && <RailButton label="Providers & APIs" icon={SettingsIcon} onClick={() => openModal({ kind: "openai" })} />}
       </div>
       <div className="mt-auto flex flex-col items-center gap-2 pt-4">
@@ -99,7 +101,6 @@ export default function WorkspaceNavigation({ state, view, onView, onSearch, ope
             <DropdownMenuGroup>
               <DropdownMenuItem onSelect={() => openModal({ kind: "people" })}><UserPlusIcon />People</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setRecoveryOpen(true)}>Recovery email</DropdownMenuItem>
-              {isAdmin(state) && state.activeChannelId !== null && <DropdownMenuItem onSelect={() => openModal({ kind: "elements" })}><BlocksIcon />Workspace interfaces</DropdownMenuItem>}
               <DropdownMenuItem onSelect={() => void leave(false)}><LogOutIcon />Sign out</DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void leave(true)}>Sign out everywhere</DropdownMenuItem>
             </DropdownMenuGroup>

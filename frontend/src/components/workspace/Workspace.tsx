@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type Dispatch } from "react";
+import { useEffect, useState, type Dispatch } from "react";
 import { api } from "@/api";
 import { isAdmin, policyBlock, type Action, type State } from "@/store";
 import type { Agent, Channel, ChannelComputer } from "@/types";
@@ -19,8 +19,6 @@ import WorkspaceNavigation from "./WorkspaceNavigation";
 import ProvidersModal from "@/components/settings/ProvidersModal";
 import PeopleModal from "@/components/people/PeopleModal";
 import type { Modal, OpenComputer, WorkspaceView } from "./types";
-
-const ElementsPanel = lazy(() => import("@/components/generated/ElementsPanel"));
 
 function useChannelComputers(channelId: number | null) {
   const [computers, setComputers] = useState<ChannelComputer[]>([]);
@@ -219,7 +217,6 @@ export default function Workspace({
         setModal(null); selectChannel(next.id);
       }} />}
       {modal?.kind === "openai" && <ProvidersModal agents={Object.values(state.agents)} onClose={() => setModal(null)} />}
-      {modal?.kind === "elements" && channel && <Suspense fallback={null}><ElementsPanel key={channel.id} channel={channel} state={state} open onClose={() => setModal(null)} /></Suspense>}
     </div>
   );
 }

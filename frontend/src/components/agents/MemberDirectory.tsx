@@ -34,7 +34,8 @@ export default function MemberDirectory({ state, selected, onSelect, openModal, 
 
   return (
     <aside aria-label="Member directory" className={cn("border-border bg-sidebar flex w-[280px] shrink-0 flex-col border-r narrow:w-[248px] max-sm:min-w-0 max-sm:flex-1", selected && "max-sm:hidden")}>
-      <header className="flex h-16 shrink-0 items-center justify-between px-5">
+      <div className="border-border flex h-20 shrink-0 flex-col justify-center border-b px-5"><span className="text-xl font-semibold tracking-[-0.04em]">Band Bots<span className="text-primary">.</span></span><span className="text-muted-foreground mt-0.5 text-xs">Your team, working together</span></div>
+      <header className="flex h-14 shrink-0 items-center justify-between px-5">
         <h1 className="text-base font-semibold">Members</h1>
         <Button variant="ghost" size="icon-sm" aria-label="Add agents" onClick={() => openModal({ kind: "new-agent" })}><PlusIcon /></Button>
       </header>

@@ -10,6 +10,7 @@ const DOTS = Array.from({ length: 64 }, (_, i) => i);
 export function ImageGeneration({
   prompt,
   generating,
+  size = "1024x1024",
   onRegenerate,
   className,
   ...props
@@ -19,6 +20,7 @@ export function ImageGeneration({
 > & {
   prompt: string;
   generating: boolean;
+  size?: string;
   onRegenerate?: () => void;
 }) {
   return (
@@ -33,6 +35,7 @@ export function ImageGeneration({
           paper,
           "relative aspect-square w-full overflow-hidden rounded-2xl",
         )}
+        style={{ aspectRatio: size.replace("x", " / ") }}
       >
         <div
           className="absolute inset-0 grid grid-cols-8 place-items-center p-6"
@@ -73,7 +76,7 @@ export function ImageGeneration({
             generating ? "text-muted-foreground" : "text-white/70",
           )}
         >
-          1024 × 1024
+          {size.replace("x", " × ")}
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">

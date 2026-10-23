@@ -636,6 +636,24 @@ class TaskDocumentSource(SQLModel, table=True):
     document_id: str = Field(primary_key=True)
 
 
+class ImageGeneration(SQLModel, table=True):
+    """Claim paid image calls before dispatch; uncertain outcomes must never blindly regenerate."""
+    id: str = Field(primary_key=True)
+    task_id: str = Field(index=True)
+    status: str = "pending"
+    document_id: str = ""
+    model: str
+    error: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class ImageGenerationDisplay(SQLModel, table=True):
+    """Bounded display metadata for in-flight images, separate from paid-call receipts."""
+    id: str = Field(primary_key=True)
+    title: str
+    size: str
+
+
 class DocumentUsage(SQLModel, table=True):
     id: str = Field(primary_key=True)
     channel_id: int = Field(index=True)

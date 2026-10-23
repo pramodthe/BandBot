@@ -6,12 +6,15 @@ import { SpecSheet } from "@/components/assistant-ui/elements/spec-sheet";
 import GeneratedForm from "./GeneratedForm";
 import GeneratedView from "./GeneratedView";
 import LiveAppPreviews from "./LiveAppPreviews";
+import GeneratedImage from "./GeneratedImage";
 import { cn } from "@/lib/utils";
 const AssistantUI = lazy(() => import("./AssistantUI"));
 const SandboxedUI = lazy(() => import("./SandboxedUI"));
 
 function Component({ component, channelId, canRespond }: { component: MessageComponent; channelId: number; canRespond: boolean }) {
   switch (component.kind) {
+    case "image":
+      return <GeneratedImage {...component.props} />;
     case "sandbox":
       return <Suspense fallback={<p role="status">Loading interactive answer…</p>}><SandboxedUI surface={component.props} componentId={component.id} channelId={channelId} canRespond={canRespond} /></Suspense>;
     case "app":

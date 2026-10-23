@@ -35,16 +35,17 @@ export default function Sidebar({ state, onChannel, onMessage, openModal, search
 
   return (
     <aside aria-label="Conversations" className={cn("border-border bg-sidebar flex w-[280px] shrink-0 flex-col border-r narrow:w-[248px] max-sm:min-w-0 max-sm:flex-1", !listOpen && "max-sm:hidden")}>
-      <header className="flex h-16 shrink-0 items-center justify-between px-5">
-        <h1 className="text-base font-semibold tracking-tight">Conversations</h1>
+      <div className="border-border flex h-20 shrink-0 flex-col justify-center border-b px-5"><span className="text-xl font-semibold tracking-[-0.04em]">Band Bots<span className="text-primary">.</span></span><span className="text-muted-foreground mt-0.5 text-xs">Your team, working together</span></div>
+      <header className="flex h-14 shrink-0 items-center justify-between px-5">
+        <h1 className="text-sm font-semibold tracking-tight">Conversations</h1>
         <Button variant="ghost" size="icon-sm" aria-label="Create channel" onClick={() => openModal({ kind: "new-channel" })}><PlusIcon /></Button>
       </header>
       <div className="px-4 pb-3"><Input ref={searchInput} aria-label="Find conversations by name" placeholder="Find conversations" className="h-10 rounded-xl bg-muted/50" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-4">
         <div className="text-muted-foreground flex h-10 items-center justify-between px-5 text-xs"><h2>Channels</h2><Button variant="ghost" size="icon-xs" aria-label="New channel in list" onClick={() => openModal({ kind: "new-channel" })}><PlusIcon /></Button></div>
         {channels.map((channel) => (
-          <button key={channel.id} aria-current={state.activeChannelId === channel.id ? "page" : undefined} className={cn("hover:bg-muted mx-2 flex min-h-11 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring", state.activeChannelId === channel.id && "bg-accent")} onClick={() => onChannel(channel.id)}>
-            <HashIcon className="text-muted-foreground size-[18px]" strokeWidth={1.5} /><span className="truncate text-sm font-medium">{channel.name}</span><UnreadBadge count={state.unread[channel.id] ?? 0} />
+          <button key={channel.id} aria-current={state.activeChannelId === channel.id ? "page" : undefined} className={cn("hover:bg-muted mx-2 flex min-h-11 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring", state.activeChannelId === channel.id && "bg-brand-soft text-brand-soft-foreground hover:bg-brand-soft")} onClick={() => onChannel(channel.id)}>
+            <HashIcon className="size-[18px] opacity-65" strokeWidth={1.5} /><span className="truncate text-sm font-medium">{channel.name}</span><UnreadBadge count={state.unread[channel.id] ?? 0} />
           </button>
         ))}
         {channels.length === 0 ? <p className="text-muted-foreground px-5 py-3 text-sm">No channels found.</p> : null}
@@ -59,7 +60,7 @@ export default function Sidebar({ state, onChannel, onMessage, openModal, search
           const activity = getAgentActivity(state, agent.id);
           const lastMessage = dm ? state.messages[dm.id]?.filter((message) => message.to_humans).at(-1) : undefined;
           return (
-            <div key={agent.id} className={cn("group relative mx-2 my-1 flex items-center rounded-xl hover:bg-muted", dm?.id === state.activeChannelId && "bg-accent")}>
+            <div key={agent.id} className={cn("group relative mx-2 my-1 flex items-center rounded-xl hover:bg-muted", dm?.id === state.activeChannelId && "bg-brand-soft hover:bg-brand-soft")}>
               <button className="flex min-h-16 min-w-0 flex-1 items-center gap-3 rounded-xl py-3 pr-10 pl-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={opening === agent.id} onClick={() => onMessage(agent)} aria-label={`Chat with ${agent.name}`}>
                 <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} runtime={agent.runtime} size={40} working={activity?.status === "running"} />
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5"><span className="truncate text-sm font-medium">{agent.name}</span><span className="text-muted-foreground truncate text-xs">{opening === agent.id ? "Opening conversation…" : activity?.status === "waiting" ? "Needs attention" : activity?.status === "running" ? activity.progress || "Working…" : lastMessage?.content.replace(/[#*`]/g, "") || agent.specialty || (agent.is_master ? "Team coordination" : agent.role_label)}</span></span>

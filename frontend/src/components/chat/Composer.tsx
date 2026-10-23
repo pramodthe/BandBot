@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { PaperclipIcon, SendHorizontalIcon, XIcon } from "lucide-react";
 import { api, uploadDocument } from "@/api";
 import type { Action, State } from "@/store";
@@ -21,7 +21,7 @@ interface Candidate {
   inChannel: boolean;
 }
 
-export default function Composer({ state, channel, dispatch }: { state: State; channel: Channel; dispatch: (action: Action) => void }) {
+export default function Composer({ state, channel, dispatch, suggestion }: { state: State; channel: Channel; dispatch: (action: Action) => void; suggestion?: { text: string; revision: number } }) {
   const [text, setText] = useState("");
   const [query, setQuery] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(0);
@@ -35,6 +35,13 @@ export default function Composer({ state, channel, dispatch }: { state: State; c
   const master = Object.values(state.agents).find((a) => a.is_master);
   const dmAgent = channel.dm_agent_id != null ? state.agents[channel.dm_agent_id] : null;
   const dmPerson = state.users[channel.dm_user_ids?.find((id) => id !== state.me.id) ?? -1];
+
+  useEffect(() => {
+    if (!suggestion) return;
+    setText((current) => current.trim() ? `${current}\n\n${suggestion.text}` : suggestion.text);
+    setQuery(null);
+    input.current?.focus();
+  }, [suggestion]);
 
   const candidates = useMemo<Candidate[]>(() => {
     if (query === null) return [];
@@ -149,7 +156,7 @@ export default function Composer({ state, channel, dispatch }: { state: State; c
       {uploading && <p className="mb-2 text-xs text-muted-foreground" role="status">Uploading documents…</p>}
       <Popover open={menuOpen} onOpenChange={(open) => !open && setQuery(null)}>
         <PopoverAnchor asChild>
-          <div className="border-input focus-within:border-ring focus-within:ring-ring/20 flex items-end gap-2 rounded-2xl border bg-muted py-3 ps-3 pe-2.5 focus-within:ring-2">
+          <div className="border-input focus-within:border-ring focus-within:ring-ring/20 flex items-end gap-2 rounded-2xl border bg-background py-3 ps-3 pe-2.5 shadow-xs focus-within:ring-2">
             <Button variant="ghost" size="icon-sm" aria-label="Attach documents" disabled={uploading || sending} onClick={() => files.current?.click()}><PaperclipIcon /></Button>
             <Textarea
               ref={input}

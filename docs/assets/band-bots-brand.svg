@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Band Bots</title>
+  <desc id="desc">A shared workspace where your team and AI teammates get work done together.</desc>
+  <rect width="720" height="260" rx="28" fill="#F9FAF6"/>
+  <g transform="translate(64 58) scale(2.4)">
+    <rect width="40" height="40" rx="12" fill="#465638"/>
+    <path d="M12 9h9a5.5 5.5 0 0 1 0 11h-9V9Zm0 11h10a5.5 5.5 0 0 1 0 11H12v-6" stroke="#FAFBF5" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="12" cy="31" r="2" fill="#C5E68A"/>
+  </g>
+  <text x="186" y="126" fill="#1B1712" font-family="Geist, Segoe UI, Arial, sans-serif" font-size="58" font-weight="600" letter-spacing="-2">Band Bots<tspan fill="#465638">.</tspan></text>
+  <text x="66" y="204" fill="#62675C" font-family="Geist, Segoe UI, Arial, sans-serif" font-size="22">Your team. AI teammates. Good work, together.</text>
+</svg>

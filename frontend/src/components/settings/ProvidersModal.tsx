@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/api";
 import type { Agent } from "@/types";
 import ModalShell from "@/components/shared/ModalShell";
+import OpenAISettingsModal from "./OpenAISettingsModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,6 +23,7 @@ const numeric = new Set(["context_window", "disk_gib", "timeout", "pause_retenti
 const selectClass = "border-input bg-background w-full min-w-0 rounded-md border px-3 py-2 text-sm";
 
 export default function ProvidersModal({ onClose, agents }: { onClose: () => void; agents: Agent[] }) {
+  const [openAISetup, setOpenAISetup] = useState(false);
   const [data, setData] = useState<Settings | null>(null);
   const [catalog, setCatalog] = useState<Manifest[]>([]);
   const [draft, setDraft] = useState<Bindings>({});
@@ -80,9 +82,14 @@ export default function ProvidersModal({ onClose, agents }: { onClose: () => voi
       setForm(null);
     }, "Saved. Verify the new revision before selecting it. Existing tasks keep the previous revision.");
   };
+  if (openAISetup) return <OpenAISettingsModal onClose={() => {
+    setOpenAISetup(false);
+    void reload(true).catch((e: Error) => setError(e.message));
+  }} />;
   return <ModalShell title="Providers & APIs" wide onClose={onClose}>
     <div className="flex flex-col gap-5">
       <p className="text-muted-foreground text-sm">Choose each service independently. Activation affects new work; saved tasks and computers keep their original connection. Keys are encrypted and write-only.</p>
+      <Button variant="outline" className="self-start" onClick={() => setOpenAISetup(true)}>OpenAI quick setup</Button>
       {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
       {notice && <p role="status" className="text-sm">{notice}</p>}
       {!data && <p>Loading provider settings…</p>}

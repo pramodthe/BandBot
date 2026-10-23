@@ -5,9 +5,12 @@ import type { Agent, Channel, ChannelComputer, Draft, Message } from "@/types";
 import { cn } from "@/lib/utils";
 import Avatar from "@/components/shared/Avatar";
 import Composer from "./Composer";
+import TaskStarters from "./TaskStarters";
+import { BrandMark } from "@/components/shared/Brand";
 import { deliverMessage } from "./deliver";
 import DocumentsPanel, { AttachmentCard } from "@/components/documents/DocumentsPanel";
 import ComputerActivity from "@/components/computer/ComputerActivity";
+import ImageGenerationActivity, { useImageGenerations } from "@/components/generated/ImageGenerationActivity";
 import TaskPanel from "./TaskPanel";
 import RichText, { MentionNames, SourcesPill, linksIn } from "@/components/shared/RichText";
 import { Badge } from "@/components/ui/badge";
@@ -126,7 +129,7 @@ function MessageRow({
   const mine = message.author_type === "human" && message.author_id === state.me.id;
 
   return (
-    <div className={cn(rowClass, compact && "py-1", mine && "flex-row-reverse")}>
+    <div id={`message-${message.id}`} tabIndex={-1} className={cn(rowClass, "rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset", compact && "py-1", mine && "flex-row-reverse")}>
       <div className="w-9 shrink-0">
         {compact ? (
           <span className="text-muted-foreground invisible block pt-[3px] text-right text-[11px] group-hover:visible">
@@ -204,25 +207,23 @@ export default function ChannelView({
   });
   const [viewsOpen, setViewsOpen] = useState(false);
   const [documentsOpen, setDocumentsOpen] = useState(false);
+  const [suggestion, setSuggestion] = useState<{ text: string; revision: number }>();
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const messages = state.messages[channel.id];
+  const imageGenerations = useImageGenerations(channel.id);
+  const publishedImages = new Set((messages ?? []).flatMap((message) => message.components
+    .filter((component) => component.kind === "image").map((component) => component.props.documentId)));
+  const pendingImages = imageGenerations.filter((activity) => !activity.document_id || !publishedImages.has(activity.document_id));
+  const imageProgress = pendingImages.map((activity) => `${activity.id}:${activity.status}`).join(",");
   const visible = (messages ?? []).filter((m) => showChatter || !isChatter(m) || !!m.approval || m.components?.some((component) => component.kind === "input"));
   const hiddenCount = (messages?.length ?? 0) - visible.length;
   const drafts = Object.values(state.drafts[channel.id] ?? {}).filter((d) => state.agents[d.agent_id]);
   const draftLength = drafts.reduce((total, d) => total + d.content.length, 0);
   const working: { key: string; state: "working" | "waiting"; label: string }[] = [
     ...(state.typing[channel.id] ?? [])
-      .filter((id) => state.agents[id])
+      .filter((id) => state.agents[id] && !Object.values(state.activity[channel.id] ?? {}).some((task) => task.agent_id === id && task.status !== "done"))
       .map((id) => ({ key: `typing-${id}`, state: "working" as const, label: `${state.agents[id].name} is working…` })),
-    ...Object.values(state.activity[channel.id] ?? {})
-      .filter((t) => state.agents[t.agent_id])
-      .map((t) => ({
-        key: t.id,
-        state: t.status === "running" ? "working" as const : "waiting" as const,
-        label: `${state.agents[t.agent_id].name}: ${t.status === "queued" && t.progress === "Waiting for worker" ? "waiting for its turn"
-          : t.progress}`,
-      })),
   ];
   // A hand-off is settled once its teammate has posted after it.
   const settledHandoffs = new Set<number>();
@@ -237,7 +238,7 @@ export default function ChannelView({
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [visible.length, working.length, draftLength]);
+  }, [visible.length, working.length, draftLength, imageProgress]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -279,12 +280,14 @@ export default function ChannelView({
   const humanCount = channel.human_ids.length;
   const dmPerson = state.users[channel.dm_user_ids?.find((id) => id !== state.me.id) ?? -1];
   const dmAgent = channel.dm_agent_id != null ? state.agents[channel.dm_agent_id] : null;
+  const channelAgents = channel.agent_ids.map((id) => state.agents[id]).filter(Boolean);
+  const starterAgent = dmAgent ?? channelAgents.find((agent) => agent.is_master) ?? channelAgents[0];
   const headerComputer = computers.find((c) => c.computer_working) ?? computers[0];
   const activeComputers = computers.filter((c) => c.computer_working);
 
   return (
     <section className="flex min-w-0 flex-1 flex-col">
-      <header className="border-border flex min-h-16 flex-wrap items-center gap-x-3 gap-y-2 border-b px-6 py-3 max-sm:px-4">
+      <header className="border-border flex min-h-20 flex-wrap items-center gap-x-3 gap-y-2 border-b px-6 py-4 max-sm:px-4">
         <Button variant="ghost" size="icon-sm" className="hidden max-sm:inline-flex" aria-label="Back to conversations" onClick={onBack}><ArrowLeftIcon /></Button>
         {dmAgent ? (
           <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`View ${dmAgent.name} profile`} onClick={() => openModal({ kind: "agent", agentId: dmAgent.id })}>
@@ -299,7 +302,7 @@ export default function ChannelView({
         ) : (
           <div className="min-w-0 flex-1">
             <div className={titleClass}>{dmPerson ? dmPerson.display_name : `# ${channel.name}`}</div>
-            {dmPerson ? <div className={topicClass}>Private conversation</div> : channel.topic && <div className={topicClass}>{channel.topic}</div>}
+            {dmPerson ? <div className={topicClass}>Private conversation</div> : <div className={topicClass}>{channel.topic || `${humanCount} ${humanCount === 1 ? "person" : "people"} · ${agentCount} AI ${agentCount === 1 ? "teammate" : "teammates"}`}</div>}
           </div>
         )}
         <div className="ml-auto flex min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2 max-sm:w-full">
@@ -344,13 +347,17 @@ export default function ChannelView({
       <ChannelViews key={`views-${channel.id}`} channelId={channel.id} open={viewsOpen} onClose={() => setViewsOpen(false)} />
       {documentsOpen && <DocumentsPanel key={`documents-${channel.id}`} channelId={channel.id} state={state} onClose={() => setDocumentsOpen(false)} />}
 
-      <div className={cn("min-h-0 flex-1 overflow-y-auto pt-3 pb-1", messages?.length === 0 && "flex flex-col")} ref={scroller} onScroll={onScroll}>
+      <div className={cn("min-h-0 flex-1 overflow-y-auto pt-3 pb-1", messages?.length === 0 && pendingImages.length === 0 && "flex flex-col")} ref={scroller} onScroll={onScroll}>
         {!messages && <div className="text-muted-foreground p-6 text-center">Loading messages…</div>}
-        {messages && messages.length === 0 && (
+        {messages && messages.length === 0 && pendingImages.length === 0 && (
           <WorkspaceEmpty
             title={dmPerson ? `Chat with ${dmPerson.display_name}` : dmAgent ? `A little help from ${dmAgent.name}` : `Welcome to #${channel.name}`}
-            description={dmPerson ? "Your private conversation. Send a message to get started." : dmAgent ? `Your private conversation with ${dmAgent.name}. Send a message to get started.` : "Bring your team together. Mention @Master to put your AI teammates to work."}
-          />
+            description={dmPerson ? "Your private conversation. Send a message to get started." : dmAgent ? `Share a goal with ${dmAgent.name}. Work through it together, right here.` : starterAgent ? `Share an idea, make a plan, or hand off a task. Mention @${starterAgent.name} to bring your AI teammates into the conversation.` : "A shared space for your people and ideas. Add an AI teammate when you’re ready to put them to work."}
+            icon={!dmPerson ? <div className="mb-2 flex items-center gap-2">{starterAgent ? <Avatar name={starterAgent.name} kind="agent" role={starterAgent.role} avatar={starterAgent.avatar} runtime={starterAgent.runtime} size={64} /> : <BrandMark className="size-14" />}</div> : undefined}
+          >
+            {!dmPerson && starterAgent && <TaskStarters agentName={starterAgent.name} isDm={channel.is_dm} onPick={(text) => setSuggestion((current) => ({ text, revision: (current?.revision ?? 0) + 1 }))} />}
+            {!dmPerson && !starterAgent && <Button variant="outline" className="rounded-xl" onClick={() => openModal({ kind: "new-agent" })}><UsersIcon />Add a teammate</Button>}
+          </WorkspaceEmpty>
         )}
         <MentionNames names={mentionNames}>
           {rows}
@@ -378,6 +385,8 @@ export default function ChannelView({
             <DraftRow key={d.task_id} draft={d} state={state} openModal={openModal} />
           ))}
         </MentionNames>
+        {pendingImages.map((activity) => state.agents[activity.agent_id] && <ImageGenerationActivity
+          key={activity.id} activity={activity} agent={state.agents[activity.agent_id]} />)}
         {!computerOpen && activeComputers.map((activity) => state.agents[activity.agent_id] && (
           <ComputerActivity key={`${channel.id}-${activity.task_id}`} agent={state.agents[activity.agent_id]}
             activity={activity} openComputer={openComputer} />
@@ -419,7 +428,7 @@ export default function ChannelView({
       {channel.messaging_disabled ? (
         <p role="status" className="text-muted-foreground px-5 py-4 text-sm">Messaging isn't available for this conversation. History is unchanged.</p>
       ) : (
-        <Composer state={state} channel={channel} dispatch={dispatch} />
+        <Composer state={state} channel={channel} dispatch={dispatch} suggestion={suggestion} />
       )}
     </section>
   );

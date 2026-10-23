@@ -1,9 +1,5 @@
-<h1 align="center">BAND_BOTS</h1>
-
-<p align="center"><strong>AI teammates. Shared context. Real work.</strong></p>
-
 <p align="center">
-  <img src="docs/assets/band-bots.png" alt="BAND_BOTS project artwork: an energetic robot in a neon-lit workspace surrounded by code, research, and automation tools." width="520" />
+  <img src="docs/assets/band-bots-brand.svg" alt="Band Bots. Your team. AI teammates. Good work, together." width="640" />
 </p>
 
 <p align="center">A self-hosted workspace where people and persistent AI teammates get work done together.</p>
@@ -19,6 +15,8 @@
 ---
 
 BAND_BOTS brings team conversation and agent execution into one place. Give an AI teammate a task in a channel or private chat, follow its progress, review its results, and step in when it needs you. Teammates have their own identities, roles, and channel-scoped memory, so the work can continue beyond a single prompt.
+
+The workspace opens in light mode and remembers your theme preference. In a new conversation, starter cards help draft a first task for an available teammate; review and send it in the composer. Team activity keeps active work, requests for attention, and recent results visible alongside the conversation.
 
 **Band** handles messaging and agent identity. **Deep Agents** run tasks using the selected OpenAI, Anthropic, Gemini, or verified compatible model connection. **E2B**, or the optional [persistent Tenki computer](docs/tenki-computers.md), gives agents private cloud computers when a task needs a browser, terminal, or running application.
 
@@ -128,6 +126,22 @@ To serve the built UI from FastAPI instead, run `npm run build` in `frontend/` a
 | MCP servers | `MCP_CONFIG_PATH` | Additional tools governed by the workspace's approval policies. |
 
 External services use your own accounts and may incur usage or storage charges. See the [full configuration reference](docs/reference.md#requirements-and-configuration) for models, timeouts, storage paths, schedules, and budgets.
+
+### Generate images
+
+Agents can call `generate_image` directly or delegate a requested picture to the internal
+`image` helper. It calls the selected image provider and saves a real PNG in the conversation's
+Files, with an inline preview, expansion and download. Photos, art and illustration
+requests use this tool; SVG/code drawings are reserved for explicit vector/diagram requests.
+While the image model is working, the chat shows the Assistant UI Image Generation
+loading animation, then replaces it with the PNG. Failed or cancelled tasks stop the animation.
+No cloud computer is required. Enable an image connection and model under
+**Providers & APIs → Image generation**, independently of the agent reasoning model.
+OpenAI connections also support image size, quality and transparent backgrounds.
+Returned image-model token usage counts against existing
+agent/channel budgets; image costs remain unknown without appropriate configured pricing.
+Interrupted or uncertain paid calls are not automatically retried. This tool generates new
+images; source-image editing is not yet supported. Restart the API and worker after upgrading.
 
 ## How it works
 

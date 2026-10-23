@@ -18,7 +18,7 @@ def test_fresh_database_reaches_head(tmp_path: Path):
     with engine.connect() as connection:
         tables = set(inspect(connection).get_table_names())
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert version == "0005_provider_services"
+    assert version == "0006_image_display"
     assert {"user", "auth_session", "contact_block", "worker_heartbeat", "client_message"} <= tables
 
 
@@ -47,7 +47,7 @@ def test_existing_create_all_database_keeps_its_rows(tmp_path: Path):
         version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
         tables = set(inspect(connection).get_table_names())
     assert row[0] == "kept-hash"
-    assert version == "0005_provider_services"
+    assert version == "0006_image_display"
     assert "auth_session" in tables and "contact_block" in tables
 
 
@@ -120,7 +120,7 @@ def test_database_at_previous_head_gains_provider_tables_without_losing_vm(tmp_p
     with engine.connect() as connection:
         assert set(provider_tables) <= set(inspect(connection).get_table_names())
         assert connection.execute(text("SELECT sandbox_id FROM tasksandbox WHERE task_id = 'kept'")).scalar() == "same-vm"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005_provider_services"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006_image_display"
 
 
 def test_alembic_url_preserves_percent_encoded_credentials(monkeypatch):
@@ -130,3 +130,18 @@ def test_alembic_url_preserves_percent_encoded_credentials(monkeypatch):
     import app.persistence.migrate as migrate
     monkeypatch.setattr(migrate, "settings", SimpleNamespace(database_url=url))
     assert alembic_config().get_main_option("sqlalchemy.url") == url
+
+
+def test_image_display_upgrade_preserves_existing_image_receipts(tmp_path):
+    from sqlalchemy import text, inspect
+    engine = create_engine(f"sqlite:///{tmp_path / 'images.db'}")
+    upgrade_database(engine)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO imagegeneration (id, task_id, status, document_id, model, error, created_at) VALUES ('kept', 'task', 'completed', 'png', 'offline', '', '2026-10-22')"))
+        connection.execute(text("DROP TABLE imagegenerationdisplay"))
+        connection.execute(text("UPDATE alembic_version SET version_num = '0005_provider_services'"))
+    upgrade_database(engine)
+    upgrade_database(engine)
+    with engine.connect() as connection:
+        assert "imagegenerationdisplay" in inspect(connection).get_table_names()
+        assert connection.execute(text("SELECT document_id FROM imagegeneration WHERE id = 'kept'")).scalar() == "png"

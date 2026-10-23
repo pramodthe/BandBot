@@ -239,7 +239,20 @@ export interface MessageApproval {
   note: string;
 }
 
+export interface ImageGenerationActivity {
+  id: string;
+  task_id: string;
+  agent_id: number;
+  title: string;
+  size: string;
+  status: "generating" | "ready" | "error";
+  document_id: string | null;
+  model: string;
+  error: string;
+}
+
 export type MessageComponent =
+  | { id: number; kind: "image"; props: { documentId: string; title: string; model: string } }
   | { id: number; kind: "sandbox"; props: SandboxedUISurface }
   | { id: number; kind: "app"; props: { previewId: string; title: string; port: number } }
   | { id: number; kind: "ui"; props: AssistantUISurface }

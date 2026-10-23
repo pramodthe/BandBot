@@ -53,7 +53,7 @@ The application database defaults to `backend/band_slack.db`. Both processes mus
 
 ### OpenAI and documents
 
-Admins open **OpenAI settings** in the navigation rail to save one encrypted key, an allowed model list and a default model. Saving performs small billable image/tool capability checks before enabling the list. `OPENAI_API_KEY` is the fallback when no key is saved. Model choices are snapshotted when tasks are created; a later profile change does not alter a paused task.
+Admins open **Providers & APIs** in the navigation rail to choose service defaults. **OpenAI quick setup** saves an encrypted key, lets admins choose allowed models from a checkbox dropdown, and selects a default from those models. Removing the current default selects the first remaining model; at least one model must stay selected. Saving performs small billable image/tool capability checks before enabling the list. `OPENAI_API_KEY` is the fallback when no key is saved. Model choices are snapshotted when tasks are created; a later profile change does not alter a paused task.
 
 Use the chat paperclip or drag files onto the composer, then send the message. Files stay private to the uploader until sent. Mention an agent in channels, or send directly in a private chat, to request analysis. **Documents** shows processing, preview, download, retry and removal. Supported formats are PDF, DOCX (text/tables), XLSX, CSV, UTF-8 TXT/Markdown, PNG, JPEG and WebP, up to 25 MiB each and ten attachments per message. PDF processing is bounded to 300 pages, workbooks to 200,000 cells and extracted text to three million characters. Split larger files. Word charts/images requiring visual interpretation must be supplied as PDF.
 
@@ -156,7 +156,7 @@ This cursor orders one API process's events. It does not add multi-process fan-o
 
 On explicit request, agents can build custom calculators, simulations, SVG diagrams and 3D explanations with `generate_sandboxed_ui`. The three adapted UI skills are off by default and can be enabled per agent. Each task produces one custom card; revisions replace its draft, and saved interactive answers reopen from **Views**. The 151 native Assistant UI entries remain available. Widget follow-ups require a human review outside the isolated iframe; ordinary approvals still apply. See [Interactive answers](interactive-ui.md) for skill controls, sandbox policy and restart instructions.
 
-The complete 151-entry Assistant UI Elements collection is installed, with 55 registered UI types and 22 discoverable composition examples. Admins can open **Workspace interfaces** from their user menu to browse the collection, channel activity, and the optional conversation interface. See [Elements integration](assistant-ui-elements.md) for backend bindings and capabilities that still require additional implementation.
+The complete 151-entry Assistant UI Elements collection is installed, with 55 registered UI types and 22 discoverable composition examples. Agents discover supported components and examples through `ui_elements` and render them in ordinary chat. See [Elements integration](assistant-ui-elements.md) for backend bindings and capabilities that still require additional implementation.
 
 ## E2B computer use
 

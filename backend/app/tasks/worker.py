@@ -46,6 +46,7 @@ TOOL_LABELS = {
     "show_table": "Building a table", "show_chart": "Drawing a chart", "show_spec": "Building a spec sheet",
     "ask_user": "Preparing a question", "present_ui": "Building an interactive reply", "ui_catalog": "Choosing UI components",
     "generate_sandboxed_ui": "Building an interactive interface",
+    "generate_image": "Generating an image",
 }
 
 
