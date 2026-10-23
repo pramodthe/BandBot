@@ -10,9 +10,10 @@ from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from sqlmodel import Session, select
 from sqlalchemy import case, or_, update
+from sqlalchemy.exc import IntegrityError
 
 from app.auth import (authenticate, current_session_id, current_user, hash_password, issue_token,
                       require_production_secret, revoke_session, revoke_user_sessions, verify_password)
@@ -104,6 +105,8 @@ async def validation_error(request: Request, exc: RequestValidationError):
     # FastAPI's default validation response includes rejected input values, including pasted credentials.
     if request.url.path.startswith(("/api/agent-connections", "/api/band/account")):
         return JSONResponse({"detail": "Invalid connection details. Check the provider, name and credential."}, status_code=422)
+    if request.url.path == "/api/auth/signup" and any("band_api_key" in err.get("loc", ()) for err in exc.errors()):
+        return JSONResponse({"detail": "Use a Band human API key (band_u_...) from your Band settings."}, status_code=422)
     return await request_validation_exception_handler(request, exc)
 
 
@@ -119,6 +122,8 @@ class SignupBody(BaseModel):
     username: str = Field(min_length=2, max_length=32, pattern=r"^[a-zA-Z0-9_.-]+$")
     display_name: str = Field(min_length=1, max_length=48)
     password: str = Field(min_length=6, max_length=128)
+    # Each person brings their own Band human key. New agents register on that account.
+    band_api_key: SecretStr = Field(min_length=10, max_length=2000)
 
 
 class LoginBody(BaseModel):
@@ -145,9 +150,18 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
     username = body.username.lower()
     if session.exec(select(User).where(User.username == username)).first():
         raise HTTPException(409, "That username is taken")
+    from app.api.people import authenticate_human_key, save_band_account
+    key = body.band_api_key.get_secret_value().strip()
+    owner = await authenticate_human_key(key)
     user = User(username=username, display_name=body.display_name.strip(), password_hash=hash_password(body.password))
     session.add(user)
-    session.commit()
+    session.flush()
+    save_band_account(session, user.id, key, owner)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "This Band account is already connected to another app user") from None
     session.refresh(user)
     _join_general(session, user)
     session.commit()

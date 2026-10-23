@@ -11,6 +11,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [bandKey, setBandKey] = useState("");
   const [code, setCode] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -37,7 +38,9 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         return;
       }
       const body =
-        mode === "signup" ? { username, display_name: displayName || username, password } : { username, password };
+        mode === "signup"
+          ? { username, display_name: displayName || username, password, band_api_key: bandKey.trim() }
+          : { username, password };
       const result = await api<{ token: string }>("POST", `/api/auth/${mode}`, body);
       onAuthed(result.token);
     } catch (err) {
@@ -70,6 +73,23 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
               placeholder="e.g. Alice Chen"
             />
           </Field>
+        )}
+        {mode === "signup" && (
+          <Field id={`${id}-band`} label="Band human API key">
+            <Input
+              id={`${id}-band`}
+              type="password"
+              autoComplete="off"
+              value={bandKey}
+              onChange={(e) => setBandKey(e.target.value)}
+              placeholder="band_u_…"
+              required
+              minLength={10}
+            />
+          </Field>
+        )}
+        {mode === "signup" && (
+          <p className="text-muted-foreground -mt-2 text-xs">Create this key in your own Band account. Agents you add use that account.</p>
         )}
         {mode === "reset" && (
           <Field id={`${id}-code`} label="Reset code">

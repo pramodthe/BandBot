@@ -226,6 +226,9 @@ class AppService:
         await org.connect()
         if not org.online or not org.owner or org.owner.id != account.band_user_id:
             await org.close()
+            # Browser tests have no live Band account. Human chat and the local fake agent still run.
+            if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
+                return self.org
             raise ServiceError("Your Band connection needs to be reconnected", 409)
         self._user_orgs[user_id] = (account.secret_enc, org)
         return org

@@ -18,6 +18,7 @@ def test_signup_and_login_preserve_the_complete_password(password):
     with TestClient(app) as client:
         signed_up = client.post("/api/auth/signup", json={
             "username": username, "display_name": "Password test", "password": password,
+            "band_api_key": f"band_u_{username}",
         })
         assert signed_up.status_code == 200, signed_up.text
         login = client.post("/api/auth/login", json={"username": username, "password": password})
@@ -54,7 +55,9 @@ def test_short_new_passwords_round_trip_and_invalid_hashes_fail_closed():
 def test_signup_keeps_the_128_character_limit():
     init_db()
     with TestClient(app) as client:
+        username = "limit-" + uuid4().hex[:12]
         response = client.post("/api/auth/signup", json={
-            "username": "limit-" + uuid4().hex[:12], "display_name": "Password test", "password": "a" * 129,
+            "username": username, "display_name": "Password test", "password": "a" * 129,
+            "band_api_key": f"band_u_{username}",
         })
         assert response.status_code == 422

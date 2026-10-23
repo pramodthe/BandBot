@@ -14,6 +14,7 @@ from app.auth import encrypt_secret
 from app.band.org import BandOrg, Owner
 from app.persistence.models import (AgentPersona, AgentProfile, AgentTask, AuditEvent, Budget, Channel, ChannelMember, ChannelPolicy,
                                     DirectMessage, Message, TaskCacheUsage, TaskUsage, User, WorkspaceRole, db, init_db)
+from app.config import settings
 from app.workspace.service import AppService
 from app.persistence.models import UserBandAccount, PrivateConversation, HumanDirectMessage, BandAgentOwner, ChannelInvitation
 from app.persistence.models import MessageComponent, ComponentResponse, TaskInput, AgentRuntime, AgentConnection, AgentOAuthAttempt
@@ -110,7 +111,7 @@ def test_channels_are_band_rooms_and_visible_agents_can_be_created(svc: AppServi
         assert master.band_agent_id in svc.org.participants[channel["band_room_id"]]
         scout = await svc.create_agent(name="Scout", role="researcher", instructions="Find facts",
                                        model=master.model, channel_id=channel["id"], created_by=user.id)
-        assert svc.org.registered == ["Master", "Scout"]
+        assert svc.org.registered == [settings.master_agent_name, "Scout"]
         assert scout.band_agent_id in svc.org.participants[channel["band_room_id"]]
         with db() as session:
             assert session.get(ChannelMember, (channel["id"], "agent", scout.id)) is not None

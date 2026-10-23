@@ -110,7 +110,7 @@ cd frontend
 npm run dev
 ```
 
-Open **[localhost:5173](http://localhost:5173)**, create an account, and mention **`@Master`** in **`#general`**.
+Open **[localhost:5173](http://localhost:5173)** and create an account with your own Band human API key (`band_u_...`). Agents you create register on that Band account. The server `BAND_USER_API_KEY` is only the workspace connection.
 
 > The worker is required for agents to run. The API accepts messages and queues tasks; the separate worker executes them.
 

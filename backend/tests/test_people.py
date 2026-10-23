@@ -77,7 +77,10 @@ def social(svc, monkeypatch):
     with TestClient(http.app) as client:
         users = []
         for name in ("alice", "bob", "cara"):
-            result = client.post("/api/auth/signup", json={"username": name, "display_name": name.title(), "password": "test-password"}).json()
+            result = client.post("/api/auth/signup", json={
+                "username": name, "display_name": name.title(), "password": "test-password",
+                "band_api_key": f"band_u_{name}",
+            }).json()
             headers = {"Authorization": f"Bearer {result['token']}"}
             users.append((result["user"]["id"], headers))
         yield client, users, network, svc
@@ -98,23 +101,28 @@ def friends(client, users):
     assert accepted.status_code == 200, accepted.text
 
 
-def test_personal_band_is_optional_and_existing_rooms_keep_their_account(social):
-    client, ((alice, a), (_, b), _), _, svc = social
-    assert svc.org.online
-    workspace_channel = client.post("/api/channels", json={"name": "private"}, headers=a).json()
-    assert workspace_channel["private"]
-    link(client, a, "alice")
-    assert asyncio.run(svc.room_org(workspace_channel["id"])) is svc.org
-    private = client.post("/api/channels", json={"name": "personal-replies"}, headers=a).json()
-    assert svc.message_reply_to(alice, private["id"]) == "alice"
-    general = next(c for c in client.get("/api/bootstrap", headers=a).json()["channels"] if c["name"] == "general")
-    assert svc.message_reply_to(alice, general["id"]) == svc.org.owner.id
+def test_signup_requires_a_personal_band_key_and_new_rooms_use_it(social):
+    client, ((alice, a), (_, b), _), network, svc = social
+    missing = client.post("/api/auth/signup", json={"username": "erin", "display_name": "Erin", "password": "test-password"})
+    assert missing.status_code == 422 and "band_u_..." in missing.text and "erin" not in missing.text.lower()
+    taken = client.post("/api/auth/signup", json={
+        "username": "erin", "display_name": "Erin", "password": "test-password", "band_api_key": "band_u_alice",
+    })
+    assert taken.status_code == 409 and "band_u_alice" not in taken.text
     with db() as session:
         account = session.get(UserBandAccount, alice)
+        assert account.band_user_id == "alice"
         assert account.secret_enc != "band_u_alice" and decrypt_secret(account.secret_enc) == "band_u_alice"
+    private = client.post("/api/channels", json={"name": "personal-replies"}, headers=a).json()
+    assert svc.message_reply_to(alice, private["id"]) == "alice"
+    assert asyncio.run(svc.room_org(private["id"])).owner.id == "alice"
+    general = next(c for c in client.get("/api/bootstrap", headers=a).json()["channels"] if c["name"] == "general")
+    assert svc.message_reply_to(alice, general["id"]) == svc.org.owner.id
+    agent = client.post("/api/agents", json={"name": "Helper", "channel_id": private["id"]}, headers=a).json()
+    assert agent["owner_id"] == alice and network["registers"] == ["alice"]
+    assert "band_u_alice" not in client.get("/api/bootstrap", headers=a).text
     assert client.put("/api/band/account", json={"api_key": "band_u_alice"}, headers=b).status_code == 409
     assert client.put("/api/band/account", json={"api_key": "band_u_different"}, headers=a).status_code == 409
-    assert "band_u_alice" not in client.get("/api/bootstrap", headers=a).text
     invalid = client.put("/api/band/account", json={"api_key": "secret"}, headers=a)
     assert invalid.status_code == 422 and "secret" not in invalid.text
 
@@ -151,12 +159,14 @@ def test_human_contacts_and_private_channels_work_with_band_offline(social):
     assert client.post(f"/api/channels/{dm['id']}/messages", json={"content": "Hi Bob"}, headers=a).status_code == 200
     assert client.get(f"/api/channels/{dm['id']}/messages", headers=b).json()[0]["content"] == "Hi Bob"
     channel = client.post("/api/channels", json={"name": "humans-only"}, headers=a).json()
-    assert channel["private"] and channel["band_room_id"] is None and not channel["agent_ids"]
+    # The workspace key is offline. Alice's own Band account still opens the room.
+    assert channel["private"] and channel["band_room_id"] and not channel["agent_ids"]
+    assert network["rooms"][channel["band_room_id"]] == {"alice"}
     assert client.post(f"/api/channels/{channel['id']}/invitations", json={"user_id": bob}, headers=a).status_code == 200
     invite = client.get("/api/people/invitations", headers=b).json()[0]
     assert client.post(f"/api/people/invitations/{invite['id']}/decision", json={"accept": True}, headers=b).status_code == 200
     assert client.get(f"/api/channels/{channel['id']}/messages", headers=c).status_code == 404
-    assert network["sends"] == [] and network["rooms"] == {}
+    assert network["sends"] == []
 
 
 def test_local_contact_requests_are_idempotent_and_need_recipient_consent(social):
@@ -181,7 +191,7 @@ def test_app_users_share_agent_channels_using_the_workspace_band_account(social)
     friends(client, users)
     channel = client.post("/api/channels", json={"name": "with-ai"}, headers=a).json()
     agent = client.post("/api/agents", json={"name": "Helper", "channel_id": channel["id"]}, headers=a).json()
-    assert agent["owner_id"] == alice and network["registers"] == ["workspace"]
+    assert agent["owner_id"] == alice and network["registers"] == ["alice"]
     client.post(f"/api/channels/{channel['id']}/invitations", json={"user_id": users[1][0]}, headers=a)
     invite = client.get("/api/people/invitations", headers=b).json()[0]
     client.post(f"/api/people/invitations/{invite['id']}/decision", json={"accept": True}, headers=b)
@@ -189,8 +199,8 @@ def test_app_users_share_agent_channels_using_the_workspace_band_account(social)
     assert sent.status_code == 200
     with db() as session:
         task = session.exec(select(AgentTask).where(AgentTask.agent_id == agent["id"])).one()
-        assert task.reply_to == "workspace"
-    assert network["sends"][-1][0] == "workspace"
+        assert task.reply_to == "alice"
+    assert network["sends"][-1][0] == "alice"
     assert network["sends"][-1][2] == "**Bob:** @Helper hello"
     assert client.post(f"/api/agents/{agent['id']}/dm", headers=b).status_code == 403
 
@@ -210,7 +220,7 @@ def test_invitations_require_acceptance_and_leave_revokes_access(social):
     decision = f"/api/people/invitations/{invitation['id']}/decision"
     assert client.post(decision, json={"accept": True}, headers=c).status_code == 404
     assert client.post(decision, json={"accept": True}, headers=b).status_code == 200
-    assert network["rooms"][channel["band_room_id"]] == {"workspace"}
+    assert network["rooms"][channel["band_room_id"]] == {"alice"}
     assert client.post(decision, json={"accept": True}, headers=b).status_code == 200
     assert client.get(path + "/messages", headers=b).status_code == 200
     assert client.post(path + "/leave", headers=b).status_code == 200
@@ -299,7 +309,7 @@ def test_shared_agent_creates_private_channel_teammates_for_its_owner(social):
                                         model="test-model", channel_id=channel["id"], created_by_agent=master.id))
     with db() as session:
         assert session.get(BandAgentOwner, child.id).user_id == alice
-    assert network["registers"] == ["workspace"]
+    assert network["registers"] == ["alice"]
     assert child.id not in [agent["id"] for agent in client.get("/api/bootstrap", headers=b).json()["agents"]]
     assert client.post(f"/api/agents/{child.id}/dm", headers=b).status_code == 403
 
@@ -356,7 +366,7 @@ def test_band_poll_waits_for_the_outbound_message_receipt(social, monkeypatch):
                           author_name="Alice", content="Hello from the app")
         session.add(message)
         session.commit()
-    org = svc.org
+    org = asyncio.run(svc.room_org(channel["id"]))
     now = datetime.now(timezone.utc)
 
     async def scenario():
@@ -368,7 +378,7 @@ def test_band_poll_waits_for_the_outbound_message_receipt(social, monkeypatch):
             return "outbound-receipt"
 
         async def inbox(*args):
-            return [Obj(id="outbound-receipt", sender_id="workspace", content=f"**Alice:** {message.content}", inserted_at=now)]
+            return [Obj(id="outbound-receipt", sender_id=org.owner.id, content=f"**Alice:** {message.content}", inserted_at=now)]
         monkeypatch.setattr(org, "send", delayed_send)
         monkeypatch.setattr(org, "messages_since", inbox)
         relay = asyncio.create_task(svc._relay(channel["id"], message.id, "Alice", message.content, [], alice))

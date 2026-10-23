@@ -26,6 +26,7 @@ from app.auth import encrypt_secret
 def _signup(client: TestClient, username: str) -> dict:
     response = client.post("/api/auth/signup", json={
         "username": username, "display_name": username.title(), "password": "secret123",
+        "band_api_key": f"band_u_{username}",
     })
     assert response.status_code == 200, response.text
     body = response.json()
@@ -71,8 +72,10 @@ def test_signup_and_login_attempts_are_limited(monkeypatch):
     monkeypatch.setattr(http, "login_limiter", AttemptLimiter(2, 600))
     with TestClient(app) as client:
         for _ in range(2):
-            assert client.post("/api/auth/signup", json={"username": f"lim{uuid4().hex[:6]}", "display_name": "Lim", "password": "secret123"}).status_code == 200
-        locked = client.post("/api/auth/signup", json={"username": f"lim{uuid4().hex[:6]}", "display_name": "Lim", "password": "secret123"})
+            name = f"lim{uuid4().hex[:6]}"
+            assert client.post("/api/auth/signup", json={"username": name, "display_name": "Lim", "password": "secret123", "band_api_key": f"band_u_{name}"}).status_code == 200
+        locked_name = f"lim{uuid4().hex[:6]}"
+        locked = client.post("/api/auth/signup", json={"username": locked_name, "display_name": "Lim", "password": "secret123", "band_api_key": f"band_u_{locked_name}"})
         assert locked.status_code == 429
         assert locked.json()["detail"] == GENERIC_LOCKOUT
         name = f"log{uuid4().hex[:6]}"
