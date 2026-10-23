@@ -7,6 +7,25 @@ from app.persistence.models import (AgentTask, AgentProfile, User, ComputerScope
 from app.providers.models import (ProviderConnection, ProviderRevision, ServiceSelection,
                                   TaskServiceBinding, DocumentServiceBinding)
 
+def computer_scope_parts(key: str) -> tuple[str, str] | None:
+    """Keys written by this app are agent-<Band id>-channel-<channel id>."""
+    owner, marker, channel = key.removeprefix("agent-").rpartition("-channel-")
+    if not marker or not owner or not channel:
+        return None
+    return owner, channel
+
+
+def remember_computer_scopes(session, available: dict) -> None:
+    for scope in session.exec(select(ComputerScope)).all():
+        if scope.provider not in available:
+            continue
+        parts = computer_scope_parts(scope.key)
+        if parts is None:
+            continue
+        owner, channel = parts
+        session.add(ServiceSelection(scope=f"computer:{owner}:{channel}", bindings={"computer": available[scope.provider]}))
+
+
 def bootstrap():
     from filelock import FileLock
     from pathlib import Path
@@ -63,11 +82,7 @@ def _bootstrap():
             if legacy_installation and "composio" in available:
                 bindings["integrations"] = available["composio"]
             session.add(ServiceSelection(scope="workspace", bindings=bindings))
-            for scope in session.exec(select(ComputerScope)).all():
-                if scope.provider not in available:
-                    continue
-                owner, channel = scope.key.removeprefix("agent-").rsplit("-channel-", 1)
-                session.add(ServiceSelection(scope=f"computer:{owner}:{channel}", bindings={"computer": available[scope.provider]}))
+            remember_computer_scopes(session, available)
         else:
             bindings = existing_workspace.bindings
             available = {r.provider: {"connection_id": r.id, "revision": 1, "provider": r.provider}

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlmodel import select
 
 import app.workspace.service as service_module
@@ -152,6 +153,52 @@ def test_agent_replies_to_the_owner_reach_humans_and_polling_dedupes(svc: AppSer
     ]
     with db() as session:
         assert session.get(ChannelMember, (channel_id, "agent", writer_id)) is not None
+
+
+def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypatch):
+    import app.api.http as http
+    from app.providers.management import create_connection
+    from app.providers.models import ProviderConnection, ProviderRevision
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    removed: list[str] = []
+
+    async def delete_agent(agent_id: str) -> None:
+        removed.append(agent_id)
+
+    def reject_model(*_args, **_kwargs):
+        raise ValueError("Choose a verified model")
+
+    monkeypatch.setattr(http, "service", svc)
+    monkeypatch.setattr(svc, "startup", noop)
+    monkeypatch.setattr(svc, "shutdown", noop)
+    monkeypatch.setattr(svc.org, "delete_agent", delete_agent)
+    monkeypatch.setattr("app.providers.display.set_agent_model", reject_model)
+
+    with TestClient(http.app) as client:
+        signed = client.post("/api/auth/signup", json={"username": "ada", "display_name": "Ada", "password": "secret123"})
+        assert signed.status_code == 200, signed.text
+        headers = {"Authorization": f"Bearer {signed.json()['token']}"}
+        user_id = signed.json()["user"]["id"]
+        with db() as session:
+            row = create_connection(session, provider="openai", label="Offline model", key="offline-secret",
+                                    config={"models": ["test-model"]}, user_id=user_id)
+            revision = session.get(ProviderRevision, (row.id, 1))
+            revision.verification = {"passed": True, "models": {"test-model": {"tools": True, "vision": True}}}
+            session.add(revision)
+            session.commit()
+            ref = {"connection_id": row.id, "revision": 1, "provider": "openai", "model": "test-model"}
+        created = client.post("/api/agents", json={"name": "Tempest", "role": "writer", "model_ref": ref}, headers=headers)
+        assert created.status_code == 422, created.text
+        assert "verified" in created.json()["detail"]
+        with db() as session:
+            assert session.exec(select(AgentProfile).where(AgentProfile.name == "Tempest")).first() is None
+            session.delete(session.get(ProviderRevision, (ref["connection_id"], 1)))
+            session.delete(session.get(ProviderConnection, ref["connection_id"]))
+            session.commit()
+    assert removed == ["agent-tempest"]
 
 
 def test_direct_messages_are_private_rooms_the_agent_answers_without_a_mention(svc: AppService):

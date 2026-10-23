@@ -10,7 +10,8 @@ from app.workspace.events import EventBus
 from app.main import app
 from sqlmodel import select
 
-from app.persistence.models import AgentProfile, AgentTask, Channel, ChannelMember, DirectMessage, User, db
+from app.persistence.models import (AgentProfile, AgentTask, BandAgentOwner, Channel, ChannelMember,
+                                    DirectMessage, User, db)
 
 
 def _signup(client: TestClient, username: str, name: str) -> dict:
@@ -135,8 +136,37 @@ def test_login_does_not_ask_for_a_band_key_or_list_server_agents(monkeypatch):
         assert boot.status_code == 200 and "band_u_" not in boot.text
         peers = client.get(f"/api/channels/{general_id}/peers", headers=auth)
         assert peers.status_code == 403 and "band_u_" not in peers.text
+        invited = client.post(f"/api/channels/{general_id}/outside-agents", headers=auth,
+                              json={"band_id": "00000000-0000-0000-0000-000000000000"})
+        assert invited.status_code == 403 and "invite" in invited.json()["detail"]
+        assert "band_u_" not in invited.text
         created = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=auth)
         assert created.status_code == 503 and "band_u_" not in created.text and "own Band" not in created.text
+
+
+def test_agent_model_update_rejects_a_missing_provider_revision():
+    with TestClient(app) as client:
+        signed = _signup(client, "modeler", "Modeler")
+        headers = {"Authorization": f"Bearer {signed['token']}"}
+        user_id = signed["user"]["id"]
+        with db() as session:
+            profile = AgentProfile(name="Quill", role="writer", band_agent_id="agent-quill-missing-revision",
+                                   band_api_key_enc=encrypt_secret("k"), model="old-model", created_by=user_id)
+            session.add(profile)
+            session.commit()
+            session.refresh(profile)
+            session.add(BandAgentOwner(agent_id=profile.id, user_id=user_id, band_user_id="local"))
+            from app.providers.models import ServiceSelection
+            session.add(ServiceSelection(scope=f"agent:{profile.id}", bindings={
+                "llm": {"connection_id": "missing-connection", "revision": 1, "provider": "openai", "model": "old-model"},
+            }))
+            session.commit()
+            agent_id = profile.id
+        updated = client.patch(f"/api/agents/{agent_id}", json={"model": "new-model"}, headers=headers)
+        assert updated.status_code == 422, updated.text
+        assert "allowed provider model" in updated.json()["detail"]
+        with db() as session:
+            assert session.get(AgentProfile, agent_id).model == "old-model"
 
 
 def test_private_channel_events_reach_only_their_owner():

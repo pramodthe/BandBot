@@ -352,6 +352,25 @@ def test_only_master_can_create_teammates(team):
     assert "create_teammate" not in {t.name for t in tools_for(other)}
 
 
+def test_workspace_band_invites_require_an_admin(team, monkeypatch):
+    svc, _, _, channel, user = team
+    monkeypatch.setattr("app.config.uses_workspace_band_key", lambda: True)
+
+    async def scenario():
+        with pytest.raises(ServiceError, match="invite") as denied:
+            await svc.invite_outside_agent(user, channel.id, "peer-tom")
+        assert denied.value.status == 403
+        with db() as session:
+            from app.persistence.models import WorkspaceRole
+            session.add(WorkspaceRole(user_id=user.id, role="admin"))
+            session.commit()
+        await svc.invite_outside_agent(user, channel.id, "peer-tom")
+        with db() as session:
+            assert session.get(OutsideAgent, (channel.id, "peer-tom")) is not None
+
+    asyncio.run(scenario())
+
+
 def test_outside_agents_can_be_invited_listed_and_removed(team):
     svc, _, _, channel, user = team
 

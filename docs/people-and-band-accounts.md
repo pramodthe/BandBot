@@ -1,6 +1,6 @@
 # People, contacts, and shared channels
 
-People use ordinary app accounts. They do not need a Band account or individual Band API key to sign in, add contacts, chat, create channels, or accept channel invitations. The server Band key stays on the server. Browsing that account's other agents is limited to workspace admins.
+People use ordinary app accounts. They do not need a Band account or individual Band API key to sign in, add contacts, chat, create channels, or accept channel invitations. The server Band key stays on the server. Browsing or inviting that account's other agents is limited to workspace admins.
 
 Open **People** using the person-plus navigation button or the user menu.
 

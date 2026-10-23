@@ -107,6 +107,21 @@ def test_selection_requires_verified_models_and_rejects_stale_revision(provider_
             apply_selection(session, scope="workspace", expected_version=selection.version,
                             bindings={"llm": {**binding, "model": "unverified-model"}})
 
+def test_computer_scopes_without_a_channel_are_skipped(provider_scope):
+    from app.persistence.models import ComputerScope
+    from app.providers.bootstrap import remember_computer_scopes
+    binding = {"connection_id": "imported-local", "revision": 1, "provider": "local"}
+    channel = uuid4().hex
+    with db() as session:
+        session.add(ComputerScope(key=f"agent-orphan-{channel}", provider="local"))
+        session.add(ComputerScope(key=f"agent-band-{channel}-channel-{channel}", provider="local"))
+        remember_computer_scopes(session, {"local": binding})
+        saved = session.get(ServiceSelection, f"computer:band-{channel}:{channel}")
+        assert saved is not None and saved.bindings["computer"] == binding
+        assert session.get(ServiceSelection, f"computer:orphan-{channel}") is None
+        session.rollback()
+
+
 def test_bootstrap_is_idempotent_and_does_not_reapply_environment(provider_scope):
     with db() as session:
         row = session.get(ServiceSelection, "workspace")

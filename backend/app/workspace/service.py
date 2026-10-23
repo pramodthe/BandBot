@@ -732,15 +732,20 @@ class AppService:
             except Exception:
                 logger.exception("Couldn't remove %s from room %s", profile.name, room_id)
 
+    def _guard_workspace_band_roster(self, org: BandOrg, user_id: int | None, action: str) -> None:
+        """The server Band key is the workspace agent's account, not a member's agent directory."""
+        from app.config import uses_workspace_band_key
+        if user_id is None or org is not self.org or not uses_workspace_band_key():
+            return
+        with db() as session:
+            from app.workspace.permissions import is_admin
+            if not is_admin(session, user_id):
+                raise ServiceError(f"Only an admin can {action} agents on the workspace Band account.", 403)
+
     async def list_peers(self, channel_id: int, user_id: int | None = None) -> list[dict[str, Any]]:
         """Band agents outside this app that could be invited to the channel."""
         org = await self.room_org(channel_id)
-        from app.config import uses_workspace_band_key
-        if user_id is not None and org is self.org and uses_workspace_band_key():
-            with db() as session:
-                from app.workspace.permissions import is_admin
-                if not is_admin(session, user_id):
-                    raise ServiceError("Only an admin can browse agents on the workspace Band account.", 403)
+        self._guard_workspace_band_roster(org, user_id, "browse")
         if not org.online:
             self._require_band()
         with db() as session:
@@ -760,6 +765,7 @@ class AppService:
 
     async def invite_outside_agent(self, user: User, channel_id: int, band_id: str) -> None:
         org = await self.room_org(channel_id)
+        self._guard_workspace_band_roster(org, user.id, "invite")
         if not org.online:
             self._require_band()
         with db() as session:
@@ -770,7 +776,7 @@ class AppService:
                 return
             if session.exec(select(AgentProfile.id).where(AgentProfile.band_agent_id == band_id)).first():
                 raise ServiceError("That agent belongs to this workspace; add it as a teammate instead", 409)
-        peers = await self.list_peers(channel_id)
+        peers = await self.list_peers(channel_id, user.id)
         peer = next((p for p in peers if p["band_id"] == band_id), None)
         if peer is None:
             raise ServiceError("That Band agent isn't available to invite", 404)

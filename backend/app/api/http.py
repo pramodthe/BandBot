@@ -659,7 +659,6 @@ async def create_agent(body: AgentCreateBody, user: User = Depends(current_user)
             raise HTTPException(422, "Use model_ref to select a workspace provider connection")
         from app.providers.bindings import selected
         from app.providers.management import validate_bindings
-        from app.providers.display import set_agent_model
         ref = body.model_ref or selected(session).get("llm")
         if body.model_ref:
             _require_admin(session, user, "Only admins can select workspace provider connections")
@@ -701,9 +700,18 @@ async def create_agent(body: AgentCreateBody, user: User = Depends(current_user)
     )
     if body.model_ref:
         from app.providers.display import set_agent_model
-        try: set_agent_model(session, profile.id, body.model_ref, user)
-        except ValueError as error: raise HTTPException(422, str(error)) from None
-        session.commit()
+        try:
+            set_agent_model(session, profile.id, body.model_ref, user)
+            session.commit()
+        except Exception as error:
+            session.rollback()
+            try:
+                await service.delete_agent(profile)
+            except Exception:
+                logger.exception("Couldn't remove %s after model selection failed", profile.name)
+            if isinstance(error, ValueError):
+                raise HTTPException(422, str(error)) from None
+            raise
     _audit(user, "agent_created", channel_id=channel_id, agent=profile.name, role=profile.role, model=profile.model)
     return service.serialize_agent(profile)
 
@@ -743,7 +751,9 @@ async def update_agent(
     managed_ref = body.model_ref or selected(session, profile.id).get("llm", {})
     if body.model is not None and not runtime and managed_ref.get("connection_id"):
         revision = session.get(ProviderRevision, (managed_ref["connection_id"], managed_ref["revision"]))
-        if body.model not in revision.config.get("models", []): raise HTTPException(422, "Choose an allowed provider model")
+        allowed = (revision.config or {}).get("models", []) if revision else []
+        if revision is None or body.model not in allowed:
+            raise HTTPException(422, "Choose an allowed provider model")
         from app.providers.display import set_agent_model
         try: set_agent_model(session, profile.id, {**managed_ref, "model": body.model}, user)
         except ValueError as error: raise HTTPException(422, str(error)) from None
