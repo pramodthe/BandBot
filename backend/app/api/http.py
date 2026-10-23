@@ -10,10 +10,9 @@ from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 from sqlalchemy import case, or_, update
-from sqlalchemy.exc import IntegrityError
 
 from app.auth import (authenticate, current_session_id, current_user, hash_password, issue_token,
                       require_production_secret, revoke_session, revoke_user_sessions, verify_password)
@@ -25,7 +24,7 @@ from app.api.openai_settings import router as openai_router
 from app.api.app_previews import router as app_previews_router
 from app.computer.app_proxy import AppPreviewDispatch
 from app.openai_provider import configuration, model_catalog, migrate_profiles
-from app.config import FRONTEND_DIST, settings, uses_workspace_band_key
+from app.config import FRONTEND_DIST, settings
 from app.workspace.events import bus
 from app.tasks.usage import channel_usage, task_usage
 from app.persistence.models import (AgentMemory, AgentPersona, AgentTask, AgentProfile, AuditEvent, Budget, Channel, ChannelMember,
@@ -105,8 +104,6 @@ async def validation_error(request: Request, exc: RequestValidationError):
     # FastAPI's default validation response includes rejected input values, including pasted credentials.
     if request.url.path.startswith(("/api/agent-connections", "/api/band/account")):
         return JSONResponse({"detail": "Invalid connection details. Check the provider, name and credential."}, status_code=422)
-    if request.url.path == "/api/auth/signup" and any("band_api_key" in err.get("loc", ()) for err in exc.errors()):
-        return JSONResponse({"detail": "Use a Band human API key (band_u_...) from your Band settings."}, status_code=422)
     return await request_validation_exception_handler(request, exc)
 
 
@@ -122,15 +119,11 @@ class SignupBody(BaseModel):
     username: str = Field(min_length=2, max_length=32, pattern=r"^[a-zA-Z0-9_.-]+$")
     display_name: str = Field(min_length=1, max_length=48)
     password: str = Field(min_length=6, max_length=128)
-    # Each person brings their own Band human key. New agents register on that account.
-    band_api_key: SecretStr = Field(min_length=10, max_length=2000)
 
 
 class LoginBody(BaseModel):
     username: str
     password: str
-    # Legacy accounts have no personal key yet. The server Band key is not a substitute.
-    band_api_key: SecretStr | None = None
 
 
 def _join_general(session: Session, user: User) -> None:
@@ -152,29 +145,18 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
     username = body.username.lower()
     if session.exec(select(User).where(User.username == username)).first():
         raise HTTPException(409, "That username is taken")
-    from app.api.people import authenticate_human_key, save_band_account
-    key = body.band_api_key.get_secret_value().strip()
-    owner = await authenticate_human_key(key)
     user = User(username=username, display_name=body.display_name.strip(), password_hash=hash_password(body.password))
     session.add(user)
-    session.flush()
-    save_band_account(session, user.id, key, owner)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(409, "This Band account is already connected to another app user") from None
+    session.commit()
     session.refresh(user)
     ensure_owner(session)
-    # #general belongs to the workspace Band room. Other accounts do not join it.
-    if role_of(session, user.id) == "owner":
-        _join_general(session, user)
-        session.commit()
+    _join_general(session, user)
+    session.commit()
     await bus.publish({"type": "user", "user": serialize_user(user)})
     if role_of(session, user.id) != "member":
         await bus.publish({"type": "workspace_role", "user_id": user.id, "role": role_of(session, user.id)})
     general = session.exec(select(Channel).where(Channel.name == "general")).first()
-    if general and role_of(session, user.id) == "owner":
+    if general:
         await service.publish_channel(general.id)
     return {"token": issue_token(user.id), "user": serialize_user(user)}
 
@@ -190,19 +172,6 @@ async def login(body: LoginBody, request: Request, session: Session = Depends(ge
         if login_limiter.too_many(key):
             raise HTTPException(429, GENERIC_LOCKOUT)
         raise HTTPException(401, "Wrong username or password")
-    account = session.get(UserBandAccount, user.id)
-    if uses_workspace_band_key() and not (account and account.secret_enc):
-        if body.band_api_key is None or not body.band_api_key.get_secret_value().strip():
-            raise HTTPException(409, "Add your Band human API key from your own Band account.")
-        from app.api.people import authenticate_human_key, save_band_account
-        key = body.band_api_key.get_secret_value().strip()
-        owner = await authenticate_human_key(key)
-        save_band_account(session, user.id, key, owner)
-        try:
-            session.commit()
-        except IntegrityError:
-            session.rollback()
-            raise HTTPException(409, "This Band account is already connected to another app user") from None
     return {"token": issue_token(user.id), "user": serialize_user(user)}
 
 
@@ -277,7 +246,7 @@ async def bootstrap(user: User = Depends(current_user), session: Session = Depen
     visible = [c for c in session.exec(select(Channel).order_by(Channel.name)).all()
                if channel_visible(session, c.id, user.id) and (c.id not in dms or dms[c.id].agent_id is not None)]
     account = session.get(UserBandAccount, user.id)
-    band = {"configured": False, "online": False, "owner_name": None, "owner_handle": None, "error": None} if uses_workspace_band_key() else service.org.status()
+    band = service.org.status()
     if account and account.secret_enc:
         cached = service._user_orgs.get(user.id)
         band = {"configured": bool(account.secret_enc), "online": bool(account.secret_enc),

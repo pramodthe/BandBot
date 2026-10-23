@@ -6,7 +6,6 @@ async function signup(page: Page, username: string, displayName: string) {
   await page.getByLabel("Username").fill(username);
   await page.getByLabel("Display name").fill(displayName);
   await page.getByLabel("Password").fill("secret123");
-  await page.getByLabel("Band human API key").fill(`band_u_${username}`);
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("button", { name: /^People/ })).toBeVisible();
 }

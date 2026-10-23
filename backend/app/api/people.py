@@ -1,4 +1,4 @@
-"""App contacts and private conversations. Each new account brings its own Band human API key."""
+"""App contacts and private conversations. A personal Band key is optional."""
 from __future__ import annotations
 
 import os

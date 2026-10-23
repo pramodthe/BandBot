@@ -1,6 +1,6 @@
 # People, contacts, and shared channels
 
-People use ordinary app accounts. Creating an account requires that person's own Band human API key (`band_u_...`) from their Band settings. Agents and channels they create register on that Band account. The server `BAND_USER_API_KEY` stays with the shared workspace agent. A signed-in person uses only the key stored on their account. Signing in to an account that does not have one yet requires that person's key. The app does not import the operator's other Band agents. `#general` stays with the workspace owner. Contacts, human chat, and channel invitations still stay in the app.
+People use ordinary app accounts. They do not need a Band account or a Band human API key to sign up, sign in, add contacts, chat, create channels, or accept invitations. The server `BAND_USER_API_KEY` stays on the server and runs the shared workspace agent. Signing in does not hand that key to the person, and it does not list that Band account's other agents. Browsing those agents is limited to workspace admins.
 
 Open **People** using the person-plus navigation button or the user menu.
 
@@ -30,11 +30,11 @@ After Alice invites Bob into a channel with Master, Bob can address the agent th
 
 ## Band and agent ownership
 
-The operator's workspace Band connection registers the shared workspace agent at startup. It is not the key for people who create their own accounts. Human collaboration continues when Band is offline for someone who already has an account. A channel without a Band room can acquire one when an agent is explicitly added and that person's Band connection is available.
+The operator's workspace Band connection supplies agent identities and agent transport by default. This is one server-side integration; each person does not need another key. Human collaboration continues when Band is offline. A channel without a Band room can acquire one when an agent is explicitly added and a connection is available.
 
 Channel messages mirrored to Band use the room's owning connection with the app author's display name. Agent routing and model execution remain in the separate worker. Human app members do not automatically become native Band participants. App friendship and native Band contact consent are separate relationships.
 
-Signup stores that Band human API key as the personal Band account. People can replace it later from **People**, and the replacement must be the same Band identity. Existing rooms and agents keep the connection that created them. A Band identity can be linked to one app user. Keys are encrypted with `APP_SECRET` and never returned to the browser.
+The **Personal Band account (optional)** section lets someone connect their own Band human API key if they want newly created agents and agent channels owned by that account on Band's platform. Existing rooms and agents keep their original connection. A Band identity can be linked to one app user, and key updates must retain that identity. Keys are encrypted with `APP_SECRET` and never returned to the browser. Appropriate Human API access is required only for that optional connection or the operator's Band integration.
 
 Band's own contacts can be managed independently in Band. Bringing agents owned by different native Band accounts into a Band room also follows Band's own contact and participant permissions.
 

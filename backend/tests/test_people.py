@@ -15,7 +15,7 @@ import app.workspace.service as service_module
 from app.auth import decrypt_secret, encrypt_secret
 from app.band.listener import BandIdentity, QueuedAgentAdapter
 from app.band.org import BandOrg, Owner
-from app.persistence.models import (AgentConnection, AgentProfile, AgentTask, BandAgentOwner, ChannelMember,
+from app.persistence.models import (AgentConnection, AgentProfile, AgentTask, BandAgentOwner, ChannelMember, User,
                                     Message, UserBandAccount, db)
 from app.tasks.queue import hand_off
 from app.workspace.events import EventBus
@@ -79,9 +79,10 @@ def social(svc, monkeypatch):
         for name in ("alice", "bob", "cara"):
             result = client.post("/api/auth/signup", json={
                 "username": name, "display_name": name.title(), "password": "test-password",
-                "band_api_key": f"band_u_{name}",
             }).json()
             headers = {"Authorization": f"Bearer {result['token']}"}
+            linked = client.put("/api/band/account", json={"api_key": f"band_u_{name}"}, headers=headers)
+            assert linked.status_code == 200, linked.text
             users.append((result["user"]["id"], headers))
         yield client, users, network, svc
 
@@ -101,14 +102,14 @@ def friends(client, users):
     assert accepted.status_code == 200, accepted.text
 
 
-def test_signup_requires_a_personal_band_key_and_new_rooms_use_it(social):
+def test_signup_does_not_require_a_band_key_and_linked_rooms_use_it(social):
     client, ((alice, a), (_, b), _), network, svc = social
-    missing = client.post("/api/auth/signup", json={"username": "erin", "display_name": "Erin", "password": "test-password"})
-    assert missing.status_code == 422 and "band_u_..." in missing.text and "erin" not in missing.text.lower()
-    taken = client.post("/api/auth/signup", json={
-        "username": "erin", "display_name": "Erin", "password": "test-password", "band_api_key": "band_u_alice",
-    })
-    assert taken.status_code == 409 and "band_u_alice" not in taken.text
+    created = client.post("/api/auth/signup", json={"username": "erin", "display_name": "Erin", "password": "test-password"})
+    assert created.status_code == 200, created.text
+    assert "band_u_" not in created.text
+    with db() as session:
+        erin = session.exec(select(User).where(User.username == "erin")).one()
+        assert session.get(UserBandAccount, erin.id) is None
     with db() as session:
         account = session.get(UserBandAccount, alice)
         assert account.band_user_id == "alice"

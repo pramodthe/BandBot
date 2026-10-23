@@ -11,7 +11,6 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
-  const [bandKey, setBandKey] = useState("");
   const [code, setCode] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -37,11 +36,8 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         setMode("login");
         return;
       }
-      const band_api_key = bandKey.trim();
       const body =
-        mode === "signup"
-          ? { username, display_name: displayName || username, password, band_api_key }
-          : { username, password, ...(band_api_key ? { band_api_key } : {}) };
+        mode === "signup" ? { username, display_name: displayName || username, password } : { username, password };
       const result = await api<{ token: string }>("POST", `/api/auth/${mode}`, body);
       onAuthed(result.token);
     } catch (err) {
@@ -74,27 +70,6 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
               placeholder="e.g. Alice Chen"
             />
           </Field>
-        )}
-        {(mode === "signup" || mode === "login") && (
-          <Field id={`${id}-band`} label="Band human API key">
-            <Input
-              id={`${id}-band`}
-              type="password"
-              autoComplete="off"
-              value={bandKey}
-              onChange={(e) => setBandKey(e.target.value)}
-              placeholder="band_u_…"
-              required={mode === "signup"}
-              minLength={mode === "signup" ? 10 : undefined}
-            />
-          </Field>
-        )}
-        {(mode === "signup" || mode === "login") && (
-          <p className="text-muted-foreground -mt-2 text-xs">
-            {mode === "signup"
-              ? "Create this key in your own Band account. Agents you add use that account."
-              : "Required until this account is connected to your own Band account."}
-          </p>
         )}
         {mode === "reset" && (
           <Field id={`${id}-code`} label="Reset code">

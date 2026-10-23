@@ -5,7 +5,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from app.auth import encrypt_secret, hash_password, issue_token
+from app.auth import encrypt_secret, hash_password
 from app.workspace.events import EventBus
 from app.main import app
 from sqlmodel import select
@@ -15,8 +15,7 @@ from app.persistence.models import AgentProfile, AgentTask, Channel, ChannelMemb
 
 def _signup(client: TestClient, username: str, name: str) -> dict:
     response = client.post(
-        "/api/auth/signup", json={"username": username, "display_name": name, "password": "secret123",
-                                  "band_api_key": f"band_u_{username}"}
+        "/api/auth/signup", json={"username": username, "display_name": name, "password": "secret123"}
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -30,30 +29,23 @@ def test_humans_chat_while_band_is_not_configured():
         auth_b = {"Authorization": f"Bearer {bob['token']}"}
 
         boot = client.get("/api/bootstrap", headers=auth_a).json()
-        assert boot["band"]["configured"] is True and boot["band"]["online"] is True
-        assert boot["band"]["error"] is None
-        assert "band_u_alice" not in client.get("/api/bootstrap", headers=auth_a).text
-        with db() as session:
-            general = session.exec(select(Channel).where(Channel.name == "general")).one()
-            general_id = general.id
-        assert all(c["name"] != "general" or alice["user"]["id"] in c["human_ids"] for c in boot["channels"])
-        bob_boot = client.get("/api/bootstrap", headers=auth_b).json()
-        assert all(c["name"] != "general" for c in bob_boot["channels"])
-        assert client.get(f"/api/channels/{general_id}/messages", headers=auth_b).status_code == 404
-        assert all(agent.get("owner_id") in (None, bob["user"]["id"]) for agent in bob_boot["agents"])
+        assert boot["band"] == {
+            "configured": False,
+            "online": False,
+            "owner_name": None,
+            "owner_handle": None,
+            "error": "BAND_USER_API_KEY is not set",
+        }
+        channel = next(c for c in boot["channels"] if c["name"] == "general")
+        assert {alice["user"]["id"], bob["user"]["id"]} <= set(channel["human_ids"])
 
         response = client.post("/api/channels", json={"name": "Launch Plan"}, headers=auth_a)
         assert response.status_code == 200
-        created = response.json()
-        assert created["private"] and created["band_room_id"]
+        assert response.json()["private"] and response.json()["band_room_id"] is None
 
-        assert client.post("/api/people/requests", json={"handle": "bob"}, headers=auth_a).status_code == 200
-        request_id = client.get("/api/people", headers=auth_b).json()["requests"][0]["id"]
-        assert client.post(f"/api/people/requests/{request_id}/decision", json={"accept": True}, headers=auth_b).status_code == 200
-        dm = client.post(f"/api/people/{bob['user']['id']}/dm", headers=auth_a).json()
         with client.websocket_connect(f"/ws?token={bob['token']}") as ws:
             posted = client.post(
-                f"/api/channels/{dm['id']}/messages",
+                f"/api/channels/{channel['id']}/messages",
                 json={"content": "hey @Bob, ready?"},
                 headers=auth_a,
             ).json()
@@ -63,13 +55,11 @@ def test_humans_chat_while_band_is_not_configured():
                 event = ws.receive_json()
             assert event["message"]["content"] == "hey @Bob, ready?"
 
-        messages = client.get(f"/api/channels/{dm['id']}/messages", headers=auth_b).json()
+        messages = client.get(f"/api/channels/{channel['id']}/messages", headers=auth_b).json()
         assert [m["author_name"] for m in messages] == ["Alice"]
 
         response = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=auth_a)
-        assert response.status_code == 200, response.text
-        assert response.json()["owner_id"] == alice["user"]["id"]
-        assert "band_u_" not in response.text
+        assert response.status_code == 503
         response = client.post("/api/agents", json={"name": "W", "role": "writer"}, headers=auth_a)
         assert response.status_code == 422
 
@@ -125,9 +115,8 @@ class _Socket:
         self.events.append(event)
 
 
-def test_login_uses_the_persons_band_key_not_the_server_key(monkeypatch):
+def test_login_does_not_ask_for_a_band_key_or_list_server_agents(monkeypatch):
     monkeypatch.setattr("app.config.uses_workspace_band_key", lambda: True)
-    monkeypatch.setattr("app.api.http.uses_workspace_band_key", lambda: True)
     with TestClient(app) as client:
         with db() as session:
             user = User(username="legacy", display_name="Legacy", password_hash=hash_password("secret123"))
@@ -137,22 +126,17 @@ def test_login_uses_the_persons_band_key_not_the_server_key(monkeypatch):
             general = session.exec(select(Channel).where(Channel.name == "general")).one()
             session.add(ChannelMember(channel_id=general.id, member_type="human", member_id=user.id))
             session.commit()
-            user_id, general_id = user.id, general.id
-        headers = {"Authorization": f"Bearer {issue_token(user_id)}"}
-        refused = client.post("/api/auth/login", json={"username": "legacy", "password": "secret123"})
-        assert refused.status_code == 409 and "band_u_" not in refused.text
-        created = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=headers)
-        assert created.status_code == 409 and "band_u_" not in created.text
-        peers = client.get(f"/api/channels/{general_id}/peers", headers=headers)
-        assert peers.status_code == 409 and "band_u_" not in peers.text
-        signed = client.post("/api/auth/login", json={
-            "username": "legacy", "password": "secret123", "band_api_key": "band_u_legacy",
-        })
+            general_id = general.id
+        signed = client.post("/api/auth/login", json={"username": "legacy", "password": "secret123"})
         assert signed.status_code == 200, signed.text
+        assert "band_u_" not in signed.text
         auth = {"Authorization": f"Bearer {signed.json()['token']}"}
         boot = client.get("/api/bootstrap", headers=auth)
-        assert boot.status_code == 200 and boot.json()["band"]["configured"] is True
-        assert "band_u_legacy" not in boot.text
+        assert boot.status_code == 200 and "band_u_" not in boot.text
+        peers = client.get(f"/api/channels/{general_id}/peers", headers=auth)
+        assert peers.status_code == 403 and "band_u_" not in peers.text
+        created = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=auth)
+        assert created.status_code == 503 and "band_u_" not in created.text and "own Band" not in created.text
 
 
 def test_private_channel_events_reach_only_their_owner():
