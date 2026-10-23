@@ -862,6 +862,13 @@ class AppService:
                 parent = session.get(AgentProfile, created_by_agent)
                 owner_user_id = agent_owner(session, parent) if parent else None
         org = await self.account_org(owner_user_id) if owner_user_id else self.org
+        if not is_master and org is self.org and owner_user_id is not None:
+            from app.config import uses_workspace_band_key
+            if uses_workspace_band_key():
+                with db() as session:
+                    from app.workspace.permissions import is_admin
+                    if not is_admin(session, owner_user_id):
+                        raise ServiceError("Only an admin can create agents on the workspace Band account.", 403)
         if not org.online and os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
             return await self._register_local_agent(name=name, role=role, instructions=instructions, model=model,
                                                     created_by=created_by, created_by_agent=created_by_agent,

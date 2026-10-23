@@ -155,6 +155,28 @@ def test_agent_replies_to_the_owner_reach_humans_and_polling_dedupes(svc: AppSer
         assert session.get(ChannelMember, (channel_id, "agent", writer_id)) is not None
 
 
+def test_members_cannot_register_agents_on_the_workspace_band_account(svc: AppService, monkeypatch):
+    from app.persistence.models import UserBandAccount
+    from app.workspace.service import ServiceError
+    monkeypatch.setattr("app.config.uses_workspace_band_key", lambda: True)
+    user = _user()
+
+    async def denied():
+        with pytest.raises(ServiceError, match="admin") as error:
+            await svc.create_agent(name="Scout", role="researcher", instructions="", model="m", created_by=user.id)
+        assert error.value.status == 403
+        assert svc.org.registered == []
+
+    asyncio.run(denied())
+    with db() as session:
+        session.add(UserBandAccount(user_id=user.id, secret_enc=encrypt_secret("band_u_alice"),
+                                    band_user_id="alice", name="Alice", handle="alice"))
+        session.commit()
+    personal = asyncio.run(svc.create_agent(name="Scout", role="researcher", instructions="", model="m", created_by=user.id))
+    assert personal.band_agent_id == "alice/Scout"
+    assert svc.org.registered == []
+
+
 def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypatch):
     import app.api.http as http
     from app.providers.management import create_connection

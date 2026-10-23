@@ -127,7 +127,7 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
       </div>)}</section> : null}
       <details className="space-y-3 rounded-xl border p-4">
         <summary className="cursor-pointer text-sm font-semibold">Personal Band account (optional)</summary>
-        <p className="text-muted-foreground text-sm">{account?.connected ? `Connected as @${account.handle.replace(/^@/, "")}. New agents and channels use this account. Existing rooms and agents keep their original account.` : "Chat, contacts, and channel invitations work with your app account. Agents use the workspace Band connection by default. Connect a personal account to own new agents on your Band platform."}</p>
+        <p className="text-muted-foreground text-sm">{account?.connected ? `Connected as @${account.handle.replace(/^@/, "")}. New agents and channels use this account. Existing rooms and agents keep their original account.` : "Chat, contacts, and channel invitations work with your app account. An admin creates shared agents. Connect a personal account to create agents on your own Band platform."}</p>
         <form onSubmit={connect} className="space-y-2">
           <Label htmlFor="personal-band-key">{account?.connected ? "Update human API key" : "Band human API key"}</Label>
           <div className="flex flex-wrap gap-2">

@@ -141,7 +141,14 @@ def test_login_does_not_ask_for_a_band_key_or_list_server_agents(monkeypatch):
         assert invited.status_code == 403 and "invite" in invited.json()["detail"]
         assert "band_u_" not in invited.text
         created = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=auth)
-        assert created.status_code == 503 and "band_u_" not in created.text and "own Band" not in created.text
+        assert created.status_code == 403 and "admin" in created.json()["detail"]
+        assert "band_u_" not in created.text and "own Band" not in created.text
+        with db() as session:
+            from app.persistence.models import WorkspaceRole
+            session.add(WorkspaceRole(user_id=user.id, role="admin"))
+            session.commit()
+        allowed = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=auth)
+        assert allowed.status_code == 503 and "band_u_" not in allowed.text
 
 
 def test_agent_model_update_rejects_a_missing_provider_revision():

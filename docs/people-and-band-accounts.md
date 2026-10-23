@@ -30,7 +30,7 @@ After Alice invites Bob into a channel with Master, Bob can address the agent th
 
 ## Band and agent ownership
 
-The operator's workspace Band connection supplies agent identities and agent transport by default. This is one server-side integration; each person does not need another key. Human collaboration continues when Band is offline. A channel without a Band room can acquire one when an agent is explicitly added and a connection is available.
+The operator's workspace Band connection supplies the shared agents and their transport. A member can chat with those agents without a Band key. Creating another agent on that same account is limited to workspace admins. Human collaboration continues when Band is offline. A channel without a Band room can acquire one when an agent is explicitly added and a connection is available.
 
 Channel messages mirrored to Band use the room's owning connection with the app author's display name. Agent routing and model execution remain in the separate worker. Human app members do not automatically become native Band participants. App friendship and native Band contact consent are separate relationships.
 
