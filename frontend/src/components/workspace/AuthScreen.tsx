@@ -1,11 +1,12 @@
-import { useId, useState, type FormEvent } from "react";
-import { ArrowRightIcon, CheckIcon, MessageCircleIcon, MonitorIcon, UsersIcon } from "lucide-react";
-import { api } from "@/api";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { ArrowRightIcon, CheckIcon, LoaderCircleIcon, MessageCircleIcon, MonitorIcon, UsersIcon } from "lucide-react";
+import { api, ApiError } from "@/api";
 import Brand from "@/components/shared/Brand";
 import Avatar from "@/components/shared/Avatar";
 import Field from "@/components/shared/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import SignupBandConnection from "./SignupBandConnection";
 
 export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => void }) {
   const id = useId();
@@ -13,15 +14,29 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [bandKey, setBandKey] = useState("");
+  const [bandError, setBandError] = useState("");
+  const bandInput = useRef<HTMLInputElement>(null);
   const [code, setCode] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (bandError && !busy) bandInput.current?.focus();
+  }, [bandError, busy]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
+    if (mode === "signup" && !bandKey.trim().startsWith("band_a_")) {
+      setBandError(bandKey.trim().startsWith("band_u_")
+        ? "That’s a Human API key. Enter your Band Agent API key beginning with band_a_."
+        : "Enter your Band Agent API key beginning with band_a_.");
+      return;
+    }
     setBusy(true);
     setError("");
+    setBandError("");
     setNotice("");
     try {
       if (mode === "recover") {
@@ -39,11 +54,14 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         return;
       }
       const body =
-        mode === "signup" ? { username, display_name: displayName || username, password } : { username, password };
+        mode === "signup" ? { username, display_name: displayName || username, password, band_api_key: bandKey.trim() } : { username, password };
       const result = await api<{ token: string }>("POST", `/api/auth/${mode}`, body);
+      setBandKey("");
       onAuthed(result.token);
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof ApiError && err.field === "band_api_key") {
+        setBandError(err.message);
+      } else setError((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -77,15 +95,15 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
       <main className="flex flex-col px-6 py-8 sm:px-12">
         <Brand className="mb-10 lg:hidden" />
       <form
-        className="m-auto flex w-full max-w-[360px] flex-col gap-4 py-8"
+        className={`m-auto flex w-full flex-col gap-4 py-8 ${mode === "signup" ? "max-w-[420px]" : "max-w-[360px]"}`}
         onSubmit={submit}
       >
         <p className="text-primary text-xs font-semibold uppercase tracking-[0.16em]">Your shared workspace</p>
-        <h2 className="text-3xl font-semibold tracking-tight">{mode === "login" ? "Welcome back." : mode === "signup" ? "Meet your next team." : mode === "recover" ? "Recover your account." : "Choose a new password."}</h2>
-        <p className="text-muted-foreground mb-4 text-sm leading-relaxed">{mode === "login" ? "Pick up the conversation. Keep the work moving." : mode === "signup" ? "Create an account to work alongside your AI teammates." : "Use your verified recovery email and one-time code to get back to your workspace."}</p>
+        <h2 className="text-3xl font-semibold tracking-tight">{mode === "login" ? "Welcome back." : mode === "signup" ? "Create your account." : mode === "recover" ? "Recover your account." : "Choose a new password."}</h2>
+        <p className="text-muted-foreground mb-2 text-sm leading-relaxed">{mode === "login" ? "Pick up the conversation. Keep the work moving." : mode === "signup" ? "Set up your login and connect your Band account with your own Agent API key." : "Use your verified recovery email and one-time code to get back to your workspace."}</p>
         {mode !== "reset" && (
         <Field id={`${id}-username`} label="Username">
-          <Input id={`${id}-username`} className="h-11 rounded-xl" autoComplete="username" placeholder="Your username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required />
+          <Input id={`${id}-username`} className="h-11 rounded-xl" autoComplete="username" placeholder="Your username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required disabled={busy} maxLength={32} />
         </Field>
         )}
         {mode === "signup" && (
@@ -97,6 +115,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="e.g. Alice Chen"
+              disabled={busy}
             />
           </Field>
         )}
@@ -107,18 +126,24 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         )}
         {mode !== "recover" && (
           <Field id={`${id}-password`} label={mode === "reset" ? "New password" : "Password"}>
-            <Input id={`${id}-password`} className="h-11 rounded-xl" autoComplete={mode === "login" ? "current-password" : "new-password"} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
+            <Input id={`${id}-password`} className="h-11 rounded-xl" autoComplete={mode === "login" ? "current-password" : "new-password"} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} maxLength={128} disabled={busy} />
           </Field>
         )}
+        {mode === "signup" && <SignupBandConnection inputRef={bandInput} value={bandKey} onChange={(value) => { setBandKey(value); setBandError(""); }} disabled={busy} error={bandError} />}
         {notice && <div className="text-sm" role="status">{notice}</div>}
         {error && <div className="text-destructive text-[13.5px]" role="alert">{error}</div>}
-        <Button className="mt-2 h-11 rounded-xl" disabled={busy}>{mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : mode === "recover" ? "Send reset code" : "Update password"}<ArrowRightIcon /></Button>
+        <Button className="mt-2 h-11 rounded-xl" disabled={busy}>{busy
+          ? mode === "signup" ? "Checking your Band key…" : "Please wait…"
+          : mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : mode === "recover" ? "Send reset code" : "Update password"}
+          {busy ? <LoaderCircleIcon className="animate-spin" /> : <ArrowRightIcon />}
+        </Button>
+        {busy && mode === "signup" && <p role="status" className="text-muted-foreground text-center text-xs">Verifying your connection with Band before creating your account.</p>}
         {mode === "login" && (
-          <Button type="button" variant="link" size="inline" onClick={() => { setMode("recover"); setError(""); setNotice(""); }}>
+          <Button type="button" variant="link" size="inline" disabled={busy} onClick={() => { setMode("recover"); setError(""); setNotice(""); }}>
             Forgot password?
           </Button>
         )}
-        <Button type="button" variant="link" size="inline" onClick={() => { setMode(mode === "signup" ? "login" : mode === "login" ? "signup" : "login"); setError(""); }}>
+        <Button type="button" variant="link" size="inline" disabled={busy} onClick={() => { setMode(mode === "signup" ? "login" : mode === "login" ? "signup" : "login"); setBandKey(""); setBandError(""); setError(""); }}>
           {mode === "login" ? "New here? Create an account" : "Already have an account? Sign in"}
         </Button>
       </form>

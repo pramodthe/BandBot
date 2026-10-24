@@ -31,8 +31,39 @@ function stop(code = 0) {
   setTimeout(() => process.exit(code), 1000);
 }
 process.on("SIGTERM", () => stop()); process.on("SIGINT", () => stop());
-start("uv", ["run", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", env.BAND_E2E_API_PORT], backend);
-start("uv", ["run", "python", "-m", "app.worker"], backend);
+// Test-only Agent API stub. The production app never accepts fake keys.
+const apiServer = `
+import uvicorn
+from app.main import app
+from app.band import connections
+from app.band.listener import BandIdentity
+import sys
+sys.path.insert(0, "tests")
+from fake_band_platform import OfflineBandNetwork
+import app.band.platform as platform
+import app.workspace.service as service
+network = OfflineBandNetwork()
+platform.AsyncRestClient = network.client
+connections.AsyncRestClient = network.client
+service.PlatformListener = network.listener
+async def identity(key):
+    if not key.startswith("band_a_e2e-"):
+        raise ValueError("Invalid offline test key")
+    return BandIdentity(id=key[7:], name="E2E Band connection", handle="e2e-band")
+connections.fetch_identity = identity
+uvicorn.run(app, host="127.0.0.1", port=${Number(env.BAND_E2E_API_PORT)})
+`;
+start("uv", ["run", "python", "-c", apiServer], backend);
+start("uv", ["run", "python", "-c", `
+import sys, asyncio
+sys.path.insert(0, "tests")
+from app.persistence.models import init_db
+from fake_band_platform import OfflineBandNetwork
+import app.band.connections as connections
+connections.AsyncRestClient = OfflineBandNetwork().client
+from app.tasks.worker import work
+asyncio.run(work())
+`], backend);
 let ready = false;
 for (let attempt = 0; attempt < 120 && !stopping; attempt++) {
   try { ready = (await fetch(`http://127.0.0.1:${env.BAND_E2E_API_PORT}/api/health`)).ok; } catch { /* starting */ }

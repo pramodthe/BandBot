@@ -55,6 +55,16 @@ class UserBandAccount(SQLModel, table=True):
     name: str = ""
 
 
+class UserBandConnection(SQLModel, table=True):
+    """A person's Band platform credential, separate from local AI teammates and Human API accounts."""
+    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    band_agent_id: str = Field(unique=True, index=True)
+    secret_enc: str
+    name: str = ""
+    handle: str = ""
+    verified_at: datetime = Field(default_factory=utcnow)
+
+
 class PrivateConversation(SQLModel, table=True):
     """New conversations use explicit membership; legacy workspace channels stay shared."""
     channel_id: int = Field(foreign_key="channel.id", primary_key=True)
@@ -101,10 +111,29 @@ class BandRoomAccount(SQLModel, table=True):
     user_id: int | None = Field(default=None, foreign_key="user.id")
 
 
+class BandPlatformRoom(SQLModel, table=True):
+    """Pin a room to one user's Agent API identity, independently of Enterprise rooms."""
+    channel_id: int = Field(foreign_key="channel.id", primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    band_agent_id: str
+
+
+class PlatformTeammate(SQLModel, table=True):
+    """An app teammate using its owner's Band platform connection for transport."""
+    agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    band_agent_id: str
+
+
 class BandAgentOwner(SQLModel, table=True):
     agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     band_user_id: str
+
+
+class BandAgentLink(SQLModel, table=True):
+    """An existing Band identity connected with its own key, never registered or deleted here."""
+    agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
 
 
 class AgentProfile(SQLModel, table=True):

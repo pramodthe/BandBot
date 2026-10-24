@@ -8,7 +8,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
-from app.persistence.models import (AgentProfile, AgentTask, ChannelMember, DirectMessage, Message, OutsideHandoff,
+from app.persistence.models import (AgentProfile, AgentTask, BandAgentLink, ChannelMember, DirectMessage, Message, OutsideHandoff,
                                     TaskApproval, TaskHandoff, db, utcnow)
 from app.tasks.usage import over_budget
 from app.workspace.audit import record, record_agent
@@ -205,10 +205,10 @@ def hand_off(task: AgentTask, *, teammate: str, request: str, report_back: bool,
             return {"error": f"This request already used {MAX_HANDOFFS} teammate hand-offs. "
                              "Finish the work yourself and answer the humans."}
         child = AgentTask(id=uuid4().hex, source_key=source_key, channel_id=task.channel_id,
-                          agent_id=target.id, room_id=task.room_id, prompt=f"**{sender.name}:** {request}",
+                          agent_id=target.id, room_id="" if session.get(BandAgentLink, target.id) else task.room_id, prompt=f"**{sender.name}:** {request}",
                           context=channel_context(session, task.channel_id),
                           # A report-back answer goes to the requester, so it stays local instead of pinging Band.
-                          reply_to="" if report_back else task.reply_to)
+                          reply_to="" if report_back or session.get(BandAgentLink, target.id) else task.reply_to)
         session.add_all([
             Message(channel_id=task.channel_id, author_type="agent", author_id=sender.id,
                     author_name=sender.name, content=f"@{target.name} {request}", to_humans=False,

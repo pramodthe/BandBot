@@ -25,7 +25,7 @@ The workspace opens in light mode and remembers your theme preference. In a new 
 | Capability | In your workspace |
 | --- | --- |
 | **Work together in context** | People and AI teammates share channels, private conversations, files, and task history. |
-| **Connect with people** | Add contacts by app username, chat without agents, and invite people into channels. Individual Band keys are optional. |
+| **Connect with people** | Add contacts by app username, chat without agents, and invite people into channels. Human direct messages stay in the app. |
 | **Build a persistent team** | Give teammates names, expressive avatars, roles, instructions, reusable skills, and scoped memory. |
 | **Delegate real work** | Combine research, coding, writing, and review through specialist helpers and visible teammate hand-offs. |
 | **Watch work happen** | See task ownership and progress, inspect the agent's cloud computer, and take over when needed. |
@@ -54,8 +54,8 @@ Research and computer work require their optional services to be configured. See
 ### 1. Prerequisites
 
 - **Python 3.12+** and **uv**.
-- **Node.js 20+** and **npm**.
-- A workspace **Band user API key** with Human API access for Band-backed agents. Local human chat, contacts and channels work without it; individual users do not need their own Band key.
+- **Node.js 22+** and **npm**.
+- Your own **Band Agent API key** (`band_a_…`) to create an app account and connect it to Band. Create the connection identity in the Band dashboard and save its key. The app validates and encrypts the key per user; teammates share this connection while keeping their own instructions, memory, and tasks. Individual use does not require Human API access. An optional workspace Human API connection requires Band Enterprise and enables programmatic agent registration.
 - A model-provider account for AI execution: configure OpenAI, Anthropic, Gemini, or a verified compatible endpoint in **Providers & APIs** after signing in. Human chat works before optional provider setup.
 
 ### 2. Install and configure
@@ -76,7 +76,8 @@ cd ..
 Edit the root `.env` file and set:
 
 ```dotenv
-BAND_USER_API_KEY=your_band_user_api_key
+# Optional Enterprise workspace registration only; individual keys are entered during signup or in People.
+BAND_USER_API_KEY=
 # Optional legacy bootstrap; provider connections can be configured in the admin UI.
 OPENAI_API_KEY=
 APP_SECRET=replace_with_a_long_random_secret
@@ -109,7 +110,7 @@ cd frontend
 npm run dev
 ```
 
-Open **[localhost:5173](http://localhost:5173)**, create an account, and mention **`@Master`** in **`#general`**.
+Open **[localhost:5173](http://localhost:5173)** and create an account with your own Band Agent API key. The signup form explains the key types and how to obtain one. Configure model access in **Providers & APIs**, then choose **Add agents → Create agent**, enter a display name and specialty, and optionally add the teammate to a channel. Teammates use your saved Band connection; no additional Band key or Human API access is required. Update the connection in **People** when rotating its key.
 
 > The worker is required for agents to run. The API accepts messages and queues tasks; the separate worker executes them.
 
@@ -180,7 +181,7 @@ Live app previews use expiring, isolated origins that proxy to a registered port
 
 ### Add connected agent teammates
 
-Open **Add agents** and choose **Create agent**, **Codex**, **Claude Agent**, **Cursor**, or **OpenClaw**. Create agent opens the custom teammate editor. External providers open a dedicated connection screen, authenticate first, and select a model and display name automatically; these can be changed under Connection options. Optionally add the teammate to the current channel. Credentials are encrypted using `APP_SECRET` and never returned to the browser. Provider connections belong to the person who authenticated them; signed-in users can connect their own providers. See [people and Band accounts](docs/people-and-band-accounts.md) for contact requests and channel invitations. Remove agents using a connection before disconnecting it. See [connected agent setup](docs/connected-agents.md) for provider requirements and connection steps.
+Open **Add agents** and choose **Create agent**, **Codex**, **Claude Agent**, **Cursor**, or **OpenClaw**. Create agent opens the custom teammate editor and uses your saved Band connection. External providers open a dedicated connection screen, authenticate first, and select a model and display name automatically; these can be changed under Connection options. Optionally add the teammate to the current channel. Existing accounts without a saved platform connection can still choose **Connect Band agent** with that identity's `band_a_…` key, or add a platform connection in People. Credentials are encrypted using `APP_SECRET` and never returned to the browser. Provider connections belong to the person who authenticated them; signed-in users can connect their own providers. See [people and Band accounts](docs/people-and-band-accounts.md) for contact requests and channel invitations. Remove agents using a provider connection before disconnecting it. See [connected agent setup](docs/connected-agents.md) for provider requirements and connection steps.
 
 Run `uv sync --locked` in `backend/` for the Claude and Cursor Agent SDKs. Install the Codex CLI on the API/worker host with `npm install -g @openai/codex`; use `CODEX_EXECUTABLE` for a custom native executable. The API and worker must have the same runtime installation. OpenClaw uses an approved Gateway and a dedicated agent whose native tools are disabled. No runtime needs a user terminal to remain open.
 

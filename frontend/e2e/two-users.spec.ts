@@ -6,6 +6,7 @@ async function signup(page: Page, username: string, displayName: string) {
   await page.getByLabel("Username").fill(username);
   await page.getByLabel("Display name").fill(displayName);
   await page.getByLabel("Password").fill("secret123");
+  await page.getByLabel("Band agent API key", { exact: true }).fill(`band_a_e2e-${username}`);
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("button", { name: /^People/ })).toBeVisible();
 }
@@ -123,7 +124,7 @@ test("two people consent, talk, invite, and reach a workspace agent", async ({ b
   await showList(alicePage);
   await alicePage.getByRole("button", { name: "Add agents", exact: true }).click();
   await alicePage.getByRole("button", { name: /Cursor/ }).click();
-  await expect(alicePage.getByRole("status").filter({ hasText: "Reconnect the workspace before adding this agent." })).toBeVisible();
+  await expect(alicePage.getByRole("status").filter({ hasText: "Using your saved Band connection." })).toBeVisible();
   await expect(alicePage.getByRole("heading", { name: "Create agent" })).toHaveCount(0);
   await alicePage.getByRole("button", { name: "Cancel" }).click();
   await alicePage.getByRole("button", { name: "Add agents", exact: true }).click();

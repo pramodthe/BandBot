@@ -109,7 +109,9 @@ async def save_settings(body: SettingsBody, user: User = Depends(current_user), 
     await bus.publish({"type": "provider_settings_changed"})
     await bus.publish({"type": "openai_settings", "models": model_catalog(), "configured": True})
     from app.workspace.service import service
-    if service.org.online:
-        for profile in session.exec(select(AgentProfile)).all():
+    for profile in session.exec(select(AgentProfile)).all():
+        try:
             await service.start_agent(profile)
+        except Exception:
+            await service.agent_status(profile.id, "error", "Reconnect this teammate's Band connection")
     return get_settings(user, session)

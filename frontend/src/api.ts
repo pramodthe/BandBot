@@ -6,10 +6,12 @@ export const setToken = (token: string | null) =>
 
 export class ApiError extends Error {
   status: number;
+  field?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, field?: string) {
     super(message);
     this.status = status;
+    this.field = field;
   }
 }
 
@@ -41,7 +43,8 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   } catch {
     throw new ApiError("The server returned an unreadable response. Please retry.", response.status);
   }
-  if (!response.ok) throw new ApiError(describe(data && typeof data === "object" && "detail" in data ? data.detail : undefined), response.status);
+  if (!response.ok) throw new ApiError(describe(data && typeof data === "object" && "detail" in data ? data.detail : undefined), response.status,
+    data && typeof data === "object" && "field" in data && typeof data.field === "string" ? data.field : undefined);
   return data as T;
 }
 

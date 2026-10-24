@@ -203,9 +203,25 @@ async def ask_outside(task: AgentTask, outside: OutsideAgent, request: str, call
             return _sent(outside, session.get(OutsideHandoff, source_key).status)
     content = (f"@{outside.name} {request}\n\n"
                f"(From {sender.name} in BAND_BOTS. Reply in this room and mention @{sender.name} so it gets your answer.)")
-    client = AsyncRestClient(api_key=decrypt_secret(sender.band_api_key_enc), base_url=settings.band_rest_url)
+    from app.persistence.models import BandPlatformRoom, PlatformTeammate, Channel
+    from contextlib import AsyncExitStack
+    from app.band.connections import platform_client
+    with db() as session:
+        platform = session.get(BandPlatformRoom, task.channel_id)
+        channel = session.get(Channel, task.channel_id)
+        local = session.get(PlatformTeammate, sender.id)
+    stack = AsyncExitStack()
     status, band_message_id = "unknown", ""
     try:
+        if platform:
+            if not channel or channel.band_room_id != task.room_id:
+                raise ValueError("Room transport changed")
+            client = await stack.enter_async_context(platform_client(platform.user_id, identity=platform.band_agent_id))
+        elif local:
+            raise ValueError("This teammate has no Band platform room")
+        else:
+            client = AsyncRestClient(api_key=decrypt_secret(sender.band_api_key_enc), base_url=settings.band_rest_url)
+            stack.push_async_callback(aclose_rest_client, client)
         response = await client.agent_api_messages.create_agent_chat_message(
             task.room_id, message=ChatMessageRequest(content=content, mentions=[
                 ChatMessageRequestMentionsItem(id=outside.band_id)]),
@@ -219,7 +235,7 @@ async def ask_outside(task: AgentTask, outside: OutsideAgent, request: str, call
             session.exec(update(OutsideHandoff).where(OutsideHandoff.source_key == source_key).values(
                 status=status, band_message_id=band_message_id))
             session.commit()
-        await aclose_rest_client(client)
+        await stack.aclose()
     return _sent(outside, status)
 
 
@@ -245,15 +261,18 @@ def outside_reply(session, agent_id: int, channel_id: int, sender_id: str, promp
 def link_outside_reply(task: AgentTask, origin_id: str) -> None:
     """Chain an outside agent's answer to the request that asked for it, so they share one hand-off budget."""
     with db() as session:
-        if session.get(TaskHandoff, task.id) or task.id == origin_id:
-            return
-        session.add(TaskHandoff(task_id=task.id, root_task_id=handoff_root(session, origin_id),
-                                parent_task_id=origin_id, from_agent_id=task.agent_id, kind="report",
-                                report_back=False))
+        link_outside_reply_in_session(session, task, origin_id)
         try:
             session.commit()
         except IntegrityError:
             session.rollback()
+
+
+def link_outside_reply_in_session(session, task, origin_id):
+    if session.get(TaskHandoff, task.id) or task.id == origin_id:
+        return
+    session.add(TaskHandoff(task_id=task.id, root_task_id=handoff_root(session, origin_id),
+                           parent_task_id=origin_id, from_agent_id=task.agent_id, kind="report", report_back=False))
 
 
 def _sent(outside: OutsideAgent, status: str) -> dict:

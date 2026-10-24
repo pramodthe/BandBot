@@ -10,9 +10,10 @@ from typing import Literal
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from sqlmodel import Session, select
 from sqlalchemy import case, or_, update
+from sqlalchemy.exc import IntegrityError
 
 from app.auth import (authenticate, current_session_id, current_user, hash_password, issue_token,
                       require_production_secret, revoke_session, revoke_user_sessions, verify_password)
@@ -55,7 +56,7 @@ from app.workspace.service import ServiceError, serialize_messages, serialize_us
 from app.api.agent_connections import router as agent_connections_router
 from app.agent_connections import CONNECTED_PROVIDERS, MODEL_ID, runtime_available, runtime_for
 from app.persistence.models import AgentConnection
-from app.persistence.models import UserBandAccount, PrivateConversation, HumanDirectMessage
+from app.persistence.models import UserBandAccount, UserBandConnection, PrivateConversation, HumanDirectMessage
 from app.workspace.access import channel_visible, agent_visible, agent_owner
 from app.api.people import incoming_contact_requests, pending_invitations, router as people_router
 from app.workspace.health import service_status
@@ -109,7 +110,11 @@ app.include_router(people_router)
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
     # FastAPI's default validation response includes rejected input values, including pasted credentials.
-    if request.url.path.startswith(("/api/agent-connections", "/api/band/account", "/api/settings/connections", "/api/settings/openai")):
+    if request.url.path == "/api/auth/signup":
+        if any(error["loc"][-1] == "band_api_key" for error in exc.errors()):
+            return JSONResponse({"detail": "Enter your Band Agent API key beginning with band_a_.", "field": "band_api_key"}, status_code=422)
+        return JSONResponse({"detail": "Invalid account details. Check your username and password length."}, status_code=422)
+    if request.url.path.startswith(("/api/agents", "/api/agent-connections", "/api/band/connection", "/api/band/account", "/api/settings/connections", "/api/settings/openai")):
         return JSONResponse({"detail": "Invalid connection details. Check the provider, name and credential."}, status_code=422)
     return await request_validation_exception_handler(request, exc)
 
@@ -132,6 +137,7 @@ class SignupBody(BaseModel):
     username: str = Field(min_length=2, max_length=32, pattern=r"^[a-zA-Z0-9_.-]+$")
     display_name: str = Field(min_length=1, max_length=48)
     password: str = Field(min_length=6, max_length=128)
+    band_api_key: SecretStr = Field(min_length=10, max_length=2000)
 
 
 class LoginBody(BaseModel):
@@ -158,12 +164,27 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
     username = body.username.lower()
     if session.exec(select(User).where(User.username == username)).first():
         raise HTTPException(409, "That username is taken")
+    from app.band.connections import validate_key, save_connection
+    key = body.band_api_key.get_secret_value().strip()
+    try:
+        identity = await validate_key(key)
+    except HTTPException as error:
+        return JSONResponse({"detail": error.detail, "field": "band_api_key"}, status_code=error.status_code)
     user = User(username=username, display_name=body.display_name.strip(), password_hash=hash_password(body.password))
     session.add(user)
-    session.commit()
-    session.refresh(user)
+    try:
+        session.flush()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "That username is taken") from None
+    try:
+        save_connection(session, user.id, key, identity)
+    except HTTPException as error:
+        session.rollback()
+        return JSONResponse({"detail": error.detail, "field": "band_api_key"}, status_code=error.status_code)
     _join_general(session, user)
     session.commit()
+    session.refresh(user)
     ensure_owner(session)
     await bus.publish({"type": "user", "user": serialize_user(user)})
     if role_of(session, user.id) != "member":
@@ -259,6 +280,7 @@ async def bootstrap(user: User = Depends(current_user), session: Session = Depen
     visible = [c for c in session.exec(select(Channel).order_by(Channel.name)).all()
                if channel_visible(session, c.id, user.id) and (c.id not in dms or dms[c.id].agent_id is not None)]
     account = session.get(UserBandAccount, user.id)
+    platform = session.get(UserBandConnection, user.id)
     band = service.org.status()
     if account and account.secret_enc:
         cached = service._user_orgs.get(user.id)
@@ -267,6 +289,13 @@ async def bootstrap(user: User = Depends(current_user), session: Session = Depen
                 "error": None}
         if cached and cached[0] == account.secret_enc:
             band = cached[1].status()
+        band = {**band, "personal": True}
+    elif platform:
+        try:
+            band = (await service.platform_org(user.id)).status()
+        except ServiceError as error:
+            band = {"configured": True, "online": False, "owner_name": platform.name, "owner_handle": platform.handle,
+                    "error": error.message, "api": "agent", "personal": True}
     return {
         "me": serialize_user(user),
         "users": [serialize_user(u) for u in session.exec(select(User)).all()],
@@ -596,6 +625,7 @@ AvatarStyle = Literal["teal", "sage", "blue", "plum", "terracotta", "violet"]
 
 class AgentCreateBody(BaseModel):
     name: str = Field(min_length=3, max_length=40)
+    band_agent_api_key: SecretStr | None = Field(default=None, min_length=10, max_length=2000)
     role: str = "custom"
     instructions: str = Field(default="", max_length=6000)
     specialty: str = Field(default="", max_length=160)
@@ -687,6 +717,7 @@ async def create_agent(body: AgentCreateBody, user: User = Depends(current_user)
         raise HTTPException(403, "Only admins can grant access to workspace apps")
     profile = await service.create_agent(
         name=body.name,
+        band_agent_api_key=body.band_agent_api_key.get_secret_value() if body.band_agent_api_key else None,
         role=body.role,
         instructions=body.instructions,
         model=body.model,

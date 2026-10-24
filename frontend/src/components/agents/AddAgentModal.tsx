@@ -9,7 +9,7 @@ import ConnectAgentModal from "./ConnectAgentModal";
 import RuntimeIcon from "./RuntimeIcon";
 
 const options: { runtime: AgentRuntime; title: string; description: string }[] = [
-  { runtime: "deepagents", title: "Create agent", description: "Give a teammate a name, specialty, and instructions." },
+  { runtime: "deepagents", title: "Connect Band agent", description: "Use an existing agent’s API key, then choose its specialty and instructions." },
   { runtime: "codex", title: "Codex", description: "Connect an account and work with Codex in your channels." },
   { runtime: "claude", title: "Claude Agent", description: "Connect Anthropic and add a Claude-powered teammate." },
   { runtime: "cursor", title: "Cursor", description: "Connect Cursor and work with its agent in your channels." },
@@ -30,8 +30,8 @@ export default function AddAgentModal({ state, channel, onClose }: {
         className="h-auto w-full justify-start gap-4 rounded-xl p-4 text-left whitespace-normal"
         onClick={() => setRuntime(option.runtime)}>
         <span className="bg-muted flex size-11 shrink-0 items-center justify-center rounded-xl"><RuntimeIcon runtime={option.runtime} className="size-6" /></span>
-        <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{option.title}</span>
-          <span className="text-muted-foreground mt-1 block text-xs font-normal leading-relaxed">{option.description}</span></span>
+        <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{option.runtime === "deepagents" && state.band.api === "agent" ? "Create agent" : option.title}</span>
+          <span className="text-muted-foreground mt-1 block text-xs font-normal leading-relaxed">{option.runtime === "deepagents" && state.band.api === "agent" ? "Create a teammate using your saved Band connection." : option.description}</span></span>
         <ChevronRightIcon className="text-muted-foreground size-4 shrink-0" />
       </Button>)}</div>
     </DialogContent>

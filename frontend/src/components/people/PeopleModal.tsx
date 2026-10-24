@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { LoaderCircleIcon, MessageCircleIcon, UserPlusIcon } from "lucide-react";
 import { api } from "@/api";
 import type { State } from "@/store";
-import type { BandAccount, Channel, ChannelInvitation, PeopleResponse } from "@/types";
+import type { BandAccount, BandPlatformConnection, Channel, ChannelInvitation, PeopleResponse } from "@/types";
 import ModalShell from "@/components/shared/ModalShell";
 import Avatar from "@/components/shared/Avatar";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,8 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
   onClose: () => void;
 }) {
   const [account, setAccount] = useState<BandAccount | null>(null);
+  const [platform, setPlatform] = useState<BandPlatformConnection | null>(null);
+  const [platformKey, setPlatformKey] = useState("");
   const [people, setPeople] = useState<PeopleResponse>({ contacts: [], requests: [], sent_requests: [] });
   const [invitations, setInvitations] = useState<ChannelInvitation[]>([]);
   const [key, setKey] = useState("");
@@ -34,11 +36,12 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
   const directory = Object.values(state.users).filter((person) => person.id !== state.me.id && !contactIds.has(person.id)
     && (!search || `${person.username} ${person.display_name}`.toLowerCase().includes(search)));
   const refresh = async () => {
-    const [nextAccount, contacts, invites] = await Promise.all([
+    const [nextAccount, contacts, invites, connection] = await Promise.all([
       api<BandAccount>("GET", "/api/band/account"), api<PeopleResponse>("GET", "/api/people"),
       api<ChannelInvitation[]>("GET", "/api/people/invitations"),
+      api<BandPlatformConnection>("GET", "/api/band/connection"),
     ]);
-    setAccount(nextAccount); setPeople(contacts); setInvitations(invites);
+    setAccount(nextAccount); setPeople(contacts); setInvitations(invites); setPlatform(connection);
   };
   useEffect(() => {
     let stopped = false;
@@ -125,16 +128,34 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
           await api("POST", "/api/people/requests", { handle: person.username }); setNotice(`Contact request sent to ${person.display_name}.`);
         })}><UserPlusIcon />{sentIds.has(person.id) ? "Request sent" : receivedIds.has(person.id) ? "Request received" : `Add ${person.display_name}`}</Button>
       </div>)}</section> : null}
+      <section aria-label="Your Band platform connection" className="space-y-3 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">Your Band connection</h2>
+        <p className="text-muted-foreground text-sm">{platform?.connected
+          ? platform.online === false ? platform.error || "Your saved Band connection is unavailable. Update your key to reconnect." : "Your Band connection is active. Rooms, teammates and Band collaboration use your saved key."
+          : "Add your Band Agent API key to connect your account to the Band platform."}</p>
+        <form className="space-y-2" onSubmit={(event) => {
+          event.preventDefault();
+          void run(async () => {
+            const connection = await api<BandPlatformConnection>("PUT", "/api/band/connection", { api_key: platformKey.trim() });
+            setPlatform(connection); setPlatformKey(""); setNotice("Your Band connection has been verified and saved.");
+          });
+        }}>
+          <Label htmlFor="platform-band-key">{platform?.connected ? "Update Band Agent API key" : "Band Agent API key"}</Label>
+          <div className="flex flex-wrap gap-2"><Input id="platform-band-key" type="password" autoComplete="off" placeholder="band_a_…" required disabled={busy}
+            value={platformKey} onChange={(event) => setPlatformKey(event.target.value)} className="min-w-40 flex-1" />
+            <Button disabled={busy || !platformKey.trim()}>{platform?.connected ? "Update connection" : "Connect Band"}</Button></div>
+        </form>
+      </section>
       <details className="space-y-3 rounded-xl border p-4">
-        <summary className="cursor-pointer text-sm font-semibold">Personal Band account (optional)</summary>
-        <p className="text-muted-foreground text-sm">{account?.connected ? `Connected as @${account.handle.replace(/^@/, "")}. New agents and channels use this account. Existing rooms and agents keep their original account.` : "Chat, contacts, and channel invitations work with your app account. An admin creates shared agents. Connect a personal account to create agents on your own Band platform."}</p>
+        <summary className="cursor-pointer text-sm font-semibold">Advanced: Band Human API (Enterprise)</summary>
+        <p className="text-muted-foreground text-sm">{account?.connected ? `Connected as @${account.handle.replace(/^@/, "")}. New agents and channels use this account. Existing rooms and agents keep their original account.` : "For Enterprise accounts that register agents programmatically. For individual use, connect an agent API key from Add agents. Chat, contacts, and invitations use your app account."}</p>
         <form onSubmit={connect} className="space-y-2">
           <Label htmlFor="personal-band-key">{account?.connected ? "Update human API key" : "Band human API key"}</Label>
           <div className="flex flex-wrap gap-2">
             <Input id="personal-band-key" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="band_u_…" required className="min-w-40 flex-1" disabled={busy} />
             <Button disabled={busy || !key.trim()}>{busy ? <LoaderCircleIcon className="animate-spin" /> : null}Connect</Button>
           </div>
-          <p className="text-muted-foreground text-xs">Get a human API key from <a className="underline" href="https://app.band.ai/users/settings" target="_blank" rel="noreferrer">Band settings</a>. Human API access is required. Your key is encrypted on the server.</p>
+          <p className="text-muted-foreground text-xs">Get a human API key from <a className="underline" href="https://app.band.ai/users/settings" target="_blank" rel="noreferrer">Band settings</a>. Enterprise Human API access is required. Your key is encrypted on the server.</p>
         </form>
       </details>
     </div>
