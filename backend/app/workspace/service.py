@@ -8,7 +8,7 @@ import os
 import re
 from collections.abc import Sequence
 from uuid import uuid4
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Any
 
 from sqlalchemy import or_, func, update
@@ -17,8 +17,7 @@ from sqlmodel import Session, select
 
 from app.band.listener import AgentManager, describe_error, fetch_identity
 from app.auth import decrypt_secret, encrypt_secret
-from app.band.org import BandOrg
-from app.band.platform import AgentPlatformOrg
+from app.band.platform import AgentPlatformOrg, disconnected_status
 from app.band.platform_listener import PlatformListener
 from app.config import settings
 from app.agent_connections import runtime_for
@@ -35,9 +34,9 @@ from app.persistence.models import (ComputerDisk, ComputerEndpoint, ComputerGate
 from app.workspace.audit import record
 from app.workspace.permissions import policy_of, serialize_policy
 from app.runtime.tools.composio import plugin_slugs, set_plugin_access
-from app.workspace.roles import MASTER_ROLE, ROLES, role_label
-from app.persistence.models import (UserBandAccount, UserBandConnection, PrivateConversation, HumanDirectMessage,
-                                    BandAgentOwner, BandAgentLink, BandRoomAccount, BandPlatformRoom, PlatformTeammate, ContactBlock)
+from app.workspace.roles import ROLES, role_label
+from app.persistence.models import (UserBandConnection, PrivateConversation, HumanDirectMessage,
+                                    BandAgentOwner, BandAgentLink, BandPlatformRoom, PlatformTeammate, ContactBlock)
 from app.workspace.access import channel_audience, agent_event_visible, agent_owner
 from app.workspace.components import current_components
 from app.tasks import channel_context, display_names
@@ -198,20 +197,16 @@ def _mentioned(content: str, *names: str) -> bool:
 
 
 class AppService:
-    """Keeps the app's channels, agents and messages in step with the org's Band account."""
+    """Coordinates local work and per-user Band Agent API connections."""
 
     def __init__(self) -> None:
-        self.org = BandOrg()
         self.agents = AgentManager(self)
         self._room_to_channel: dict[str, int] = {}
-        self._poll_since: dict[str, datetime] = {}
-        self._poller: asyncio.Task | None = None
         self._task_poller: asyncio.Task | None = None
         self._teammate_poller: asyncio.Task | None = None
         self._take_over_poller: asyncio.Task | None = None
         self._dm_lock = asyncio.Lock()
         self._register_lock = asyncio.Lock()
-        self._user_orgs: dict[int, tuple[str, BandOrg]] = {}
         self._platform_orgs: dict[int, tuple[str, AgentPlatformOrg]] = {}
         self._platform_listeners: dict[int, PlatformListener] = {}
         self._platform_locks: dict[int, asyncio.Lock] = {}
@@ -219,38 +214,32 @@ class AppService:
         self._band_room_locks: dict[int, asyncio.Lock] = {}
 
     def uses_agent_key(self, profile: AgentProfile) -> bool:
-        with db() as session:
-            return session.get(BandAgentLink, profile.id) is not None
+        # Previously registered identities can still use their own Agent API key.
+        return bool(profile.band_api_key_enc) and not self.platform_teammate(profile.id)
 
-    async def account_org(self, user_id: int) -> BandOrg:
+    async def account_org(self, user_id: int) -> AgentPlatformOrg | None:
         with db() as session:
-            enterprise = session.get(UserBandAccount, user_id)
-            platform = session.get(UserBandConnection, user_id)
-        # An explicitly configured Enterprise account remains opt-in. A saved
-        # Agent API credential never falls back to the operator's key on failure.
-        if enterprise and enterprise.secret_enc:
-            return await self.human_account_org(user_id)
-        if platform:
-            return await self.platform_org(user_id)
-        return self.org  # Existing accounts and rooms keep their legacy transport.
+            connection = session.get(UserBandConnection, user_id)
+        return await self.platform_org(user_id) if connection else None
 
-    async def human_account_org(self, user_id: int) -> BandOrg:
+    async def band_status(self, user_id: int) -> dict:
+        from app.persistence.models import UserBandAccount
         with db() as session:
+            connection = session.get(UserBandConnection, user_id)
             account = session.get(UserBandAccount, user_id)
-        if account is None or not account.secret_enc:
-            return self.org
-        cached = self._user_orgs.get(user_id)
-        if cached and cached[0] == account.secret_enc:
-            return cached[1]
-        if cached:
-            await cached[1].close()
-        org = BandOrg(decrypt_secret(account.secret_enc))
-        await org.connect()
-        if not org.online or not org.owner or org.owner.id != account.band_user_id:
-            await org.close()
-            raise ServiceError("Your Band connection needs to be reconnected", 409)
-        self._user_orgs[user_id] = (account.secret_enc, org)
-        return org
+        can_manage = bool(account and account.secret_enc)
+        if not connection:
+            if can_manage:
+                return {"configured": True, "online": True, "api": "management", "personal": True,
+                        "owner_name": account.name, "owner_handle": account.handle, "error": None,
+                        "can_manage_agents": True}
+            return disconnected_status()
+        try:
+            return {**(await self.platform_org(user_id)).status(), "can_manage_agents": can_manage}
+        except ServiceError as error:
+            return {"configured": True, "online": False, "owner_name": connection.name,
+                    "owner_handle": connection.handle, "error": error.message, "personal": True, "api": "agent",
+                    "can_manage_agents": can_manage}
 
     async def platform_org(self, user_id: int) -> AgentPlatformOrg:
         async with self._platform_locks.setdefault(user_id, asyncio.Lock()):
@@ -287,61 +276,40 @@ class AppService:
         async with self._platform_locks.setdefault(user_id, asyncio.Lock()):
             await self._close_platform(user_id)
         org = await self.platform_org(user_id)
-        await bus.publish({"type": "band_status", "band": org.status()}, users={user_id})
+        await bus.publish({"type": "band_status", "band": await self.band_status(user_id)}, users={user_id})
         return org
 
     async def platform_connection_failed(self, user_id, identity):
         cached = self._platform_orgs.get(user_id)
         if cached and cached[1].identity == identity:
+            from app.persistence.models import UserBandAccount
+            with db() as session:
+                account = session.get(UserBandAccount, user_id)
+                can_manage = bool(account and account.secret_enc)
             cached[1].error = "Band's live connection is unavailable. Reconnect in People."
-            await bus.publish({"type": "band_status", "band": {**cached[1].status(), "online": False}}, users={user_id})
+            await bus.publish({"type": "band_status", "band": {**cached[1].status(), "online": False,
+                              "can_manage_agents": can_manage}}, users={user_id})
 
-    async def room_org(self, channel_id: int) -> BandOrg:
+    async def room_org(self, channel_id: int) -> AgentPlatformOrg:
         with db() as session:
             platform = session.get(BandPlatformRoom, channel_id)
-            pinned = session.get(BandRoomAccount, channel_id)
+            channel = session.get(Channel, channel_id)
             scope = session.get(PrivateConversation, channel_id)
         if platform:
             org = await self.platform_org(platform.user_id)
             if org.identity != platform.band_agent_id:
-                raise ServiceError("The Band connection for this room changed; reconnect its original identity", 409)
+                raise ServiceError("Reconnect this room's original Band Agent API connection", 409)
             return org
-        if pinned:
-            org = await self.human_account_org(pinned.user_id) if pinned.user_id else self.org
-            if org.owner and org.owner.id != pinned.band_user_id:
-                raise ServiceError("The Band account for this room needs to be reconnected", 409)
-            return org
-        return await self.account_org(scope.owner_id) if scope else self.org
-
-    async def agent_org(self, profile: AgentProfile) -> BandOrg:
-        with db() as session:
-            owner = session.get(BandAgentOwner, profile.id)
-            account = session.get(UserBandAccount, owner.user_id) if owner else None
-        if owner and account and account.secret_enc and account.band_user_id == owner.band_user_id:
-            return await self.human_account_org(owner.user_id)
-        if owner and self.org.owner and owner.band_user_id != self.org.owner.id:
-            raise ServiceError("The Band account for this agent needs to be reconnected", 409)
-        return self.org
-
-    def human_band_id(self, user_id: int) -> str:
-        with db() as session:
-            account = session.get(UserBandAccount, user_id)
-            platform = session.get(UserBandConnection, user_id)
-        if not account and platform:
-            return platform.band_agent_id
-        return (account.band_user_id or "") if account else (self.org.owner.id if self.org.owner else "")
+        if channel and channel.band_room_id:
+            raise ServiceError("This older channel has no Agent API connection. Create a new channel to use Band.", 409)
+        if scope:
+            return await self.platform_org(scope.owner_id)
+        raise ServiceError("Add your Band Agent API connection in People and create a channel to use Band", 409)
 
     def message_reply_to(self, user_id: int, channel_id: int) -> str:
         with db() as session:
-            if session.get(HumanDirectMessage, channel_id):
-                return ""
-            pinned = session.get(BandRoomAccount, channel_id)
-            scope = session.get(PrivateConversation, channel_id)
-            if pinned:
-                return pinned.band_user_id
-            if scope:
-                return self.human_band_id(scope.owner_id)
-        return self.org.owner.id if self.org.owner else ""
+            platform = session.get(BandPlatformRoom, channel_id)
+        return platform.band_agent_id if platform else ""
 
     # --- lifecycle ---
 
@@ -351,21 +319,9 @@ class AppService:
         settle_interrupted()
         self._task_poller = asyncio.create_task(self._watch_task_messages(latest), name="task-messages")
         self._take_over_poller = asyncio.create_task(self._watch_take_overs(), name="take-overs")
-        await self.org.connect()
-        # Claimed before Band connects, a request would fail with "starting up" although Band is reachable.
-        self._teammate_poller = asyncio.create_task(self._watch_teammate_requests(), name="teammate-requests")
-        await self._publish_band_status()
-        try:
-            if self.org.online:
-                await self._ensure_rooms()
-                await self._ensure_master()
-        except Exception as exc:
-            logger.exception("Band setup failed")
-            self.org.error = describe_error(exc)
-            await self._publish_band_status()
         with db() as session:
             profiles = session.exec(select(AgentProfile)).all()
-            platform_users = set(session.exec(select(BandPlatformRoom.user_id)).all())
+            platform_users = session.exec(select(UserBandConnection.user_id)).all()
         for user_id in platform_users:
             try:
                 await self.platform_org(user_id)
@@ -376,23 +332,16 @@ class AppService:
                 try:
                     await self.start_agent(profile)
                 except ServiceError:
-                    await self.agent_status(profile.id, "error", "Reconnect the owner's Band account")
-        self._poller = asyncio.create_task(self._poll_forever(), name="band-poller")
+                    await self.agent_status(profile.id, "error", "Reconnect the owner's Band Agent API connection")
+        self._teammate_poller = asyncio.create_task(self._watch_teammate_requests(), name="teammate-requests")
 
     async def shutdown(self) -> None:
         for poller in (self._task_poller, self._teammate_poller, self._take_over_poller):
             if poller is not None:
                 poller.cancel()
                 await asyncio.gather(poller, return_exceptions=True)
-        if self._poller is not None:
-            self._poller.cancel()
-            await asyncio.gather(self._poller, return_exceptions=True)
         await self.agents.stop_all()
         await asyncio.gather(*(self._close_platform(user_id) for user_id in list(self._platform_orgs)), return_exceptions=True)
-        for _, org in self._user_orgs.values():
-            await org.close()
-        self._user_orgs.clear()
-        await self.org.close()
 
     async def end_expired_take_overs(self) -> None:
         """Announce take-overs that ran out of time, as a hand-back is announced."""
@@ -480,7 +429,7 @@ class AppService:
                 logger.exception("Could not publish worker updates")
 
     async def _watch_teammate_requests(self) -> None:
-        """Register teammates that agents asked for; the worker can't, since Band registration lives here."""
+        """Create app teammates requested by agents while execution stays in the worker."""
         while True:
             await asyncio.sleep(0.5)
             try:
@@ -494,7 +443,7 @@ class AppService:
 
     async def process_teammate_request(self, request_id: int) -> None:
         with db() as session:
-            # Claiming first stops the worker expiring a request whose Band registration is under way.
+            # Claim before creating so the worker cannot expire an in-flight request.
             claimed = session.exec(update(TeammateRequest).where(
                 TeammateRequest.id == request_id, TeammateRequest.status == "pending").values(status="creating"))
             session.commit()
@@ -529,40 +478,6 @@ class AppService:
             await self.system_message(request.channel_id, f"{requester.name if requester else 'An agent'} created "
                                       f"**{profile.name}** ({role_label(profile.role)}) as a teammate in this channel.")
 
-    def _require_band(self) -> None:
-        if not self.org.online:
-            raise ServiceError(f"Not connected to Band: {self.org.error or 'starting up'}", 503)
-
-    async def _ensure_rooms(self) -> None:
-        with db() as session:
-            channels = [c for c in session.exec(select(Channel).where(Channel.band_room_id == None)).all()
-                        if not session.get(PrivateConversation, c.id)]  # noqa: E711
-        for channel in channels:
-            room_id = await self.org.create_room(f"#{channel.name}")
-            with db() as session:
-                stored = session.get(Channel, channel.id)
-                stored.band_room_id = room_id
-                session.add(stored)
-                session.commit()
-            await self.publish_channel(channel.id)
-
-    async def _ensure_master(self) -> None:
-        with db() as session:
-            master = session.exec(select(AgentProfile).where(AgentProfile.is_master == True)).first()  # noqa: E712
-            private = set(session.exec(select(DirectMessage.channel_id)).all())
-            private.update(session.exec(select(PrivateConversation.channel_id)).all())
-            channel_ids = [c.id for c in session.exec(select(Channel)).all() if c.id not in private]
-        if master is None:
-            master = await self._register_agent(
-                name=settings.master_agent_name,
-                role="master",
-                instructions="",
-                model=configuration()[2],
-                is_master=True,
-            )
-        for channel_id in channel_ids:
-            await self.add_agent_to_channel(channel_id, master)
-
     def master(self) -> AgentProfile | None:
         with db() as session:
             return session.exec(select(AgentProfile).where(AgentProfile.is_master == True)).first()  # noqa: E712
@@ -576,10 +491,15 @@ class AppService:
             persona = session.get(AgentPersona, profile.id) if profile.id else None
             runtime = session.get(AgentRuntime, profile.id) if profile.id else None
             owner_id = agent_owner(session, profile)
+            owner = session.get(BandAgentOwner, profile.id) if profile.id else None
+            imported = session.get(BandAgentLink, profile.id) if profile.id else None
+            teammate = session.get(PlatformTeammate, profile.id) if profile.id else None
+            transport = session.exec(select(UserBandConnection).where(UserBandConnection.band_agent_id == profile.band_agent_id)).first()
+            managed = bool(owner and owner.band_user_id and not imported and not teammate and not transport)
         reference = model_reference(profile.id) if not runtime else None
         return {
             "id": profile.id,
-            "band_auth": "platform" if self.platform_teammate(profile.id) else "agent_key" if self.uses_agent_key(profile) else "human_api",
+            "band_auth": "platform" if teammate else "managed" if managed else "agent_key",
             "name": profile.name,
             "handle": profile.handle,
             "role": profile.role,
@@ -645,13 +565,6 @@ class AppService:
                             await bus.publish({"type": "agent", "agent": self.serialize_agent(profile)}, users=audience)
                 await bus.publish({"type": "channel", "channel": self.serialize_channel(session, channel)})
 
-    async def _publish_band_status(self) -> None:
-        with db() as session:
-            legacy = {u.id for u in session.exec(select(User)).all()
-                      if not session.get(UserBandConnection, u.id)
-                      and not (session.get(UserBandAccount, u.id) and session.get(UserBandAccount, u.id).secret_enc)}
-        await bus.publish({"type": "band_status", "band": self.org.status()}, users=legacy)
-
     # --- channels ---
 
     def _channel_for_room(self, session: Session, room_id: str) -> Channel | None:
@@ -664,13 +577,7 @@ class AppService:
         return channel
 
     async def create_channel(self, name: str, topic: str, creator: User) -> dict[str, Any]:
-        try:
-            org = await self.account_org(creator.id)
-        except ServiceError:
-            with db() as session:
-                if session.get(UserBandConnection, creator.id):
-                    raise  # A broken personal credential cannot select the workspace account.
-            org = None
+        org = await self.account_org(creator.id)
         with db() as session:
             scopes = session.exec(select(PrivateConversation).where(PrivateConversation.owner_id == creator.id,
                 PrivateConversation.kind == "channel", PrivateConversation.title == name)).all()
@@ -681,10 +588,7 @@ class AppService:
             try:
                 room_id = await org.create_room(f"#{name}")
             except Exception:
-                if isinstance(org, AgentPlatformOrg):
-                    raise ServiceError("Band could not create this channel. Check your Band connection before retrying.", 502) from None
-                # Human collaboration works independently of the optional Band transport.
-                logger.warning("Created a local channel while Band was unavailable")
+                raise ServiceError("Band could not create this channel. Check your Band connection before retrying.", 502) from None
         with db() as session:
             channel = Channel(name=f"{name}-{uuid4().hex[:12]}", topic=topic, band_room_id=room_id, created_by=creator.id)
             session.add(channel)
@@ -692,10 +596,7 @@ class AppService:
             session.add(ChannelMember(channel_id=channel.id, member_type="human", member_id=creator.id))
             session.add(PrivateConversation(channel_id=channel.id, owner_id=creator.id, title=name))
             if room_id:
-                session.add(BandRoomAccount(channel_id=channel.id, band_user_id=org.owner.id,
-                                           user_id=creator.id if org is not self.org else None))
-                if isinstance(org, AgentPlatformOrg):
-                    session.add(BandPlatformRoom(channel_id=channel.id, user_id=org.user_id, band_agent_id=org.identity))
+                session.add(BandPlatformRoom(channel_id=channel.id, user_id=org.user_id, band_agent_id=org.identity))
             session.commit()
             channel_id = channel.id
         if room_id:
@@ -715,7 +616,6 @@ class AppService:
                     DirectMessage.user_id == user.id, DirectMessage.agent_id == profile.id)).first()
                 if existing:
                     return self.serialize_channel(session, session.get(Channel, existing.channel_id))
-            linked = self.uses_agent_key(profile)
             with db() as session:
                 teammate = session.get(PlatformTeammate, profile.id)
             org = None
@@ -723,16 +623,10 @@ class AppService:
                 org = await self.platform_org(teammate.user_id)
                 if org.identity != teammate.band_agent_id:
                     raise ServiceError("Reconnect this teammate's original Band connection", 409)
-            elif linked:
-                candidate = await self.account_org(user.id)
-                if isinstance(candidate, AgentPlatformOrg):
-                    org = candidate
             else:
-                org = await self.agent_org(profile)
+                org = await self.account_org(user.id)
             room_id = None
             if org:
-                if org is self.org:
-                    self._require_band()
                 try:
                     room_id = await org.create_room(f"{user.display_name} + {profile.name}")
                 except Exception as exc:
@@ -744,13 +638,9 @@ class AppService:
                 session.flush()
                 session.add_all([DirectMessage(channel_id=channel.id, user_id=user.id, agent_id=profile.id),
                                  ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id)])
-                if linked or org is not self.org:
-                    session.add(PrivateConversation(channel_id=channel.id, owner_id=user.id, kind="agent_dm"))
+                session.add(PrivateConversation(channel_id=channel.id, owner_id=user.id, kind="agent_dm"))
                 if org:
-                    session.add(BandRoomAccount(channel_id=channel.id, band_user_id=org.owner.id,
-                                               user_id=user.id if org is not self.org else None))
-                    if isinstance(org, AgentPlatformOrg):
-                        session.add(BandPlatformRoom(channel_id=channel.id, user_id=org.user_id, band_agent_id=org.identity))
+                    session.add(BandPlatformRoom(channel_id=channel.id, user_id=org.user_id, band_agent_id=org.identity))
                 session.commit()
                 channel_id = channel.id
             if room_id:
@@ -759,7 +649,7 @@ class AppService:
         with db() as session:
             return self.serialize_channel(session, session.get(Channel, channel_id))
 
-    async def _connect_channel_room(self, channel_id: int, org: BandOrg) -> str:
+    async def _connect_channel_room(self, channel_id: int, org: AgentPlatformOrg) -> str:
         async with self._band_room_locks.setdefault(channel_id, asyncio.Lock()):
             with db() as session:
                 channel = session.get(Channel, channel_id)
@@ -767,19 +657,16 @@ class AppService:
                 if channel.band_room_id:
                     return channel.band_room_id
             if not org.online:
-                raise ServiceError("Configure a workspace or personal Band connection to add agents", 503)
+                raise ServiceError("Reconnect your Band Agent API connection to add agents", 503)
             try:
-                room_id = await org.create_room(f"#{scope.title or channel.name}")
+                room_id = await org.create_room(f"#{scope.title if scope and scope.title else channel.name}")
             except Exception:
                 raise ServiceError("Band could not connect this channel for agents", 502) from None
             with db() as session:
                 stored = session.get(Channel, channel_id)
                 stored.band_room_id = room_id
                 session.add(stored)
-                session.add(BandRoomAccount(channel_id=channel_id, band_user_id=org.owner.id,
-                                           user_id=scope.owner_id if org is not self.org else None))
-                if isinstance(org, AgentPlatformOrg):
-                    session.add(BandPlatformRoom(channel_id=channel_id, user_id=org.user_id, band_agent_id=org.identity))
+                session.add(BandPlatformRoom(channel_id=channel_id, user_id=org.user_id, band_agent_id=org.identity))
                 session.commit()
             self._room_to_channel[room_id] = channel_id
             return room_id
@@ -810,9 +697,7 @@ class AppService:
             if scope and scope.kind == "human_dm":
                 raise ServiceError("Human direct messages cannot contain agents", 409)
         if scope and not room_id:
-            # Browser tests have no Band transport. Membership is still recorded locally.
-            if not (os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key and not org.online):
-                room_id = await self._connect_channel_room(channel_id, org)
+            room_id = await self._connect_channel_room(channel_id, org)
         if room_id and scope:
             # The room lives on its owner's Band account. The other account cannot see that room,
             # so the room owner adds the agent after Band's own contact rules allow it.
@@ -855,7 +740,7 @@ class AppService:
                 await org.remove_participant(channel.band_room_id, profile.band_agent_id)
             except Exception:
                 raise ServiceError("Band could not remove this agent", 502) from None
-            for account_org in [self.org, *[cached[1] for cached in self._user_orgs.values()]]:
+            for _, account_org in self._platform_orgs.values():
                 account_org.forget_participant(channel.band_room_id, profile.band_agent_id)
         with db() as session:
             member = session.get(ChannelMember, (channel_id, "agent", profile.id))
@@ -871,26 +756,16 @@ class AppService:
             except Exception:
                 logger.exception("Couldn't remove %s from room %s", profile.name, room_id)
 
-    def _guard_workspace_band_roster(self, org: BandOrg, user_id: int | None, action: str) -> None:
-        """The server Band key is the workspace agent's account, not a member's agent directory."""
-        from app.config import uses_workspace_band_key
-        if isinstance(org, AgentPlatformOrg):
-            if user_id != org.user_id:
-                raise ServiceError("Only the channel's Band connection owner can manage its Band peer network", 403)
-            return
-        if user_id is None or org is not self.org or not uses_workspace_band_key():
-            return
-        with db() as session:
-            from app.workspace.permissions import is_admin
-            if not is_admin(session, user_id):
-                raise ServiceError(f"Only an admin can {action} agents on the workspace Band account.", 403)
+    def _guard_band_roster(self, org: AgentPlatformOrg, user_id: int | None) -> None:
+        if user_id != org.user_id:
+            raise ServiceError("Only the channel's Band connection owner can manage its Band peer network", 403)
 
     async def list_peers(self, channel_id: int, user_id: int | None = None) -> list[dict[str, Any]]:
         """Band agents outside this app that could be invited to the channel."""
         org = await self.room_org(channel_id)
-        self._guard_workspace_band_roster(org, user_id, "browse")
+        self._guard_band_roster(org, user_id)
         if not org.online:
-            self._require_band()
+            raise ServiceError("Reconnect this channel's Band Agent API connection", 409)
         with db() as session:
             channel = session.get(Channel, channel_id)
             if channel is None or not channel.band_room_id:
@@ -908,9 +783,9 @@ class AppService:
 
     async def invite_outside_agent(self, user: User, channel_id: int, band_id: str) -> None:
         org = await self.room_org(channel_id)
-        self._guard_workspace_band_roster(org, user.id, "invite")
+        self._guard_band_roster(org, user.id)
         if not org.online:
-            self._require_band()
+            raise ServiceError("Reconnect this channel's Band Agent API connection", 409)
         with db() as session:
             channel = session.get(Channel, channel_id)
             if channel is None or not channel.band_room_id:
@@ -951,7 +826,7 @@ class AppService:
         if channel.band_room_id:
             org = await self.room_org(channel_id)
             if not org.online:
-                self._require_band()
+                raise ServiceError("Reconnect this channel's Band Agent API connection", 409)
             try:
                 await org.remove_participant(channel.band_room_id, band_id)
             except Exception as exc:
@@ -984,18 +859,9 @@ class AppService:
         if self.uses_agent_key(profile):
             await self.agents.start(profile, owner_id="")
             return
-        org = await self.agent_org(profile)
-        if not org.online:
-            self.agents.status[profile.id] = {"state": "error", "error": "Connect Band before starting this agent"}
-            await self.agent_status(profile.id, "error", "Connect Band before starting this agent")
-            return
-        owner = org.owner
-        await self.agents.start(
-            profile,
-            owner_id=owner.id if owner else "",
-        )
+        await self.agent_status(profile.id, "error", "Connect a Band Agent API key in People")
 
-    async def _register_agent(
+    async def _create_agent_profile(
         self,
         *,
         name: str,
@@ -1004,7 +870,6 @@ class AppService:
         model: str,
         created_by: int | None = None,
         created_by_agent: int | None = None,
-        is_master: bool = False,
         plugins: list[str] | None = None,
         specialty: str = "",
         avatar: str | None = None,
@@ -1021,80 +886,82 @@ class AppService:
             with db() as session:
                 parent = session.get(AgentProfile, created_by_agent)
                 owner_user_id = agent_owner(session, parent) if parent else None
-        org = await self.account_org(owner_user_id) if owner_user_id else self.org
-        if isinstance(org, AgentPlatformOrg):
-            return await self._create_platform_teammate(org=org, name=name, role=role, instructions=instructions,
+        if owner_user_id is None:
+            raise ServiceError("Choose an owner with a saved Band connection", 409)
+        from app.persistence.models import UserBandAccount
+        with db() as session:
+            account = session.get(UserBandAccount, owner_user_id)
+        if account and account.secret_enc:
+            return await self._register_native_agent(name=name, role=role, instructions=instructions,
                 model=model, created_by=owner_user_id, created_by_agent=created_by_agent, plugins=plugins,
                 specialty=specialty, avatar=avatar, runtime=runtime, connection_id=connection_id)
-        if not is_master and org is self.org and owner_user_id is not None:
-            from app.config import uses_workspace_band_key
-            if uses_workspace_band_key():
-                with db() as session:
-                    from app.workspace.permissions import is_admin
-                    if not is_admin(session, owner_user_id):
-                        raise ServiceError("Only an admin can create agents on the workspace Band account.", 403)
-        if not org.online and os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
-            return await self._register_local_agent(name=name, role=role, instructions=instructions, model=model,
-                                                    created_by=created_by, created_by_agent=created_by_agent,
-                                                    is_master=is_master, plugins=plugins, specialty=specialty, avatar=avatar)
-        if not org.online:
-            raise ServiceError("Not connected to Band; check the workspace integration or optional personal connection", 503)
-        name = name.strip()
-        if len(name) < 3:
-            raise ServiceError("Agent name needs at least 3 characters", 422)
-        # Registration awaits Band for seconds; one at a time keeps two requests from claiming the same name.
-        async with self._register_lock:
-            with db() as session:
-                named = session.exec(select(AgentProfile).where(func.lower(AgentProfile.name) == name.lower())).all()
-                if any(org is self.org or agent_owner(session, item) == owner_user_id for item in named):
-                    raise ServiceError(f"An agent named {name!r} already exists", 409)
-                # Local names win in ask_teammate, so a new agent must not hide an invited outside agent.
-                if outsider := session.exec(select(OutsideAgent).where(
-                        func.lower(OutsideAgent.name) == name.lower())).first():
-                    raise ServiceError(f"The outside Band agent {outsider.name!r} already uses that name", 409)
-            role_info = MASTER_ROLE if role == "master" else ROLES[role]
-            try:
-                band_id, api_key = await org.register_agent(
-                    name, f"{role_info['label']} agent in BAND_BOTS. {role_info['description']}"
-                )
-                identity = await fetch_identity(api_key)
-            except Exception as exc:
-                raise ServiceError(f"Band couldn't register the agent: {describe_error(exc)}", 502) from exc
-            profile = AgentProfile(
-                name=identity.name or name,
-                handle=identity.handle,
-                role=role,
-                instructions=instructions.strip(),
-                model=model,
-                band_agent_id=band_id,
-                band_api_key_enc=encrypt_secret(api_key),
-                is_master=is_master,
-                created_by=created_by,
-                created_by_agent=created_by_agent,
-            )
-            with db() as session:
-                session.add(profile)
-                session.flush()
-                if owner_user_id:
-                    session.add(BandAgentOwner(agent_id=profile.id, user_id=owner_user_id, band_user_id=org.owner.id))
-                if runtime != "deepagents":
-                    connection = session.get(AgentConnection, connection_id)
-                    if connection is None or connection.provider != runtime:
-                        raise ServiceError("Agent connection is no longer available", 409)
-                    session.add(AgentRuntime(agent_id=profile.id, provider=runtime, connection_id=connection_id))
-                if specialty.strip() or avatar is not None:
-                    session.add(AgentPersona(agent_id=profile.id, specialty=specialty.strip(), avatar=avatar))
-                session.commit()
-                session.refresh(profile)
-        if plugins is not None and profile.id is not None:
-            set_plugin_access(profile.id, plugins)
-        await self.start_agent(profile)
-        await bus.publish({"type": "agent", "agent": self.serialize_agent(profile)})
-        return profile
+        org = await self.platform_org(owner_user_id)
+        return await self._create_platform_teammate(org=org, name=name, role=role, instructions=instructions,
+            model=model, created_by=owner_user_id, created_by_agent=created_by_agent, plugins=plugins,
+            specialty=specialty, avatar=avatar, runtime=runtime, connection_id=connection_id)
 
     def platform_teammate(self, agent_id):
         with db() as session:
             return session.get(PlatformTeammate, agent_id)
+
+    async def _register_native_agent(self, *, name, role, instructions, model, created_by,
+                                     created_by_agent, plugins, specialty, avatar, runtime, connection_id):
+        from app.band.accounts import register_agent
+        from fastapi import HTTPException
+        name = name.strip()
+        if len(name) < 3:
+            raise ServiceError("Agent name needs at least 3 characters", 422)
+        async with self._register_lock:
+            with db() as session:
+                named = session.exec(select(AgentProfile).where(func.lower(AgentProfile.name) == name.lower())).all()
+                if any(agent_owner(session, item) in {None, created_by} for item in named):
+                    raise ServiceError("You already have an agent with that name", 409)
+                if session.exec(select(OutsideAgent.band_id).where(func.lower(OutsideAgent.name) == name.lower())).first():
+                    raise ServiceError("An outside Band agent already uses that name", 409)
+                if runtime != "deepagents":
+                    connection = session.get(AgentConnection, connection_id)
+                    if not connection or connection.created_by != created_by or connection.provider != runtime:
+                        raise ServiceError("Choose your authenticated provider connection", 422)
+            try:
+                band_id, key, owner = await register_agent(created_by, name, specialty.strip() or "AI teammate in BandBot")
+            except HTTPException as error:
+                raise ServiceError(error.detail, error.status_code) from None
+            try:
+                # Registration issues this key once. Persist it before another network
+                # request so a failed identity lookup cannot orphan the native agent.
+                with db() as session:
+                    profile = AgentProfile(name=name, role=role, model=model,
+                        instructions=instructions.strip(), band_agent_id=band_id, band_api_key_enc=encrypt_secret(key),
+                        created_by=created_by, created_by_agent=created_by_agent)
+                    session.add(profile); session.flush()
+                    session.add(BandAgentOwner(agent_id=profile.id, user_id=created_by, band_user_id=owner))
+                    session.add(AgentPersona(agent_id=profile.id, specialty=specialty.strip(), avatar=avatar))
+                    if runtime != "deepagents":
+                        session.add(AgentRuntime(agent_id=profile.id, provider=runtime, connection_id=connection_id))
+                    session.commit(); session.refresh(profile)
+            except Exception:
+                raise ServiceError("Band created the agent, but the app could not connect it. Find the agent in Band and connect its Agent API key here; do not create it again.", 502) from None
+        if plugins is not None:
+            set_plugin_access(profile.id, plugins)
+        try:
+            async with asyncio.timeout(25):
+                identity = await fetch_identity(key)
+            if identity.id != band_id:
+                raise ValueError("Agent identity mismatch")
+        except Exception:
+            error = "The agent was created and its key saved securely, but Band could not verify its connection. Retry this agent's connection; do not create it again."
+            self.agents.status[profile.id] = {"state": "error", "error": error}
+            await self.agent_status(profile.id, "error", error)
+        else:
+            with db() as session:
+                profile = session.get(AgentProfile, profile.id)
+                profile.handle = identity.handle
+                session.add(profile)
+                session.commit()
+                session.refresh(profile)
+            await self.start_agent(profile)
+        await bus.publish({"type": "agent", "agent": self.serialize_agent(profile)})
+        return profile
 
     async def _create_platform_teammate(self, *, org, name, role, instructions, model, created_by,
                                         created_by_agent, plugins, specialty, avatar, runtime, connection_id):
@@ -1123,7 +990,7 @@ class AppService:
                 session.commit(); session.refresh(profile)
         if plugins is not None:
             set_plugin_access(profile.id, plugins)
-        if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
+        if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key:
             self.agents.status[profile.id] = {"state": "online", "error": None}
         else:
             await self.start_agent(profile)
@@ -1171,58 +1038,6 @@ class AppService:
         await bus.publish({"type": "agent", "agent": self.serialize_agent(profile)})
         return profile
 
-    async def _register_local_agent(
-        self,
-        *,
-        name: str,
-        role: str,
-        instructions: str,
-        model: str,
-        created_by: int | None = None,
-        created_by_agent: int | None = None,
-        is_master: bool = False,
-        plugins: list[str] | None = None,
-        specialty: str = "",
-        avatar: str | None = None,
-    ) -> AgentProfile:
-        """Deterministic teammate for browser tests. Never calls Band or a model provider."""
-        name = name.strip()
-        if len(name) < 3:
-            raise ServiceError("Agent name needs at least 3 characters", 422)
-        owner_user_id = created_by
-        if owner_user_id is None and created_by_agent:
-            with db() as session:
-                parent = session.get(AgentProfile, created_by_agent)
-                owner_user_id = agent_owner(session, parent) if parent else None
-        profile = AgentProfile(
-            name=name,
-            handle=f"e2e-{uuid4().hex[:12]}",
-            role=role,
-            instructions=instructions.strip(),
-            model=model,
-            band_agent_id=f"e2e-{uuid4().hex}",
-            band_api_key_enc=encrypt_secret("e2e"),
-            is_master=is_master,
-            created_by=created_by,
-            created_by_agent=created_by_agent,
-        )
-        with db() as session:
-            session.add(profile)
-            session.flush()
-            if owner_user_id:
-                session.add(BandAgentOwner(agent_id=profile.id, user_id=owner_user_id, band_user_id="e2e-local"))
-            if specialty.strip() or avatar is not None:
-                session.add(AgentPersona(agent_id=profile.id, specialty=specialty.strip(), avatar=avatar))
-            session.commit()
-            session.refresh(profile)
-        if plugins is not None and profile.id is not None:
-            set_plugin_access(profile.id, plugins)
-        assert profile.id is not None
-        self.agents.status[profile.id] = {"state": "online", "error": None}
-        await self.agent_status(profile.id, "online", None)
-        await bus.publish({"type": "agent", "agent": self.serialize_agent(profile)})
-        return profile
-
     async def create_agent(
         self,
         *,
@@ -1246,7 +1061,7 @@ class AppService:
                 scope = session.get(PrivateConversation, channel_id)
                 if parent and scope and agent_owner(session, parent) is None:
                     created_by = scope.owner_id
-        profile = await self._register_agent(
+        profile = await self._create_agent_profile(
             name=name,
             band_agent_api_key=band_agent_api_key,
             role=role,
@@ -1265,9 +1080,21 @@ class AppService:
         return profile
 
     async def delete_agent(self, profile: AgentProfile) -> None:
-        org = None if self.uses_agent_key(profile) or self.platform_teammate(profile.id) else await self.agent_org(profile)
         if profile.is_master:
             raise ServiceError("The master agent can't be removed", 409)
+        with db() as session:
+            owner = session.get(BandAgentOwner, profile.id)
+            imported = session.get(BandAgentLink, profile.id)
+            teammate = session.get(PlatformTeammate, profile.id)
+            transport = session.exec(select(UserBandConnection).where(UserBandConnection.band_agent_id == profile.band_agent_id)).first()
+        # Imported/shared transport identities are disconnected locally, never deleted remotely.
+        if owner and owner.band_user_id and not imported and not teammate and not transport:
+            from app.band.accounts import delete_agent
+            from fastapi import HTTPException
+            try:
+                await delete_agent(owner.user_id, profile.band_agent_id, owner.band_user_id)
+            except HTTPException as error:
+                raise ServiceError(error.detail, error.status_code) from None
         await self.agents.stop(profile.id)
         with db() as session:
             memberships = session.exec(
@@ -1337,13 +1164,9 @@ class AppService:
             session.delete(session.get(AgentProfile, profile.id))
             session.commit()
             rooms = [c.band_room_id for c in session.exec(select(Channel)).all() if c.band_room_id]
-        for room_id in rooms:
-            self.org.forget_participant(room_id, profile.band_agent_id)
-        if org and org.online:
-            try:
-                await org.delete_agent(profile.band_agent_id)
-            except Exception:
-                logger.exception("Couldn't delete %s on Band", profile.name)
+        for _, connection in self._platform_orgs.values():
+            for room_id in rooms:
+                connection.forget_participant(room_id, profile.band_agent_id)
         for channel_id in channel_ids:
             await self.publish_channel(channel_id)
         await bus.publish({"type": "agent_deleted", "agent_id": profile.id})
@@ -1545,29 +1368,17 @@ class AppService:
                 session.add(stored)
                 session.commit()
 
-    def _strip_owner_mentions(self, content: str) -> str:
-        owner = self.org.owner
-        if owner:
-            for ref in {owner.handle, owner.name}:
-                if ref:
-                    content = re.sub(rf"@{re.escape(ref)}(?![\w-])[,:]?\s*", "", content, flags=re.IGNORECASE)
-        return content.strip()
-
     def _resolve_agent_mentions(self, refs: list[str]) -> tuple[list[dict[str, Any]], bool]:
         with db() as session:
             agents = session.exec(select(AgentProfile)).all()
-        resolved: list[dict[str, Any]] = []
-        to_humans = False
+        resolved = []
         for ref in refs:
-            if self.org.is_owner_reference(ref):
-                to_humans = True
-                continue
             key = ref.strip().lstrip("@").lower()
             for agent in agents:
                 if key in {agent.band_agent_id.lower(), agent.handle.lower(), agent.name.lower()}:
                     resolved.append({"type": "agent", "id": agent.id, "name": agent.name})
                     break
-        return resolved, to_humans
+        return resolved, not resolved
 
     async def _store_agent_message(
         self, channel_id: int, profile: AgentProfile, content: str, refs: list[str], band_message_id: str | None
@@ -1588,7 +1399,7 @@ class AppService:
                 author_type="agent",
                 author_id=profile.id,
                 author_name=profile.name,
-                content=self._strip_owner_mentions(content) if to_humans else content,
+                content=content,
                 mentions=resolved,
                 to_humans=to_humans,
                 band_message_id=band_message_id,
@@ -1693,70 +1504,6 @@ class AppService:
             payload = serialize_messages(session, [message])[0]
         await bus.publish({"type": "message", "message": payload})
 
-    async def _poll_forever(self) -> None:
-        started = datetime.now(timezone.utc)
-        while True:
-            await asyncio.sleep(settings.poll_seconds)
-            with db() as session:
-                rooms = [(c.id, c.band_room_id) for c in session.exec(select(Channel)).all()
-                         if c.band_room_id and not session.get(BandPlatformRoom, c.id)]
-            for channel_id, room_id in rooms:
-                try:
-                    await self.sync_room(channel_id, room_id, self._poll_since.get(room_id, started))
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning("Polling room %s failed: %s", room_id, describe_error(exc))
-
-    async def sync_room(self, channel_id: int, room_id: str, since: datetime) -> None:
-        async with self._room_locks.setdefault(channel_id, asyncio.Lock()):
-            await self._sync_room(channel_id, room_id, since)
-
-    async def _sync_room(self, channel_id: int, room_id: str, since: datetime) -> None:
-        """Brings in room messages posted outside this app (Band UI, external agents, SDK fallbacks)."""
-        org = await self.room_org(channel_id)
-        owner_id = org.owner.id if org.owner else None
-        with db() as session:
-            agents_by_band_id = {a.band_agent_id: a for a in session.exec(select(AgentProfile)).all()}
-        for item in await org.messages_since(room_id, since):
-            if item.inserted_at and item.inserted_at > self._poll_since.get(room_id, since):
-                self._poll_since[room_id] = item.inserted_at
-            with db() as session:
-                if session.exec(select(Message.id).where(Message.band_message_id == item.id)).first():
-                    continue
-                local_human = session.exec(select(UserBandAccount).where(UserBandAccount.band_user_id == item.sender_id)).first()
-                local_user = session.get(User, local_human.user_id) if local_human else None
-                if session.get(PrivateConversation, channel_id):
-                    sender_agent = agents_by_band_id.get(item.sender_id)
-                    human_member = local_user and session.get(ChannelMember, (channel_id, "human", local_user.id))
-                    agent_member = sender_agent and session.get(ChannelMember, (channel_id, "agent", sender_agent.id))
-                    bridge = session.get(BandRoomAccount, channel_id)
-                    bridge_owner = bridge and bridge.band_user_id == item.sender_id
-                    if not human_member and not agent_member and not bridge_owner and not session.get(OutsideAgent, (channel_id, item.sender_id)):
-                        continue
-            if item.sender_id == owner_id and org is self.org:
-                continue
-            profile = agents_by_band_id.get(item.sender_id)
-            if profile is not None:
-                # Managed agents publish their answer locally before the worker sends
-                # the Band copy. Mirroring that copy would race its send receipt.
-                if profile.band_agent_id in self.agents.local_band_ids:
-                    continue
-                refs = re.findall(r"@([\w./-]+)", item.content)
-                await self._store_agent_message(channel_id, profile, item.content, refs, item.id)
-                continue
-            with db() as session:
-                content = display_names(session, item.content)
-            await self._store(
-                Message(
-                    channel_id=channel_id,
-                    author_type="human" if local_user else "external",
-                    author_id=local_user.id if local_user else None,
-                    author_name=local_user.display_name if local_user else item.sender_name or "Band user",
-                    content=self._strip_owner_mentions(content),
-                    band_message_id=item.id,
-                )
-            )
 
 
 service = AppService()

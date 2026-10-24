@@ -6,9 +6,9 @@ from fastapi.testclient import TestClient
 from sqlmodel import select
 
 import app.runtime.harness as harness
-from app.auth import issue_token
+from app.auth import issue_token, encrypt_secret
 from app.main import app
-from app.persistence.models import AgentPersona, AgentProfile, AgentTask, Channel, ChannelMember, User, WorkspaceRole, db, init_db
+from app.persistence.models import AgentPersona, AgentProfile, AgentTask, Channel, ChannelMember, User, UserBandConnection, PlatformTeammate, WorkspaceRole, db, init_db
 from app.runtime.tools.composio import plugin_slugs
 from app.workspace.service import service
 from test_service import FakeOrg
@@ -26,8 +26,12 @@ def test_create_edit_and_delete_agent_identity_without_preset_or_implicit_member
         session.merge(WorkspaceRole(user_id=user.id, role="admin"))
         session.add(ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id))
         session.commit()
-    org = FakeOrg()
-    monkeypatch.setattr(service, "org", org)
+    connection = UserBandConnection(user_id=user.id, band_agent_id=f"persona-{key}", secret_enc=encrypt_secret(f"band_a_persona-{key}"))
+    with db() as session:
+        session.add(connection)
+        session.commit()
+    org = FakeOrg(user_id=user.id, identity=connection.band_agent_id)
+    monkeypatch.setattr(service, "_platform_orgs", {user.id: (connection.secret_enc, org)})
 
     async def identity(api_key):
         name = api_key.removeprefix("key-")
@@ -48,7 +52,7 @@ def test_create_edit_and_delete_agent_identity_without_preset_or_implicit_member
     assert response.status_code == 200, response.text
     agent = response.json()
     agent_id = agent["id"]
-    assert org.registered == [f"Atlas-{key}"]
+    assert agent["band_auth"] == "platform"
     assert agent["role"] == "custom"
     assert agent["created_at"].endswith("+00:00")
     assert agent["specialty"] == agent["role_label"] == "Research and synthesis"
@@ -83,6 +87,7 @@ def test_create_edit_and_delete_agent_identity_without_preset_or_implicit_member
     assert client.delete(f"/api/agents/{opted_in.json()['id']}", headers=auth).status_code == 200
     client.close()
     with db() as session:
+        session.delete(session.get(UserBandConnection, user.id))
         session.delete(session.get(ChannelMember, (channel.id, "human", user.id)))
         session.delete(session.get(WorkspaceRole, user.id))
         session.delete(session.get(Channel, channel.id))

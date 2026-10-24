@@ -68,9 +68,9 @@ export default function AgentProfile({ state, agent, openModal, onMessage, openi
                 </DropdownMenuGroup>
                 {!agent.is_master ? <><DropdownMenuSeparator /><DropdownMenuGroup>
                   <DropdownMenuItem variant="destructive" disabled={!canManage || (agent.owner_id == null && !isAdmin(state))} onSelect={() => {
-                    if (confirm(agent.band_auth === "platform" ? `Delete ${agent.name} from this app? Your Band connection and Band history will be kept.` : agent.band_auth === "agent_key"
-                      ? `Disconnect ${agent.name} from this app? The original agent and its history on Band will be kept.`
-                      : `Delete ${agent.name}? This also deletes the agent and its history on Band.`)) {
+                    if (confirm(agent.band_auth === "platform" ? `Delete ${agent.name} from this app? Your Band connection and Band history will be kept.`
+                      : agent.band_auth === "managed" ? `Delete ${agent.name} from this app and your Band account? Conversation history will be kept.`
+                      : `Disconnect ${agent.name} from this app? The original agent and its history on Band will be kept.`)) {
                       void run(async () => { await api("DELETE", `/api/agents/${agent.id}`); onDeleted(agent.id); }, "Agent deleted.");
                     }
                   }}><Trash2Icon />{agent.band_auth === "agent_key" ? "Disconnect agent" : "Delete agent"}</DropdownMenuItem>

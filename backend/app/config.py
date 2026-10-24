@@ -21,8 +21,6 @@ def _env(name: str, default: str = "") -> str:
 @dataclass(frozen=True)
 class Settings:
     openai_api_key: str = _env("OPENAI_API_KEY")
-    band_user_api_key: str = _env("BAND_USER_API_KEY")
-    master_agent_name: str = _env("MASTER_AGENT_NAME", "Master")
     band_rest_url: str = _env("BAND_REST_URL", "https://app.band.ai")
     band_ws_url: str = _env("BAND_WS_URL", "wss://app.band.ai/api/v1/socket/websocket")
     app_secret: str = _env("APP_SECRET", "dev-secret-change-me")
@@ -61,7 +59,6 @@ class Settings:
     tenki_lifecycle_timeout: int = max(60, min(600, int(_env("TENKI_LIFECYCLE_TIMEOUT_SECONDS", "180"))))
     tenki_disk_gib: int = max(1, min(50, int(_env("TENKI_DISK_GIB", "20"))))
     app_preview_base_url: str = _env("APP_PREVIEW_BASE_URL", "http://localhost:8000")
-    poll_seconds: float = float(_env("BAND_POLL_SECONDS", "5"))
     codex_executable: str = _env("CODEX_EXECUTABLE", "codex")
     # Exact gateway base URLs approved by the server operator; never arbitrary browser-supplied hosts.
     openclaw_gateway_urls: str = _env("OPENCLAW_GATEWAY_URLS")
@@ -73,11 +70,6 @@ class Settings:
 
 
 settings = Settings()
-
-
-def uses_workspace_band_key() -> bool:
-    """The server key runs the shared workspace agent. It is not a person's Band login."""
-    return bool(settings.band_user_api_key)
 
 
 def is_postgres(url: str) -> bool:

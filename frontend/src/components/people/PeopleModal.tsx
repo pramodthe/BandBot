@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { LoaderCircleIcon, MessageCircleIcon, UserPlusIcon } from "lucide-react";
+import { MessageCircleIcon, UserPlusIcon } from "lucide-react";
 import { api } from "@/api";
 import type { State } from "@/store";
 import type { BandAccount, BandPlatformConnection, Channel, ChannelInvitation, PeopleResponse } from "@/types";
@@ -16,12 +16,12 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
   onChannel: (channel: Channel) => void;
   onClose: () => void;
 }) {
-  const [account, setAccount] = useState<BandAccount | null>(null);
   const [platform, setPlatform] = useState<BandPlatformConnection | null>(null);
+  const [account, setAccount] = useState<BandAccount | null>(null);
+  const [accountKey, setAccountKey] = useState("");
   const [platformKey, setPlatformKey] = useState("");
   const [people, setPeople] = useState<PeopleResponse>({ contacts: [], requests: [], sent_requests: [] });
   const [invitations, setInvitations] = useState<ChannelInvitation[]>([]);
-  const [key, setKey] = useState("");
   const [handle, setHandle] = useState(personId ? state.users[personId]?.username || "" : "");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -36,12 +36,13 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
   const directory = Object.values(state.users).filter((person) => person.id !== state.me.id && !contactIds.has(person.id)
     && (!search || `${person.username} ${person.display_name}`.toLowerCase().includes(search)));
   const refresh = async () => {
-    const [nextAccount, contacts, invites, connection] = await Promise.all([
-      api<BandAccount>("GET", "/api/band/account"), api<PeopleResponse>("GET", "/api/people"),
+    const [contacts, invites, connection, management] = await Promise.all([
+      api<PeopleResponse>("GET", "/api/people"),
       api<ChannelInvitation[]>("GET", "/api/people/invitations"),
       api<BandPlatformConnection>("GET", "/api/band/connection"),
+      api<BandAccount>("GET", "/api/band/account"),
     ]);
-    setAccount(nextAccount); setPeople(contacts); setInvitations(invites); setPlatform(connection);
+    setPeople(contacts); setInvitations(invites); setPlatform(connection); setAccount(management);
   };
   useEffect(() => {
     let stopped = false;
@@ -63,13 +64,6 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
     try { await action(); await refresh(); }
     catch (cause) { setError((cause as Error).message); }
     finally { setBusy(false); }
-  };
-  const connect = (event: FormEvent) => {
-    event.preventDefault();
-    void run(async () => {
-      const next = await api<BandAccount>("PUT", "/api/band/account", { api_key: key });
-      setKey(""); setAccount(next); setNotice(`Connected as @${next.handle.replace(/^@/, "")}.`);
-    });
   };
   const request = (event: FormEvent) => {
     event.preventDefault();
@@ -128,11 +122,31 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
           await api("POST", "/api/people/requests", { handle: person.username }); setNotice(`Contact request sent to ${person.display_name}.`);
         })}><UserPlusIcon />{sentIds.has(person.id) ? "Request sent" : receivedIds.has(person.id) ? "Request received" : `Add ${person.display_name}`}</Button>
       </div>)}</section> : null}
+      <section aria-label="Your Band agent management" className="space-y-3 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">Create and manage Band agents</h2>
+        <p className="text-muted-foreground text-sm">{account?.connected
+          ? `Connected as ${account.name || account.handle}. New agents are created in your Band account.`
+          : "Connect your own Band user API key to create agents from this app. Other users use their own keys."}</p>
+        <p className="text-muted-foreground text-xs">Your user account, people, channels, and human messages stay in BandBot.</p>
+        <form className="space-y-2" onSubmit={(event) => {
+          event.preventDefault();
+          void run(async () => {
+            const saved = await api<BandAccount>("PUT", "/api/band/account", { api_key: accountKey.trim() });
+            setAccount(saved); setAccountKey(""); setNotice("Your Band account is connected. You can now create agents.");
+          });
+        }}>
+          <Label htmlFor="management-band-key">Band user API key</Label>
+          <div className="flex flex-wrap gap-2"><Input id="management-band-key" type="password" autoComplete="off" placeholder="band_u_…" required disabled={busy}
+            value={accountKey} onChange={(event) => setAccountKey(event.target.value)} className="min-w-40 flex-1" />
+            <Button disabled={busy || !accountKey.trim()}>{account?.connected ? "Update management key" : "Connect for agent management"}</Button></div>
+          <p className="text-muted-foreground text-xs">Create a user key in <a href="https://app.band.ai/users/settings" target="_blank" rel="noreferrer" className="underline">Band Settings → API Keys</a>. It is verified and stored encrypted.</p>
+        </form>
+      </section>
       <section aria-label="Your Band platform connection" className="space-y-3 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">Your Band connection</h2>
+        <h2 className="text-sm font-semibold">Existing agent connection</h2>
         <p className="text-muted-foreground text-sm">{platform?.connected
           ? platform.online === false ? platform.error || "Your saved Band connection is unavailable. Update your key to reconnect." : "Your Band connection is active. Rooms, teammates and Band collaboration use your saved key."
-          : "Add your Band Agent API key to connect your account to the Band platform."}</p>
+          : "Optional: connect an existing agent identity with its band_a_ key. This key cannot create new native Band identities."}</p>
         <form className="space-y-2" onSubmit={(event) => {
           event.preventDefault();
           void run(async () => {
@@ -146,18 +160,6 @@ export default function PeopleModal({ state, channelId, personId, onChannel, onC
             <Button disabled={busy || !platformKey.trim()}>{platform?.connected ? "Update connection" : "Connect Band"}</Button></div>
         </form>
       </section>
-      <details className="space-y-3 rounded-xl border p-4">
-        <summary className="cursor-pointer text-sm font-semibold">Advanced: Band Human API (Enterprise)</summary>
-        <p className="text-muted-foreground text-sm">{account?.connected ? `Connected as @${account.handle.replace(/^@/, "")}. New agents and channels use this account. Existing rooms and agents keep their original account.` : "For Enterprise accounts that register agents programmatically. For individual use, connect an agent API key from Add agents. Chat, contacts, and invitations use your app account."}</p>
-        <form onSubmit={connect} className="space-y-2">
-          <Label htmlFor="personal-band-key">{account?.connected ? "Update human API key" : "Band human API key"}</Label>
-          <div className="flex flex-wrap gap-2">
-            <Input id="personal-band-key" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="band_u_…" required className="min-w-40 flex-1" disabled={busy} />
-            <Button disabled={busy || !key.trim()}>{busy ? <LoaderCircleIcon className="animate-spin" /> : null}Connect</Button>
-          </div>
-          <p className="text-muted-foreground text-xs">Get a human API key from <a className="underline" href="https://app.band.ai/users/settings" target="_blank" rel="noreferrer">Band settings</a>. Enterprise Human API access is required. Your key is encrypted on the server.</p>
-        </form>
-      </details>
     </div>
   </ModalShell>;
 }

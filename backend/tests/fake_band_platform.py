@@ -11,6 +11,32 @@ class OfflineBandNetwork:
         self.peers = []
         self.rejected = set()
         self.aliases = {}
+        self.managed_agents = {}
+
+    def management_client(self, *, api_key, base_url):
+        assert api_key.startswith('band_u_'), 'Agent management selected a non-user credential'
+        owner = api_key.removeprefix('band_u_')
+        network = self
+        async def close(): pass
+        async def profile(**kwargs):
+            if api_key in network.rejected: raise ValueError('Credential revoked')
+            network.calls.append(('management_identity', api_key, None))
+            return Obj(data=Obj(id=owner, first_name=owner.title(), last_name='', handle=owner))
+        async def register(*, agent, request_options):
+            if api_key in network.rejected: raise ValueError('Credential revoked')
+            assert request_options['max_retries'] == 0
+            identity = 'managed-' + owner + '-' + uuid4().hex
+            key = 'band_a_' + identity
+            network.managed_agents[identity] = owner
+            network.calls.append(('register', api_key, identity, agent.name))
+            return Obj(data=Obj(agent=Obj(id=identity), credentials=Obj(api_key=key)))
+        async def delete(identity, **kwargs):
+            assert network.managed_agents[identity] == owner
+            network.calls.append(('delete', api_key, identity))
+            del network.managed_agents[identity]
+        return Obj(human_api_profile=Obj(get_my_profile=profile),
+            human_api_agents=Obj(register_my_agent=register, delete_my_agent=delete),
+            _client_wrapper=Obj(httpx_client=Obj(httpx_client=Obj(aclose=close))))
 
     def client(self, *, api_key, base_url):
         network = self

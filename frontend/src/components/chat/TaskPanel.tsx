@@ -69,7 +69,11 @@ function usageFor(task: Task) {
 
 function verbFor(task: Task) {
   if (task.status === "running" && task.cancel_requested) return "Cancelling…";
-  if (task.provider_block) return "Needs connection";
+  if (task.provider_block) {
+    const service = ({ research: "Web research", llm: "Model", computer: "Computer", retrieval: "Document search",
+      documents: "Document analysis", analysis: "Document analysis", image: "Image generation", images: "Image generation", integrations: "App integration" } as Record<string, string>)[task.provider_block.service] || "Service";
+    return `${service} ${task.provider_block.code === "not_configured" ? "not configured" : "needs connection"}`;
+  }
   if (task.status === "failed") return "Failed";
   if (task.status === "cancelled") return "Cancelled";
   return clip(task.progress);
@@ -358,7 +362,7 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
             <Avatar name={agentName(task.agent_id)} kind="agent" role={agent?.role} avatar={agent?.avatar} runtime={agent?.runtime} size={30} working={task.status === "running"} />
             <div className="min-w-0 flex-1 basis-32">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium">{agentName(task.agent_id)}</span><span className={cn("text-muted-foreground inline-flex items-center gap-1 text-[11px]", task.status === "waiting" && "text-warning-foreground", task.status === "completed" && "text-brand-soft-foreground", task.status === "failed" && "text-destructive")}><Icon className={cn("size-3", task.status === "running" && "motion-safe:animate-spin")} />{label}</span></div>
-              <p className="text-muted-foreground mt-0.5 truncate text-xs" title={task.progress}>{task.progress || "Task received"}</p>
+              <p className="text-muted-foreground mt-0.5 truncate text-xs" title={task.provider_block ? step.verb : task.progress}>{task.provider_block ? step.verb : task.progress || "Task received"}</p>
               {expanded && <p className="text-muted-foreground mt-1 text-[11px]">{[since(task.updated_at), usageFor(task)].filter(Boolean).join(" · ")}</p>}
             </div>
             <div className="ml-auto">{step.action}</div>

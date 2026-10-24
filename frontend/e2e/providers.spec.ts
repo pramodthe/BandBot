@@ -6,7 +6,7 @@ test("admin manages independent local retrieval without an OpenAI key", async ({
   await page.getByLabel("Username").fill("provider_settings_admin");
   if (info.project.name === "desktop") await page.getByLabel("Display name").fill("Provider administrator");
   await page.getByLabel("Password").fill("secret123");
-  if (info.project.name === "desktop") await page.getByLabel("Band agent API key", { exact: true }).fill("band_a_e2e-provider-admin");
+  if (info.project.name === "desktop") await page.getByLabel("Band user API key", { exact: true }).fill("band_a_e2e-provider-admin");
   await page.getByRole("button", { name: info.project.name === "desktop" ? "Create account" : "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: /^People/ })).toBeVisible();
   const settings = page.getByRole("button", { name: "Providers & APIs", exact: true });

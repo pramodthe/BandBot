@@ -8,9 +8,8 @@ from pydantic import BaseModel, Field, SecretStr
 from sqlmodel import Session, select
 
 from app.auth import current_user
-from app.band.accounts import authenticated_account, save_account
 from app.persistence.models import (Channel, ChannelInvitation, ChannelMember, ContactBlock, HumanDirectMessage,
-                                    AppContact, AppContactRequest, PrivateConversation, User, UserBandAccount,
+                                    AppContact, AppContactRequest, PrivateConversation, User,
                                     db, get_session, utcnow)
 from app.workspace.events import bus
 from app.workspace.service import service
@@ -18,13 +17,28 @@ from app.workspace.service import service
 router = APIRouter()
 
 
-def account_status(account: UserBandAccount | None) -> dict:
-    return {"connected": bool(account and account.secret_enc),
-            "handle": account.handle if account else "", "name": account.name if account else ""}
-
-
-class BandAccountBody(BaseModel):
+class BandConnectionBody(BaseModel):
     api_key: SecretStr = Field(min_length=10, max_length=2000)
+
+
+@router.get("/api/band/account")
+def agent_management_account(user: User = Depends(current_user), session: Session = Depends(get_session)):
+    from app.band.accounts import account_status
+    from app.persistence.models import UserBandAccount
+    return account_status(session.get(UserBandAccount, user.id))
+
+
+@router.put("/api/band/account")
+async def update_agent_management_account(body: BandConnectionBody, user: User = Depends(current_user)):
+    from app.band.accounts import validate_account, save_account, account_status
+    key = body.api_key.get_secret_value().strip()
+    identity = await validate_account(key)
+    with db() as session:
+        row = save_account(session, user.id, key, identity)
+        session.commit()
+        result = account_status(row)
+    await bus.publish({"type": "band_status", "band": await service.band_status(user.id)}, users={user.id})
+    return result
 
 
 @router.get("/api/band/connection")
@@ -43,7 +57,7 @@ async def platform_connection(user: User = Depends(current_user), session: Sessi
 
 
 @router.put("/api/band/connection")
-async def update_platform_connection(body: BandAccountBody, user: User = Depends(current_user)):
+async def update_platform_connection(body: BandConnectionBody, user: User = Depends(current_user)):
     from app.band.connections import validate_key, save_connection, connection_status
     key = body.api_key.get_secret_value().strip()
     identity = await validate_key(key)
@@ -57,23 +71,6 @@ async def update_platform_connection(body: BandAccountBody, user: User = Depends
         return {**result, "online": org.online, "error": org.error}
     except ServiceError as error:
         return {**result, "online": False, "error": error.message}
-
-
-@router.get("/api/band/account")
-def band_account(user: User = Depends(current_user), session: Session = Depends(get_session)):
-    return account_status(session.get(UserBandAccount, user.id))
-
-
-@router.put("/api/band/account")
-async def connect_account(body: BandAccountBody, user: User = Depends(current_user)):
-    key = body.api_key.get_secret_value().strip()
-    async with authenticated_account(key) as org:
-        with db() as session:
-            row = save_account(session, user.id, key, org)
-            session.commit()
-            result = account_status(row)
-        await bus.publish({"type": "band_status", "band": {**org.status(), "personal": True}}, users={user.id})
-        return result
 
 
 class ContactBody(BaseModel):

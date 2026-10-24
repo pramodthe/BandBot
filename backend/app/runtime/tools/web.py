@@ -12,6 +12,11 @@ from app.persistence.models import AgentTask
 
 def web_tools(task: AgentTask):
 
+    def research_unavailable() -> dict:
+        return {"error": "Web research is not configured. A workspace admin can enable Web research in Providers & APIs. "
+                         "Continue without live research or ask for source material; do not claim to have searched or read a page.",
+                "code": "not_configured", "retryable": False}
+
     async def exa_post(path: str, body: dict, label: str) -> tuple[dict | None, dict | None]:
         """Returns (data, error). Errors never include response bodies, which may echo credentials."""
         try:
@@ -31,17 +36,16 @@ def web_tools(task: AgentTask):
         """Search current web sources with the selected research service. Returns source URLs and text."""
         from app.providers.context import selection
         binding = selection("research", task)
+        if binding.get("disabled"):
+            return research_unavailable()
         if binding.get("connection_id"):
             from app.providers.connections import resolve
             from app.providers.research import search
             if not query.strip():
                 return {"error": "Provide a nonempty search query."}
             return await search(resolve(binding, "research"), query.strip())
-        if binding.get("disabled"):
-            from app.providers.contracts import ProviderError
-            raise ProviderError("research", "not_configured")
         if not settings.exa_api_key:
-            return {"error": "Exa web search is not configured. Set EXA_API_KEY. Do not claim to have searched."}
+            return research_unavailable()
         if not query.strip():
             return {"error": "Provide a nonempty search query."}
         data, error = await exa_post("search", {
@@ -65,15 +69,14 @@ def web_tools(task: AgentTask):
         """
         from app.providers.context import selection
         binding = selection("research", task)
+        if binding.get("disabled"):
+            return research_unavailable()
         if binding.get("connection_id"):
             from app.providers.connections import resolve
             from app.providers.research import fetch
             return await fetch(resolve(binding, "research"), url.strip())
-        if binding.get("disabled"):
-            from app.providers.contracts import ProviderError
-            raise ProviderError("research", "not_configured")
         if not settings.exa_api_key:
-            return {"error": "Page fetching is not configured. Set EXA_API_KEY. Do not claim to have read the page."}
+            return research_unavailable()
         parsed = urlparse(url.strip())
         if parsed.scheme not in ("http", "https") or not parsed.netloc or len(url) > 2048:
             return {"error": "Provide a full http(s) URL of up to 2048 characters."}

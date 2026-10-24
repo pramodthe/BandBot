@@ -15,11 +15,22 @@ When changing the product:
 - Preserve human controls for approvals, cancellation, resume, and computer take-over, including the channel's permission policies.
 - Keep setup and implementation details out of everyday task flows unless the user needs them to make a decision. Agent computers should be discoverable from the agent profile and chat, with clear channel scope, live viewing, files, activity, and human take-over controls.
 
+## Band integration policy: local people, per-user agent management
+
+- User signup, login, contacts, invitations, memberships, channels, human direct messages, and live human chat belong to our database and WebSocket service. Band credentials are optional at signup. Never require Band for local human collaboration.
+- Each user may save their own **Band user API key** (`band_u_…`) at signup or in People. Validate it against Band, encrypt it with `APP_SECRET`, and use it only to create and manage that user's native Band agents. Obtain this key in Band Settings → API Keys.
+- Band names native agent registration/deletion endpoints **Human API** (`human_api_agents`, `/api/v1/me/agents`). These agent-management calls ARE supported and required. Do not confuse this naming with implementing Band-hosted human accounts or chat. Do not remove agent management when human chat integration is excluded.
+- Newly registered agents receive separate **Agent API keys** (`band_a_…`). Validate and encrypt these keys; each native agent retains its own identity, profile, instructions, memory, tasks, approvals, and computer scope. Its REST/SDK/WebSocket transport uses its agent key. Reasoning runs only in the worker.
+- Preserve importing existing native agents and existing saved Agent API transport connections. An Agent API connection alone cannot register new native identities; compatibility app teammates can share that transport with separate app profiles. Removing an imported identity or a shared transport teammate must not delete its native Band identity.
+- Never use a workspace `.env` key, another user's key, or another account as a fallback. User A's agent-management calls must use A's saved user key, and B's must use B's. Reconnects must retain ownership. Validate ownership before deleting a managed native agent.
+- Native Band human profile/chat synchronization, impersonating app humans on Band, and Human API room/message polling are not implemented. Native human-chat integration remains **coming soon**, separately from supported native agent management.
+- Preserve historical rooms and messages; do not revive old human-chat transport. Native Agent API rooms remain pinned to their original connection. Model-provider and cloud-computer authentication are separate from Band authentication.
+
 ## Project Structure & Architecture
 
 - `backend/app/main.py`: ASGI entry; `api/http.py` defines REST/WebSocket endpoints and serves the built UI.
 - `backend/app/workspace/`: channels, messages, agent profiles, roles, permissions, events, and activity logging. `service.py` coordinates the workspace.
-- `backend/app/band/`: `org.py` wraps Band's Human API; `listener.py` receives agent turns and enqueues work.
+- `backend/app/band/`: `platform.py` uses the per-user Agent API; `platform_listener.py` and `listener.py` receive agent turns and enqueue work. The scoped account client supports native agent management; human chat remains local.
 - `backend/app/tasks/`: durable queue, worker, hand-offs, teammate creation requests, approvals, schedules, streaming drafts, usage, and budgets. `backend/app/worker.py` is the worker process entry.
 - `backend/app/runtime/`: the per-task Deep Agent harness, internal helpers, and tools for memory, research, teammates, approvals, integrations, and computers.
 - `backend/app/computer/`: E2B and Tenki desktop lifecycle, durable disks, observations, actions, and files.
@@ -63,6 +74,7 @@ For local development, run the API, worker, and Vite in separate terminals. Fast
 - Preserve atomic message/task creation, task deduplication, ordering per agent per channel, and checkpoint recovery. Keep model execution out of the API process.
 - Keep visible Band teammates distinct from internal helpers. Preserve bounded hand-offs and replay-safe teammate creation.
 - Preserve the application's approval flow for external actions, MCP approval policies, and connected-app access restrictions. Approval pauses must release the worker slot and resume from checkpoints.
+- Tell the parent agent and helpers which services are disabled in the task's pinned bindings. A disabled optional service must produce an actionable tool limitation rather than aborting the model turn. Configured connection failures, revocations, permission denials, and uncertain paid actions must retain their recovery safeguards. Never enable another service or execute on the host as a fallback.
 - Enforce channel membership and role/policy checks on the server. Frontend controls reflect these permissions but do not replace them. This is one shared workspace; channel access is not tenant isolation.
 - Preserve agent/channel memory isolation, audit secret masking, token accounting, and daily budget enforcement.
 - Keep skill management admin-only. Installed skills and supporting files are read-only workflow guidance for the agent and its task helpers; imports must stay bounded and must never extract or execute files on the host or grant tools. Clear skill assignments when an agent is deleted.
@@ -79,9 +91,11 @@ For local development, run the API, worker, and Vite in separate terminals. Fast
 
 ## Security & Configuration
 
-Copy `.env.example` to the root `.env` and configure `BAND_USER_API_KEY`, `OPENAI_API_KEY`, and `APP_SECRET`. Optional services include Exa research, Composio app connections, E2B computers, and MCP servers; consult `README.md` for their environment variables and configuration.
+Copy `.env.example` to the root `.env` and configure `APP_SECRET` and any optional service keys. Users optionally enter their Band user API key during signup or in People to manage native agents; model providers can be configured in Providers & APIs. Optional services include Exa research, Composio app connections, E2B computers, and MCP servers; consult `README.md` for their environment variables and configuration.
 
 Never commit credentials, local `.env` files, databases, checkpoints, or secret-bearing MCP configuration. Keep `APP_SECRET` stable because it protects stored agent keys. Keep secrets and raw provider errors out of user-visible messages and audit details.
+
+When adding `.env` after the first startup, preserve the original `APP_SECRET` or explicitly migrate existing encrypted records. Provider configurations are encrypted even when they contain empty local/MCP settings; an installation with no user accounts can already contain encrypted data. Do not silently change the secret or add a runtime decryption fallback.
 
 Run **one API process and one worker** against the same application database, checkpoint path, environment, and application secret on a shared local filesystem. The default files are `backend/band_slack.db` and `backend/agent_checkpoints.db`. Independent worker replicas and multi-host execution require architectural changes.
 
@@ -91,7 +105,7 @@ Python 3.12 and Node.js 22 are already on the image. Environment install puts `u
 
 On every boot the start script opens three tmux sessions: `api` (`uv run uvicorn app.main:app --host 0.0.0.0 --port 8000` in `backend/`), `worker` (`uv run python -m app.worker` in `backend/`), and `vite` (`npm run dev -- --host 0.0.0.0 --port 5173` in `frontend/`). A second run leaves sessions that are already up. Readiness is `GET /api/health` on port 8000 and an HTTP response from port 5173.
 
-In development and tests, `APP_SECRET` falls back to `dev-secret-change-me` when unset, which is enough for local signup and sessions. Production (`BAND_ENV=production`) refuses this fallback. Band, OpenAI, Exa, Composio, and E2B keys are optional for the UI and the offline test suites. With no `BAND_USER_API_KEY`, `/api/health` reports Band offline, Master is not registered, and agents do not answer; creating an account, `#general`, and human messages still work. Do not commit `.env`, `backend/band_slack.db`, or `backend/agent_checkpoints.db`.
+In development and tests, `APP_SECRET` falls back to `dev-secret-change-me` when unset, which is enough for local signup and sessions. Production (`BAND_ENV=production`) refuses this fallback. New accounts need no Band key. Users can chat locally and add their own Band user API key in People when they want to create native agents. The API health endpoint stays independent of individual Band connections; authenticated bootstrap reports the user's Band state. There is no workspace Band key fallback or automatic Band registration of Master. Offline tests use fake Agent API clients and listeners. Do not commit `.env`, `backend/band_slack.db`, or `backend/agent_checkpoints.db`.
 
 ## Commit & Pull Request Guidelines
 

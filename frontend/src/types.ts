@@ -103,7 +103,7 @@ export interface AgentConnectionsResponse {
 }
 
 export interface Agent {
-  band_auth?: "agent_key" | "human_api" | "platform";
+  band_auth?: "agent_key" | "platform" | "managed";
   model_ref?: { connection_id: string; revision: number; provider: string; model: string } | null;
   id: number;
   owner_id?: number | null;
@@ -129,8 +129,9 @@ export interface Agent {
 
 export interface BandAccount {
   connected: boolean;
-  handle: string;
   name: string;
+  handle: string;
+  can_manage_agents: boolean;
 }
 
 export interface BandPlatformConnection {
@@ -529,7 +530,8 @@ export interface WorkspaceDocument {
 
 export interface BandStatus {
   configured: boolean;
-  api?: "agent" | "human";
+  api?: "agent" | "management";
+  can_manage_agents?: boolean;
   online: boolean;
   personal?: boolean;
   owner_name: string | null;

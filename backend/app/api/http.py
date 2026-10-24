@@ -56,7 +56,7 @@ from app.workspace.service import ServiceError, serialize_messages, serialize_us
 from app.api.agent_connections import router as agent_connections_router
 from app.agent_connections import CONNECTED_PROVIDERS, MODEL_ID, runtime_available, runtime_for
 from app.persistence.models import AgentConnection
-from app.persistence.models import UserBandAccount, UserBandConnection, PrivateConversation, HumanDirectMessage
+from app.persistence.models import UserBandConnection, PrivateConversation, HumanDirectMessage
 from app.workspace.access import channel_visible, agent_visible, agent_owner
 from app.api.people import incoming_contact_requests, pending_invitations, router as people_router
 from app.workspace.health import service_status
@@ -112,7 +112,7 @@ async def validation_error(request: Request, exc: RequestValidationError):
     # FastAPI's default validation response includes rejected input values, including pasted credentials.
     if request.url.path == "/api/auth/signup":
         if any(error["loc"][-1] == "band_api_key" for error in exc.errors()):
-            return JSONResponse({"detail": "Enter your Band Agent API key beginning with band_a_.", "field": "band_api_key"}, status_code=422)
+            return JSONResponse({"detail": "Enter a complete Band API key, or leave it blank and connect later in People.", "field": "band_api_key"}, status_code=422)
         return JSONResponse({"detail": "Invalid account details. Check your username and password length."}, status_code=422)
     if request.url.path.startswith(("/api/agents", "/api/agent-connections", "/api/band/connection", "/api/band/account", "/api/settings/connections", "/api/settings/openai")):
         return JSONResponse({"detail": "Invalid connection details. Check the provider, name and credential."}, status_code=422)
@@ -137,7 +137,7 @@ class SignupBody(BaseModel):
     username: str = Field(min_length=2, max_length=32, pattern=r"^[a-zA-Z0-9_.-]+$")
     display_name: str = Field(min_length=1, max_length=48)
     password: str = Field(min_length=6, max_length=128)
-    band_api_key: SecretStr = Field(min_length=10, max_length=2000)
+    band_api_key: SecretStr | None = Field(default=None, max_length=2000)
 
 
 class LoginBody(BaseModel):
@@ -165,9 +165,12 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
     if session.exec(select(User).where(User.username == username)).first():
         raise HTTPException(409, "That username is taken")
     from app.band.connections import validate_key, save_connection
-    key = body.band_api_key.get_secret_value().strip()
+    from app.band.accounts import validate_account, save_account
+    key = body.band_api_key.get_secret_value().strip() if body.band_api_key else ""
+    identity = None
     try:
-        identity = await validate_key(key)
+        if key:
+            identity = await validate_account(key) if key.startswith("band_u_") else await validate_key(key)
     except HTTPException as error:
         return JSONResponse({"detail": error.detail, "field": "band_api_key"}, status_code=error.status_code)
     user = User(username=username, display_name=body.display_name.strip(), password_hash=hash_password(body.password))
@@ -178,7 +181,11 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
         session.rollback()
         raise HTTPException(409, "That username is taken") from None
     try:
-        save_connection(session, user.id, key, identity)
+        if identity:
+            if key.startswith("band_u_"):
+                save_account(session, user.id, key, identity)
+            else:
+                save_connection(session, user.id, key, identity)
     except HTTPException as error:
         session.rollback()
         return JSONResponse({"detail": error.detail, "field": "band_api_key"}, status_code=error.status_code)
@@ -279,23 +286,7 @@ async def bootstrap(user: User = Depends(current_user), session: Session = Depen
     dms = {dm.channel_id: dm for dm in session.exec(select(DirectMessage)).all()}
     visible = [c for c in session.exec(select(Channel).order_by(Channel.name)).all()
                if channel_visible(session, c.id, user.id) and (c.id not in dms or dms[c.id].agent_id is not None)]
-    account = session.get(UserBandAccount, user.id)
-    platform = session.get(UserBandConnection, user.id)
-    band = service.org.status()
-    if account and account.secret_enc:
-        cached = service._user_orgs.get(user.id)
-        band = {"configured": bool(account.secret_enc), "online": bool(account.secret_enc),
-                "owner_name": account.name or None, "owner_handle": account.handle or None,
-                "error": None}
-        if cached and cached[0] == account.secret_enc:
-            band = cached[1].status()
-        band = {**band, "personal": True}
-    elif platform:
-        try:
-            band = (await service.platform_org(user.id)).status()
-        except ServiceError as error:
-            band = {"configured": True, "online": False, "owner_name": platform.name, "owner_handle": platform.handle,
-                    "error": error.message, "api": "agent", "personal": True}
+    band = await service.band_status(user.id)
     return {
         "me": serialize_user(user),
         "users": [serialize_user(u) for u in session.exec(select(User)).all()],
@@ -1381,14 +1372,12 @@ async def websocket(ws: WebSocket, token: str = ""):
 
 @app.get("/api/health")
 async def health():
-    band = service.org.status()
-    configured = bool(band.get("configured"))
-    online = bool(band.get("online"))
-    # A configured Band account that failed to register is not a healthy deploy.
-    # Keep the public body free of error text; signed-in /api/status covers worker detail.
-    ok = not (configured and (band.get("error") or not online))
-    return JSONResponse({"ok": ok, "band": {"configured": configured, "online": online}},
-                        status_code=200 if ok else 503)
+    # Personal Band failures do not make the shared API unhealthy.
+    # Authenticated bootstrap reports the requesting user's connection state.
+    with db() as session:
+        configured = session.exec(select(UserBandConnection.user_id)).first() is not None
+    online = any(org.online for _, org in service._platform_orgs.values())
+    return {"ok": True, "band": {"configured": configured, "online": online}}
 
 
 @app.get("/api/status")

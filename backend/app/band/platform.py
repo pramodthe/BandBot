@@ -1,28 +1,48 @@
 """Band transport authenticated by a person's saved Agent API credential."""
-from datetime import datetime
+from dataclasses import dataclass
 import asyncio
 
 from band.client.rest import (AsyncRestClient, ChatMessageRequest, ChatMessageRequestMentionsItem,
                               ParticipantRequest, aclose_rest_client)
 from band_rest.types import ChatRoomRequest, ChatEventRequest
 
-from app.band.org import BandOrg, Owner, NO_RETRY
 from app.config import settings
 
+NO_RETRY = {"max_retries": 0, "timeout_in_seconds": 30}
 
-class AgentPlatformOrg(BandOrg):
+
+@dataclass
+class Owner:
+    id: str
+    name: str
+    handle: str
+
+
+def disconnected_status():
+    return {"configured": False, "online": False, "owner_name": None, "owner_handle": None,
+            "error": None, "personal": True, "api": "agent"}
+
+
+class AgentPlatformOrg:
     api = "agent"
 
     def __init__(self, key: str, *, user_id: int, identity: str):
-        super().__init__(key)
+        self._api_key = key
         self.user_id, self.identity = user_id, identity
+        self.owner: Owner | None = None
+        self.error: str | None = None
+        self._rest: AsyncRestClient | None = None
+        self._room_members: dict[str, set[str]] = {}
 
     def status(self):
-        return {**super().status(), "personal": True, "api": "agent"}
+        return {"configured": bool(self._api_key), "online": self.online,
+                "owner_name": self.owner.name if self.owner else None,
+                "owner_handle": self.owner.handle if self.owner else None,
+                "error": self.error, "personal": True, "api": "agent"}
 
     @property
     def online(self):
-        return super().online and self.error is None
+        return self.owner is not None and self._rest is not None and self.error is None
 
     async def connect(self):
         rest = AsyncRestClient(api_key=self._api_key, base_url=settings.band_rest_url)
@@ -38,11 +58,18 @@ class AgentPlatformOrg(BandOrg):
         self.owner = Owner(id=me.id, name=me.name, handle=me.handle or "")
         self._rest, self.error = rest, None
 
-    async def register_agent(self, name, description):
-        raise ValueError("Agent API connections create app teammates; registering Band identities requires Enterprise access.")
+    async def close(self):
+        if self._rest is not None:
+            await aclose_rest_client(self._rest)
+            self._rest = None
 
-    async def delete_agent(self, agent_id):
-        raise ValueError("The Agent API cannot delete a Band identity")
+    def _client(self):
+        if not self.online:
+            raise RuntimeError("Your Band Agent API connection is unavailable")
+        return self._rest
+
+    def forget_participant(self, room_id, band_id):
+        self._room_members.get(room_id, set()).discard(band_id)
 
     async def create_room(self, title):
         response = await self._client().agent_api_chats.create_agent_chat(
@@ -85,8 +112,3 @@ class AgentPlatformOrg(BandOrg):
             response = await self._client().agent_api_events.create_agent_chat_event(room_id,
                 event=ChatEventRequest(content=content, message_type="task", metadata={"source": "band_bots"}), request_options=NO_RETRY)
         return response.data.id
-
-    async def messages_since(self, room_id, since: datetime | None):
-        response = await self._client().agent_api_context.get_agent_chat_context(room_id, limit=100, request_options=NO_RETRY)
-        return sorted([message for message in response.data if since is None or message.inserted_at is None or message.inserted_at >= since],
-                      key=lambda message: message.inserted_at.timestamp() if message.inserted_at else 0)
