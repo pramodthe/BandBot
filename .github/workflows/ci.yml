@@ -101,7 +101,11 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked
       - name: Run migrations and workspace tests on PostgreSQL
-        run: uv run pytest -q tests/test_migrations.py tests/test_operations.py tests/test_reconnect.py tests/test_people.py tests/test_computer_bindings.py tests/test_provider_settings.py tests/test_provider_contracts.py tests/test_provider_recovery.py
+        run: >-
+          uv run pytest -q tests/test_migrations.py tests/test_operations.py tests/test_reconnect.py
+          tests/test_people.py tests/test_computer_bindings.py tests/test_provider_settings.py
+          tests/test_provider_contracts.py tests/test_provider_recovery.py
+          tests/test_signup_band_connection.py tests/test_band_platform_transport.py
 
   browser:
     name: Two-user browser tests

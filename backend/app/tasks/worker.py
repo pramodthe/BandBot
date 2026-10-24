@@ -235,11 +235,27 @@ def complete(task: AgentTask, result: str) -> None:
 
 async def deliver(task: AgentTask) -> None:
     """At-most-once send attempt; ambiguous sends require human review, never blind retry."""
-    if not task.reply_to:
-        update_task(task.id, delivery_status="local_only")
-        return
     with db() as session:
         profile = session.get(AgentProfile, task.agent_id)
+        from app.persistence.models import BandAgentLink, BandPlatformRoom, PlatformTeammate, Channel, ChannelMember
+        platform = session.get(BandPlatformRoom, task.channel_id)
+        teammate = session.get(PlatformTeammate, task.agent_id)
+        channel = session.get(Channel, task.channel_id)
+        member = session.get(ChannelMember, (task.channel_id, "agent", task.agent_id))
+        local_connection = session.get(BandAgentLink, task.agent_id) is not None
+        internal_reply = report_target(session, task) is not None or is_interim(session, task)
+    if internal_reply:
+        update_task(task.id, delivery_status="local_only")
+        return
+    if platform and task.room_id:
+        if profile is None or not channel or channel.band_room_id != task.room_id or not member:
+            update_task(task.id, delivery_status="access_revoked")
+            return
+        await deliver_platform(task, profile, platform)
+        return
+    if local_connection or teammate or not task.reply_to:
+        update_task(task.id, delivery_status="local_only")
+        return
     if profile is None:
         update_task(task.id, delivery_status="agent_deleted")
         return
@@ -269,6 +285,37 @@ async def deliver(task: AgentTask) -> None:
     finally:
         if client is not None:
             await aclose_rest_client(client)
+
+
+async def deliver_platform(task, profile, platform):
+    from app.band.connections import platform_client
+    from band_rest.types import ChatEventRequest
+    with db() as session:
+        claimed = session.exec(update(AgentTask).where(AgentTask.id == task.id,
+            AgentTask.status == "completed", AgentTask.delivery_status == "pending").values(delivery_status="sending", updated_at=utcnow()))
+        session.commit()
+        if not claimed.rowcount:
+            return
+    try:
+        async with platform_client(platform.user_id, identity=platform.band_agent_id) as client:
+            content = f"**{profile.name}:** {task.result[:8000]}"
+            options = {"max_retries": 0, "timeout_in_seconds": 30}
+            if task.reply_to and task.reply_to != platform.band_agent_id:
+                response = await client.agent_api_messages.create_agent_chat_message(task.room_id,
+                    message=ChatMessageRequest(content=content, mentions=[ChatMessageRequestMentionsItem(id=task.reply_to)]), request_options=options)
+            else:
+                response = await client.agent_api_events.create_agent_chat_event(task.room_id,
+                    event=ChatEventRequest(content=content, message_type="task", metadata={"source": "band_bots", "task_id": task.id}), request_options=options)
+        with db() as session:
+            message = session.exec(select(Message).where(Message.band_message_id == f"task:{task.id}")).first()
+            if message:
+                message.band_message_id = response.data.id
+                session.add(message); session.commit()
+        update_task(task.id, delivery_status="sent")
+    except Exception:
+        # Preserve the committed app result and never silently select another account.
+        logger.warning("Band platform delivery unconfirmed for task %s", task.id)
+        update_task(task.id, delivery_status="unknown")
 
 
 async def process(task: AgentTask, saver, *, executor=execute) -> None:

@@ -1,7 +1,7 @@
 import { useCallback, useId, useState } from "react";
 import { ArrowLeftIcon, CheckCircle2Icon, ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
 import { api } from "@/api";
-import type { State } from "@/store";
+import { isAdmin, type State } from "@/store";
 import type { AgentConnection, Channel, ConnectedAgentRuntime } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,6 +12,7 @@ import Field from "@/components/shared/Field";
 import AgentConnectionPicker from "./AgentConnectionPicker";
 import RuntimeIcon from "./RuntimeIcon";
 import { runtimeLabels } from "./runtime-options";
+import BandAgentKeyField from "./BandAgentKeyField";
 
 const descriptions: Record<ConnectedAgentRuntime, string> = {
   codex: "Sign in with ChatGPT to run Codex in this workspace, or connect an OpenAI API key.",
@@ -46,15 +47,22 @@ export default function ConnectAgentModal({ state, channel, runtime, onBack, onC
   const targetChannel = channel && !channel.is_dm ? channel : null;
   const [joinChannel, setJoinChannel] = useState(!!targetChannel);
   const [busy, setBusy] = useState(false);
+  const [bandKey, setBandKey] = useState("");
+  const [register, setRegister] = useState(false);
+  const usesPlatform = state.band.api === "agent" && state.band.configured;
+  const canRegister = !usesPlatform && state.band.online && (isAdmin(state) || !!state.band.personal);
+  const usesRegistration = register && canRegister;
+  const needsBand = usesPlatform ? !state.band.online : !usesRegistration && !bandKey.trim();
   const [error, setError] = useState("");
   const chooseConnection = useCallback((next: AgentConnection | null) => {
     setConnection(next); setModel(modelFor(runtime, next)); setError("");
   }, [runtime]);
   const add = async () => {
-    if (!connection || !model || busy) return;
+    if (!connection || !model || busy || needsBand) return;
     setBusy(true); setError("");
     try {
       await api("POST", "/api/agents", { runtime, connection_id: connection.id, name: name.trim(), model,
+        band_agent_api_key: usesPlatform || usesRegistration ? undefined : bandKey.trim(),
         role: "custom", instructions: "", specialty: "", plugins: [],
         channel_id: joinChannel ? targetChannel?.id ?? null : null });
       onClose();
@@ -87,12 +95,16 @@ export default function ConnectAgentModal({ state, channel, runtime, onBack, onC
           </div>}
         </>}
         <p className="text-muted-foreground text-xs leading-relaxed">Conversations with this agent appear in this workspace. Existing chats in your provider's app stay separate.</p>
-        {!state.band.online && <p role="status" className="text-muted-foreground text-sm">Reconnect the workspace before adding this agent.</p>}
+        {usesPlatform ? <p role="status" className="bg-sidebar rounded-xl border p-4 text-sm">{state.band.online
+          ? "Using your saved Band connection. No additional Band key is needed."
+          : "Reconnect your Band key in People before adding this teammate."}</p>
+          : <BandAgentKeyField value={bandKey} onChange={(key) => { setBandKey(key); setError(""); }} disabled={busy}
+            canRegister={canRegister} register={usesRegistration} onRegisterChange={setRegister} />}
         {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
       </div>
       <div className="border-border flex shrink-0 justify-end gap-2 border-t px-6 py-4">
         <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-        <Button disabled={busy || !connection || !model || name.trim().length < 3 || !state.band.online} onClick={() => void add()}>
+        <Button disabled={busy || !connection || !model || name.trim().length < 3 || needsBand} onClick={() => void add()}>
           {busy && <LoaderCircleIcon className="size-4 animate-spin" />}{busy ? "Adding…" : `Add ${label}`}
         </Button>
       </div>

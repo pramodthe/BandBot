@@ -1,0 +1,37 @@
+import { expect, test } from "@playwright/test";
+
+test("saved signup key powers a teammate, a Band room and the worker result", async ({ page }, info) => {
+  const suffix = `${info.project.name}-${Date.now().toString().slice(-6)}`;
+  const name = `flow-${suffix}`;
+  const teammate = `Writer ${info.project.name}`;
+  await page.goto("/");
+  await page.getByRole("button", { name: "New here? Create an account" }).click();
+  await page.getByLabel("Username", { exact: true }).fill(name);
+  await page.getByLabel("Display name").fill("Platform flow");
+  await page.getByLabel("Password", { exact: true }).fill("test-password");
+  await page.getByLabel("Band agent API key", { exact: true }).fill(`band_a_e2e-${name}`);
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByRole("button", { name: "Add agents", exact: true }).click();
+  await page.getByRole("button", { name: /Create agent/ }).click();
+  await expect(page.getByLabel("Band agent API key", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText("Using your saved Band connection");
+  await page.getByLabel("Name", { exact: true }).fill(teammate);
+  await page.getByLabel("Specialty").fill("Writing and review");
+  await page.getByRole("status").scrollIntoViewIfNeeded();
+  await expect(page.getByRole("dialog")).toHaveCSS("opacity", "1");
+  await page.screenshot({ path: info.outputPath("create-agent-saved-connection.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await page.getByRole("button", { name: `Chat with ${teammate}`, exact: true }).click();
+  const composer = page.getByRole("combobox", { name: "Message" });
+  await composer.fill("Write a short introduction.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator('[id^="message-"]').getByText("I can help with that.", { exact: true })).toBeVisible();
+  await expect.poll(async () => page.evaluate(async () => {
+    const headers = { Authorization: `Bearer ${localStorage.getItem("band-slack-token")}` };
+    const boot = await (await fetch("/api/bootstrap", { headers })).json();
+    const room = boot.channels.find((channel: { is_dm: boolean }) => channel.is_dm);
+    if (!room?.band_room_id) return "missing-room";
+    const tasks = await (await fetch(`/api/channels/${room.id}/tasks`, { headers })).json();
+    return tasks.some((task: { status: string; delivery_status: string }) => task.status === "completed" && task.delivery_status === "sent") ? "sent" : "pending";
+  })).toBe("sent");
+});

@@ -19,7 +19,8 @@ from app.config import settings
 from app.workspace.service import AppService
 from app.persistence.models import UserBandAccount, PrivateConversation, HumanDirectMessage, BandAgentOwner, ChannelInvitation
 from app.persistence.models import MessageComponent, ComponentResponse, TaskInput, AgentRuntime, AgentConnection, AgentOAuthAttempt
-from app.persistence.models import AppContact, AppContactRequest, BandRoomAccount
+from app.persistence.models import AppContact, AppContactRequest, BandRoomAccount, BandAgentLink, UserBandConnection, BandPlatformRoom, PlatformTeammate
+from app.persistence.models import OutsideAgent
 from app.persistence.models import (AuthSession, ClientMessage, ConnectionHealth, ContactBlock, PasswordReset,
                                     RecoveryAddress, WorkerHeartbeat)
 
@@ -61,9 +62,9 @@ def svc(monkeypatch) -> Iterator[AppService]:
     def clear_database() -> None:
         with db() as session:
             for model in (ClientMessage, AuthSession, RecoveryAddress, PasswordReset, ContactBlock, ConnectionHealth,
-                          WorkerHeartbeat, AppContact, AppContactRequest, BandRoomAccount,
+                          WorkerHeartbeat, AppContact, AppContactRequest, BandRoomAccount, BandAgentLink, UserBandConnection, BandPlatformRoom, PlatformTeammate,
                           ComponentResponse, TaskInput, MessageComponent, AgentRuntime, AgentOAuthAttempt, AgentConnection,
-                          ChannelInvitation, HumanDirectMessage, PrivateConversation, BandAgentOwner, UserBandAccount,
+                          ChannelInvitation, HumanDirectMessage, PrivateConversation, BandAgentOwner, UserBandAccount, OutsideAgent,
                           AgentTask, DirectMessage, Message, ChannelMember, AgentPersona, AgentProfile,
                           ChannelPolicy, WorkspaceRole, Channel, User, AuditEvent,
                           TaskCacheUsage, TaskUsage, Budget):
@@ -177,7 +178,8 @@ def test_members_cannot_register_agents_on_the_workspace_band_account(svc: AppSe
     assert svc.org.registered == []
 
 
-def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypatch):
+@pytest.mark.parametrize("band_api", ["platform", "human"])
+def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypatch, band_api):
     import app.api.http as http
     from app.providers.management import create_connection
     from app.providers.models import ProviderConnection, ProviderRevision
@@ -200,11 +202,14 @@ def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypat
     monkeypatch.setattr("app.providers.display.set_agent_model", reject_model)
 
     with TestClient(http.app) as client:
-        signed = client.post("/api/auth/signup", json={"username": "ada", "display_name": "Ada", "password": "secret123"})
+        signed = client.post("/api/auth/signup", json={"username": "ada", "display_name": "Ada", "password": "secret123", "band_api_key": "band_a_signup-ada"})
         assert signed.status_code == 200, signed.text
         headers = {"Authorization": f"Bearer {signed.json()['token']}"}
         user_id = signed.json()["user"]["id"]
         with db() as session:
+            if band_api == "human":
+                # Existing accounts without a saved platform key keep legacy registration.
+                session.delete(session.get(UserBandConnection, user_id))
             row = create_connection(session, provider="openai", label="Offline model", key="offline-secret",
                                     config={"models": ["test-model"]}, user_id=user_id)
             revision = session.get(ProviderRevision, (row.id, 1))
@@ -217,10 +222,12 @@ def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypat
         assert "verified" in created.json()["detail"]
         with db() as session:
             assert session.exec(select(AgentProfile).where(AgentProfile.name == "Tempest")).first() is None
+            assert not session.exec(select(PlatformTeammate)).first()
+            assert bool(session.get(UserBandConnection, user_id)) == (band_api == "platform")
             session.delete(session.get(ProviderRevision, (ref["connection_id"], 1)))
             session.delete(session.get(ProviderConnection, ref["connection_id"]))
             session.commit()
-    assert removed == ["agent-tempest"]
+    assert removed == (["agent-tempest"] if band_api == "human" else [])
 
 
 def test_direct_messages_are_private_rooms_the_agent_answers_without_a_mention(svc: AppService):

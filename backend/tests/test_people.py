@@ -11,6 +11,7 @@ from sqlmodel import select
 
 import app.api.http as http
 import app.api.people as people
+import app.band.accounts as accounts
 import app.workspace.service as service_module
 from app.auth import decrypt_secret, encrypt_secret
 from app.band.listener import BandIdentity, QueuedAgentAdapter
@@ -61,10 +62,12 @@ def social(svc, monkeypatch):
         pass
 
     async def identity(key):
+        if key.startswith("band_a_"):
+            return BandIdentity(id=key.removeprefix("band_a_"), name="Remote Writer", handle="remote/writer")
         owner, name = key.removeprefix("key-").split(":")
         return BandIdentity(id=f"{owner}/{name}", name=name, handle=f"{owner}/{name.lower()}")
 
-    monkeypatch.setattr(people, "BandOrg", PersonalOrg)
+    monkeypatch.setattr(accounts, "BandOrg", PersonalOrg)
     monkeypatch.setattr(service_module, "BandOrg", PersonalOrg)
     monkeypatch.setattr(service_module, "fetch_identity", identity)
     monkeypatch.setattr(http, "service", svc)
@@ -78,7 +81,7 @@ def social(svc, monkeypatch):
         users = []
         for name in ("alice", "bob", "cara"):
             result = client.post("/api/auth/signup", json={
-                "username": name, "display_name": name.title(), "password": "test-password",
+                "username": name, "display_name": name.title(), "password": "test-password", "band_api_key": f"band_a_signup-{name}",
             }).json()
             headers = {"Authorization": f"Bearer {result['token']}"}
             linked = client.put("/api/band/account", json={"api_key": f"band_u_{name}"}, headers=headers)
@@ -102,9 +105,9 @@ def friends(client, users):
     assert accepted.status_code == 200, accepted.text
 
 
-def test_signup_does_not_require_a_band_key_and_linked_rooms_use_it(social):
+def test_signup_requires_an_agent_key_without_a_human_account_and_linked_rooms_use_it(social):
     client, ((alice, a), (_, b), _), network, svc = social
-    created = client.post("/api/auth/signup", json={"username": "erin", "display_name": "Erin", "password": "test-password"})
+    created = client.post("/api/auth/signup", json={"username": "erin", "display_name": "Erin", "password": "test-password", "band_api_key": "band_a_signup-erin"})
     assert created.status_code == 200, created.text
     assert "band_u_" not in created.text
     with db() as session:
@@ -423,3 +426,128 @@ def test_another_accounts_agent_is_added_by_the_room_owner(social, monkeypatch):
     assert callers == ["alice"]
     with db() as session:
         assert session.get(ChannelMember, (channel.json()["id"], "agent", bob_agent.json()["id"])) is not None
+
+
+def test_agent_key_connects_and_chats_without_human_api(social):
+    from app.persistence.models import BandAgentLink
+    from app.tasks.worker import complete, deliver
+    from app.tasks.queue import update_task
+    client, users, network, svc = social
+    svc.org._rest = None
+    signed = client.post('/api/auth/signup', json={
+        'username': 'single-user', 'display_name': 'Single user', 'password': 'test-password', 'band_api_key': 'band_a_signup-single-user',
+    }).json()
+    headers = {'Authorization': f"Bearer {signed['token']}"}
+    key = 'band_a_existing-writer'
+    channel = client.post('/api/channels', headers=headers, json={'name': 'writing'}).json()
+    created = client.post('/api/agents', headers=headers, json={
+        'name': 'Writer', 'band_agent_api_key': key, 'specialty': 'Clear writing', 'plugins': [], 'channel_id': channel['id'],
+    })
+    assert created.status_code == 200, created.text
+    profile = created.json()
+    assert key not in created.text and profile['band_auth'] == 'agent_key'
+    assert profile['owner_id'] == signed['user']['id']
+    assert network['registers'] == [] and network['rooms'] == {}
+    with db() as session:
+        stored = session.get(AgentProfile, profile['id'])
+        assert decrypt_secret(stored.band_api_key_enc) == key
+        assert session.get(BandAgentLink, profile['id'])
+        assert session.get(ChannelMember, (channel['id'], 'agent', profile['id']))
+        assert session.get(UserBandAccount, signed['user']['id']) is None
+    dm = client.post(f"/api/agents/{profile['id']}/dm", headers=headers)
+    assert dm.status_code == 200 and dm.json()['band_room_id']
+    assert client.post(f"/api/agents/{profile['id']}/dm", headers=users[1][1]).status_code == 403
+    sent = client.post(f"/api/channels/{dm.json()['id']}/messages", headers=headers, json={'content': 'Draft an introduction.'})
+    assert sent.status_code == 200, sent.text
+    with db() as session:
+        task = session.exec(select(AgentTask).where(AgentTask.agent_id == profile['id'])).one()
+        assert task.room_id == dm.json()['band_room_id'] and task.reply_to == 'signup-single-user'
+    task = update_task(task.id, status='running')
+    complete(task, 'Here is your introduction.')
+    with db() as session:
+        finished = session.get(AgentTask, task.id)
+    asyncio.run(deliver(finished))
+    replies = client.get(f"/api/channels/{dm.json()['id']}/messages", headers=headers).json()
+    assert any(m['content'] == 'Here is your introduction.' and m['to_humans'] for m in replies)
+    with db() as session:
+        assert session.get(AgentTask, task.id).delivery_status == 'sent'
+    assert network['sends'] == []
+    assert client.delete(f"/api/agents/{profile['id']}", headers=users[1][1]).status_code == 403
+    # No Human API deletion is possible: the workspace connection is offline.
+    assert client.delete(f"/api/agents/{profile['id']}", headers=headers).status_code == 200
+    with db() as session:
+        assert session.get(BandAgentLink, profile['id']) is None
+        assert session.get(AgentProfile, profile['id']) is None
+
+
+@pytest.mark.parametrize('key', ['band_u_human-key', 'sk-model-key', 'band_a_rejected-key'])
+def test_agent_key_authentication_errors_never_expose_or_store_keys(social, monkeypatch, key):
+    client, users, _, _ = social
+    async def invalid(_key):
+        raise ValueError('Provider rejected secret ' + key)
+    monkeypatch.setattr(service_module, 'fetch_identity', invalid)
+    response = client.post('/api/agents', headers=users[0][1], json={'name': 'Rejected Writer', 'band_agent_api_key': key})
+    assert response.status_code == 422
+    assert key not in response.text
+    with db() as session:
+        assert session.exec(select(AgentProfile).where(AgentProfile.name == 'Rejected Writer')).first() is None
+
+
+def test_agent_key_cannot_be_claimed_twice_or_exposed_in_bootstrap(social):
+    client, users, _, _ = social
+    key = 'band_a_owned-writer'
+    first = client.post('/api/agents', headers=users[0][1], json={'name': 'Owned Writer', 'band_agent_api_key': key})
+    assert first.status_code == 200, first.text
+    for _, headers in users[:2]:
+        response = client.post('/api/agents', headers=headers, json={'name': 'Another Writer', 'band_agent_api_key': key})
+        assert response.status_code == 409 and key not in response.text
+    assert key not in client.get('/api/bootstrap', headers=users[0][1]).text
+    response = client.post('/api/agents', headers=users[0][1], json={'name': 'Large key', 'band_agent_api_key': 'band_a_' + 's' * 2000})
+    assert response.status_code == 422 and 's' * 100 not in response.text
+
+
+def test_agent_key_listener_starts_without_a_human_connection(social, monkeypatch):
+    client, users, _, svc = social
+    svc.org._rest = None
+    started = []
+    async def start(profile, *, owner_id):
+        started.append((profile.band_agent_id, owner_id))
+    monkeypatch.setattr(service_module, 'configuration', lambda: ('model-key', ['test-model'], 'test-model'))
+    monkeypatch.setattr(svc.agents, 'start', start)
+    monkeypatch.setattr(svc, 'start_agent', service_module.AppService.start_agent.__get__(svc))
+    result = client.post('/api/agents', headers=users[0][1], json={'name': 'Listening Writer', 'band_agent_api_key': 'band_a_listening-writer'})
+    assert result.status_code == 200, result.text
+    assert started == [('listening-writer', '')]
+
+
+def test_agent_key_handoffs_and_delivery_cannot_export_app_conversations(social):
+    from app.tasks.queue import update_task
+    from app.tasks.worker import complete, deliver
+    client, users, _, _ = social
+    headers = users[0][1]
+    channel = client.post('/api/channels', headers=headers, json={'name': 'local-agent-team'}).json()
+    profiles = []
+    for name in ('Writer', 'Reviewer'):
+        result = client.post('/api/agents', headers=headers, json={
+            'name': name, 'band_agent_api_key': 'band_a_team-' + name.lower(), 'channel_id': channel['id'],
+        })
+        assert result.status_code == 200, result.text
+        profiles.append(result.json())
+    sent = client.post(f"/api/channels/{channel['id']}/messages", headers=headers, json={'content': '@Writer write a draft.'})
+    assert sent.status_code == 200
+    with db() as session:
+        task = session.exec(select(AgentTask).where(AgentTask.agent_id == profiles[0]['id'])).one()
+    task = update_task(task.id, room_id='foreign-room', reply_to='native-human')
+    result = hand_off(task, teammate='Reviewer', request='Review the draft.', report_back=False, call_id='agent-key-review')
+    assert result['status'] == 'handed_off'
+    with db() as session:
+        child = session.get(AgentTask, result['task_id'])
+        assert child.room_id == child.reply_to == ''
+    # Even old or externally supplied task metadata must not mirror this app's reply.
+    task = update_task(task.id, status='running')
+    complete(task, 'The app-only draft.')
+    with db() as session:
+        finished = session.get(AgentTask, task.id)
+    asyncio.run(deliver(finished))
+    with db() as session:
+        assert session.get(AgentTask, task.id).delivery_status == 'local_only'

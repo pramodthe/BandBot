@@ -1,13 +1,14 @@
 import { useId, useState, type FormEvent } from "react";
 import { ArrowLeftIcon, ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
 import { api } from "@/api";
-import type { State } from "@/store";
+import { isAdmin, type State } from "@/store";
 import type { Channel } from "@/types";
 import RuntimeIcon from "./RuntimeIcon";
 import AgentAvatarPicker from "./AgentAvatarPicker";
 import { agentAvatar, AGENT_AVATARS } from "@/components/shared/Avatar";
 import Field from "@/components/shared/Field";
 import PluginChoices from "@/components/settings/PluginChoices";
+import BandAgentKeyField from "./BandAgentKeyField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -40,16 +41,23 @@ export default function CreateAgentModal({ state, channel, onClose, onBack }: {
   const [advanced, setAdvanced] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [bandKey, setBandKey] = useState("");
+  const [register, setRegister] = useState(false);
+  const usesPlatform = state.band.api === "agent" && state.band.configured;
+  const canRegister = !usesPlatform && state.band.online && (isAdmin(state) || !!state.band.personal);
+  const usesRegistration = register && canRegister;
+  const needsBand = usesPlatform ? !state.band.online : !usesRegistration && !bandKey.trim();
   const targetChannel = channel && !channel.is_dm ? channel : null;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (busy || name.trim().length < 3) return;
+    if (busy || needsBand || !model || name.trim().length < 3) return;
     setBusy(true);
     setError("");
     try {
       await api("POST", "/api/agents", {
         name: name.trim(), role: "custom", specialty, avatar, model, instructions,
+        band_agent_api_key: usesPlatform || usesRegistration ? undefined : bandKey.trim(),
         channel_id: addToChannel && targetChannel ? targetChannel.id : null,
         plugins,
       });
@@ -67,9 +75,9 @@ export default function CreateAgentModal({ state, channel, onClose, onBack }: {
         onEscapeKeyDown={(e) => busy && e.preventDefault()} onPointerDownOutside={(e) => busy && e.preventDefault()}>
         <DialogHeader className="shrink-0 px-6 pt-6 pr-12 pb-2 text-left">
           {onBack && <Button type="button" variant="ghost" size="sm" className="-ml-2 mb-2 self-start" disabled={busy} onClick={onBack}><ArrowLeftIcon />All agents</Button>}
-          <DialogTitle className="flex items-center gap-2 text-lg"><RuntimeIcon runtime="deepagents" />Create agent</DialogTitle>
+          <DialogTitle className="flex items-center gap-2 text-lg"><RuntimeIcon runtime="deepagents" />{usesPlatform || usesRegistration ? "Create agent" : "Connect Band agent"}</DialogTitle>
           <DialogDescription className="mt-1 leading-relaxed">
-            Name your agent and give it a face. Add it to a channel when you’re ready to work together.
+            {usesPlatform ? "Give your teammate a name, appearance, and instructions. It uses your saved Band connection." : "Connect your Band agent, choose its appearance, and set how it works here."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="flex min-h-0 flex-col">
@@ -115,13 +123,17 @@ export default function CreateAgentModal({ state, channel, onClose, onBack }: {
               {addToChannel && targetChannel ? `Joins #${targetChannel.name} after creation.` : "You can add it later from a channel’s Members panel."}
               {plugins !== null && plugins.length === 0 ? " Connected apps are off until you choose them in More settings." : " Connected apps follow your selection in More settings."}
             </p>
-            {!state.band.online && <p role="status" className="text-muted-foreground text-sm">Agent creation is available when the workspace is connected.</p>}
+            {usesPlatform ? <p role="status" className="bg-sidebar rounded-xl border p-4 text-sm">{state.band.online
+              ? "Using your saved Band connection. No additional Band key is needed."
+              : "Your Band connection is unavailable. Update or reconnect your key in People before creating a teammate."}</p>
+              : <BandAgentKeyField value={bandKey} onChange={(key) => { setBandKey(key); setError(""); }} disabled={busy}
+                canRegister={canRegister} register={usesRegistration} onRegisterChange={setRegister} />}
             {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
           </div>
           <div className="border-border flex shrink-0 justify-end gap-2 border-t px-6 py-4">
             <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={busy || !state.band.online || name.trim().length < 3 || !model}>
-              {busy && <LoaderCircleIcon className="size-4 animate-spin" />}{busy ? "Creating…" : "Create agent"}
+            <Button type="submit" disabled={busy || needsBand || name.trim().length < 3 || !model}>
+              {busy && <LoaderCircleIcon className="size-4 animate-spin" />}{busy ? usesPlatform || usesRegistration ? "Creating…" : "Connecting…" : usesPlatform || usesRegistration ? "Create agent" : "Connect agent"}
             </Button>
           </div>
         </form>

@@ -14,7 +14,7 @@ from app.workspace.service import service
 
 def _signup(client: TestClient, username: str, name: str) -> dict:
     response = client.post("/api/auth/signup", json={
-        "username": username, "display_name": name, "password": "secret123", "band_api_key": f"band_u_{username}",
+        "username": username, "display_name": name, "password": "secret123", "band_api_key": f"band_a_signup-{username}",
     })
     assert response.status_code == 200, response.text
     return response.json()

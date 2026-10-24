@@ -10,6 +10,7 @@ os.environ["DOCUMENTS_PATH"] = str(_db.parent / "documents")
 os.environ["AUTH_ATTEMPT_LIMIT"] = "100000"
 os.environ["RECOVERY_DELIVERY"] = "memory"
 os.environ["BAND_ENV"] = "test"
+os.environ["MASTER_AGENT_NAME"] = "Master"
 os.environ["OPENCLAW_GATEWAY_URLS"] = ""
 for key in ("BAND_USER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CURSOR_API_KEY", "E2B_API_KEY", "EXA_API_KEY", "COMPOSIO_API_KEY", "MODEL_PRICES", "GOOGLE_API_KEY", "GEMINI_API_KEY", "TAVILY_API_KEY", "PROVIDER_ENDPOINT_ALLOWLIST", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"):
     os.environ[key] = ""
@@ -19,6 +20,19 @@ os.environ["COMPUTER_PROVIDER"] = "e2b"
 os.environ["TENKI_COMPUTER_SHARING"] = "agent_channel"
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def offline_band_platform(monkeypatch):
+    from fake_band_platform import OfflineBandNetwork
+    import app.band.platform as transport
+    import app.band.connections as connections
+    import app.workspace.service as service_module
+    network = OfflineBandNetwork()
+    monkeypatch.setattr(transport, "AsyncRestClient", network.client)
+    monkeypatch.setattr(connections, "AsyncRestClient", network.client)
+    monkeypatch.setattr(service_module, "PlatformListener", network.listener)
+    return network
 
 
 class _OfflineRest:
@@ -31,12 +45,13 @@ def _offline_personal(org) -> bool:
 
 @pytest.fixture(autouse=True)
 def offline_personal_band_keys(monkeypatch):
-    """Signup verifies a Band human key. Tests accept band_u_ keys without calling Band."""
+    """Keep human integrations and signup Agent API checks offline."""
     from app.auth import decrypt_secret
     from app.band.listener import AgentManager, BandIdentity
     from app.band.org import BandOrg, Owner
     from app.config import settings
     import app.workspace.service as service_module
+    import app.band.connections as platform_connections
 
     original_connect = BandOrg.connect
     original_close = BandOrg.close
@@ -121,6 +136,11 @@ def offline_personal_band_keys(monkeypatch):
             return BandIdentity(id=f"{owner}/{name}", name=name, handle=f"{owner}/{name.lower()}")
         return await original_identity(api_key)
 
+    async def platform_identity(api_key):
+        if not api_key.startswith("band_a_"):
+            raise ValueError("Invalid test Agent API key")
+        return BandIdentity(id=api_key.removeprefix("band_a_"), name="Band connection", handle="band-connection")
+
     async def start(self, profile, *, owner_id=""):
         secret = decrypt_secret(profile.band_api_key_enc)
         if isinstance(secret, str) and secret.startswith("key-") and ":" in secret:
@@ -141,4 +161,5 @@ def offline_personal_band_keys(monkeypatch):
     monkeypatch.setattr(BandOrg, "delete_agent", delete_agent)
     monkeypatch.setattr(BandOrg, "agent_peers", agent_peers)
     monkeypatch.setattr(service_module, "fetch_identity", fetch_identity)
+    monkeypatch.setattr(platform_connections, "fetch_identity", platform_identity)
     monkeypatch.setattr(AgentManager, "start", start)
