@@ -28,10 +28,8 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
-    if (mode === "signup" && !bandKey.trim().startsWith("band_a_")) {
-      setBandError(bandKey.trim().startsWith("band_u_")
-        ? "That’s a Human API key. Enter your Band Agent API key beginning with band_a_."
-        : "Enter your Band Agent API key beginning with band_a_.");
+    if (mode === "signup" && bandKey.trim() && !/^band_[ua]_/.test(bandKey.trim())) {
+      setBandError("Enter your Band user API key beginning with band_u_, or leave this blank and connect later.");
       return;
     }
     setBusy(true);
@@ -54,7 +52,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         return;
       }
       const body =
-        mode === "signup" ? { username, display_name: displayName || username, password, band_api_key: bandKey.trim() } : { username, password };
+        mode === "signup" ? { username, display_name: displayName || username, password, band_api_key: bandKey.trim() || undefined } : { username, password };
       const result = await api<{ token: string }>("POST", `/api/auth/${mode}`, body);
       setBandKey("");
       onAuthed(result.token);
@@ -100,7 +98,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
       >
         <p className="text-primary text-xs font-semibold uppercase tracking-[0.16em]">Your shared workspace</p>
         <h2 className="text-3xl font-semibold tracking-tight">{mode === "login" ? "Welcome back." : mode === "signup" ? "Create your account." : mode === "recover" ? "Recover your account." : "Choose a new password."}</h2>
-        <p className="text-muted-foreground mb-2 text-sm leading-relaxed">{mode === "login" ? "Pick up the conversation. Keep the work moving." : mode === "signup" ? "Set up your login and connect your Band account with your own Agent API key." : "Use your verified recovery email and one-time code to get back to your workspace."}</p>
+        <p className="text-muted-foreground mb-2 text-sm leading-relaxed">{mode === "login" ? "Pick up the conversation. Keep the work moving." : mode === "signup" ? "Create your workspace login. Connect Band now or later to create and manage your agents." : "Use your verified recovery email and one-time code to get back to your workspace."}</p>
         {mode !== "reset" && (
         <Field id={`${id}-username`} label="Username">
           <Input id={`${id}-username`} className="h-11 rounded-xl" autoComplete="username" placeholder="Your username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required disabled={busy} maxLength={32} />
@@ -133,11 +131,11 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         {notice && <div className="text-sm" role="status">{notice}</div>}
         {error && <div className="text-destructive text-[13.5px]" role="alert">{error}</div>}
         <Button className="mt-2 h-11 rounded-xl" disabled={busy}>{busy
-          ? mode === "signup" ? "Checking your Band key…" : "Please wait…"
+          ? mode === "signup" && bandKey.trim() ? "Checking your Band key…" : "Please wait…"
           : mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : mode === "recover" ? "Send reset code" : "Update password"}
           {busy ? <LoaderCircleIcon className="animate-spin" /> : <ArrowRightIcon />}
         </Button>
-        {busy && mode === "signup" && <p role="status" className="text-muted-foreground text-center text-xs">Verifying your connection with Band before creating your account.</p>}
+        {busy && mode === "signup" && !!bandKey.trim() && <p role="status" className="text-muted-foreground text-center text-xs">Verifying your optional Band connection.</p>}
         {mode === "login" && (
           <Button type="button" variant="link" size="inline" disabled={busy} onClick={() => { setMode("recover"); setError(""); setNotice(""); }}>
             Forgot password?

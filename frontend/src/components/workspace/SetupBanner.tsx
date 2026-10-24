@@ -21,8 +21,6 @@ function Banner({ tone, children }: { tone: "warn" | "error"; children: ReactNod
   );
 }
 
-const link = "text-mention hover:underline";
-
 export default function SetupBanner({ state, connected }: { state: State; connected: boolean }) {
   if (!connected) {
     return <Banner tone="warn">Reconnecting to the server…</Banner>;
@@ -30,16 +28,12 @@ export default function SetupBanner({ state, connected }: { state: State; connec
   if (!state.band.configured) {
     return (
       <Banner tone="warn">
-        Connect your Band organization: create a user API key (starts with <code>band_u_</code>) at{" "}
-        <a className={link} href="https://app.band.ai/users/settings" target="_blank" rel="noreferrer">
-          app.band.ai/users/settings
-        </a>
-        , put it in <code>BAND_USER_API_KEY</code> in <code>.env</code> and restart the server.
+        Chat is ready. Add your Band user API key in People when you want to create and manage agents.
       </Banner>
     );
   }
   if (!state.band.online) {
-    return <Banner tone="error">Band rejected the organization key{state.band.error ? `: ${state.band.error}` : "."}</Banner>;
+    return <Banner tone="error">Your Band connection is unavailable{state.band.error ? `: ${state.band.error}` : "."}</Banner>;
   }
   if (!state.llmConfigured) {
     return (

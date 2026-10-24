@@ -41,16 +41,23 @@ import sys
 sys.path.insert(0, "tests")
 from fake_band_platform import OfflineBandNetwork
 import app.band.platform as platform
+import app.band.accounts as accounts
 import app.workspace.service as service
 network = OfflineBandNetwork()
 platform.AsyncRestClient = network.client
 connections.AsyncRestClient = network.client
+accounts.AsyncRestClient = network.management_client
 service.PlatformListener = network.listener
 async def identity(key):
-    if not key.startswith("band_a_e2e-"):
+    if not key.startswith("band_a_"):
         raise ValueError("Invalid offline test key")
-    return BandIdentity(id=key[7:], name="E2E Band connection", handle="e2e-band")
+    return BandIdentity(id=key.removeprefix("band_a_"), name="E2E Band connection", handle="e2e-band")
 connections.fetch_identity = identity
+service.fetch_identity = identity
+async def start_agent(manager, profile, *, owner_id=""):
+    manager._band_ids[profile.id] = profile.band_agent_id
+    manager.status[profile.id] = {"state": "online", "error": None}
+service.AgentManager.start = start_agent
 uvicorn.run(app, host="127.0.0.1", port=${Number(env.BAND_E2E_API_PORT)})
 `;
 start("uv", ["run", "python", "-c", apiServer], backend);

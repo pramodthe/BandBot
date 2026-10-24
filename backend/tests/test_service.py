@@ -12,7 +12,7 @@ from sqlmodel import select
 import app.workspace.service as service_module
 from app.band.listener import BandIdentity
 from app.auth import encrypt_secret
-from app.band.org import BandOrg, Owner
+from app.band.platform import AgentPlatformOrg, Owner
 from app.persistence.models import (AgentPersona, AgentProfile, AgentTask, AuditEvent, Budget, Channel, ChannelMember, ChannelPolicy,
                                     DirectMessage, Message, TaskCacheUsage, TaskUsage, User, WorkspaceRole, db, init_db)
 from app.config import settings
@@ -25,33 +25,34 @@ from app.persistence.models import (AuthSession, ClientMessage, ConnectionHealth
                                     RecoveryAddress, WorkerHeartbeat)
 
 
-class FakeOrg(BandOrg):
-    def __init__(self) -> None:
-        super().__init__()
-        self.owner = Owner(id="user-owner", name="Pat Owner", handle="pat")
+class FakeOrg(AgentPlatformOrg):
+    """Offline Agent API transport for tests that inspect native room membership."""
+    def __init__(self, *, user_id=1, identity="user-owner"):
+        super().__init__("band_a_" + identity, user_id=user_id, identity=identity)
+        self.owner = Owner(id=identity, name="Pat Owner", handle="pat")
         self._rest = object()
-        self.rooms: list[str] = []
-        self.participants: dict[str, set[str]] = {}
-        self.registered: list[str] = []
-        self.inbox: list[SimpleNamespace] = []
+        self.rooms = []
+        self.participants = {}
 
-    async def create_room(self, title: str) -> str:
+    async def connect(self):
+        pass
+
+    async def close(self):
+        self._rest = None
+
+    async def create_room(self, title):
         room_id = f"room-{len(self.rooms) + 1}"
         self.rooms.append(title)
-        self.participants[room_id] = {self.owner.id}
+        self.participants[room_id] = {self.identity}
         return room_id
 
-    async def add_participant(self, room_id: str, band_id: str) -> None:
+    async def add_participant(self, room_id, band_id):
         self.participants.setdefault(room_id, set()).add(band_id)
 
-    async def register_agent(self, name: str, description: str) -> tuple[str, str]:
-        self.registered.append(name)
-        return f"agent-{name.lower()}", f"key-{name.lower()}"
+    async def _members(self, room_id):
+        return self.participants.get(room_id, set())
 
-    async def messages_since(self, room_id: str, since):
-        return list(self.inbox)
-
-    async def send(self, room_id: str, content: str, mentions: list[tuple[str, str]]) -> str:
+    async def send(self, room_id, content, mentions):
         return f"band-{len(content)}"
 
 
@@ -80,7 +81,6 @@ def svc(monkeypatch) -> Iterator[AppService]:
 
     monkeypatch.setattr(service_module, "fetch_identity", identity)
     service = AppService()
-    service.org = FakeOrg()
     try:
         yield service
     finally:
@@ -101,85 +101,36 @@ def _user() -> User:
         return user
 
 
-def test_channels_are_band_rooms_and_visible_agents_can_be_created(svc: AppService):
+def test_channels_and_teammates_use_the_saved_agent_api_connection(svc):
     async def scenario():
-        await svc._ensure_master()
         user = _user()
-        channel = await svc.create_channel("launch", "", user)
-        master = svc.master()
-        assert svc.org.rooms == ["#launch"]
-        assert channel["agent_ids"] == []
-        await svc.add_agent_to_channel(channel["id"], master)
-        assert master.band_agent_id in svc.org.participants[channel["band_room_id"]]
-        scout = await svc.create_agent(name="Scout", role="researcher", instructions="Find facts",
-                                       model=master.model, channel_id=channel["id"], created_by=user.id)
-        assert svc.org.registered == [settings.master_agent_name, "Scout"]
-        assert scout.band_agent_id in svc.org.participants[channel["band_room_id"]]
         with db() as session:
-            assert session.get(ChannelMember, (channel["id"], "agent", scout.id)) is not None
+            session.add(UserBandConnection(user_id=user.id, band_agent_id="alice", secret_enc=encrypt_secret("band_a_alice")))
+            session.commit()
+        channel = await svc.create_channel("launch", "", user)
+        scout = await svc.create_agent(name="Scout", role="researcher", instructions="", model="test-model",
+                                       channel_id=channel["id"], created_by=user.id)
+        with db() as session:
+            assert session.get(BandPlatformRoom, channel["id"]).band_agent_id == "alice"
+            assert session.get(PlatformTeammate, scout.id).user_id == user.id
+            assert session.get(ChannelMember, (channel["id"], "agent", scout.id))
+        assert scout.band_api_key_enc == ""
     asyncio.run(scenario())
 
 
-def test_agent_replies_to_the_owner_reach_humans_and_polling_dedupes(svc: AppService):
-    with db() as session:
-        channel = Channel(name="svc", band_room_id="room-svc")
-        writer = AgentProfile(name="Writer", handle="pat/writer", band_agent_id="agent-writer", band_api_key_enc=encrypt_secret("k"))
-        session.add_all([channel, writer])
-        session.commit()
-        channel_id, writer_id = channel.id, writer.id
-
-    asyncio.run(svc.agent_message(writer_id, "room-svc", "@pat Here is the draft, Alice.", ["pat"], "m1"))
-    asyncio.run(svc.agent_message(writer_id, "room-unknown", "lost", ["pat"], "m2"))
-
-    now = datetime.now(timezone.utc)
-
-    def item(i: int, sender_id: str, content: str, name: str | None = None):
-        return SimpleNamespace(
-            id=f"m{i}", sender_id=sender_id, sender_name=name, content=content, inserted_at=now + timedelta(seconds=i)
-        )
-
-    svc.org.inbox = [
-        item(1, "agent-writer", "@pat Here is the draft, Alice."),
-        item(3, "user-owner", "**Alice:** hi"),
-        item(4, "user-guest", "@pat hello from the Band app", "Guest"),
-        item(5, "agent-writer", "@pat fallback reply"),
-    ]
-    asyncio.run(svc.sync_room(channel_id, "room-svc", now))
-
-    stored = _messages(channel_id)
-    assert [(m.author_type, m.author_name, m.content, m.to_humans) for m in stored] == [
-        ("agent", "Writer", "Here is the draft, Alice.", True),
-        ("external", "Guest", "hello from the Band app", True),
-        ("agent", "Writer", "fallback reply", True),
-    ]
-    with db() as session:
-        assert session.get(ChannelMember, (channel_id, "agent", writer_id)) is not None
-
-
-def test_members_cannot_register_agents_on_the_workspace_band_account(svc: AppService, monkeypatch):
-    from app.persistence.models import UserBandAccount
+def test_unreadable_management_credentials_fail_without_a_fallback(svc):
     from app.workspace.service import ServiceError
-    monkeypatch.setattr("app.config.uses_workspace_band_key", lambda: True)
     user = _user()
-
-    async def denied():
-        with pytest.raises(ServiceError, match="admin") as error:
-            await svc.create_agent(name="Scout", role="researcher", instructions="", model="m", created_by=user.id)
-        assert error.value.status == 403
-        assert svc.org.registered == []
-
-    asyncio.run(denied())
     with db() as session:
-        session.add(UserBandAccount(user_id=user.id, secret_enc=encrypt_secret("band_u_alice"),
-                                    band_user_id="alice", name="Alice", handle="alice"))
+        session.add(UserBandAccount(user_id=user.id, band_user_id="alice", secret_enc="cannot-decrypt"))
         session.commit()
-    personal = asyncio.run(svc.create_agent(name="Scout", role="researcher", instructions="", model="m", created_by=user.id))
-    assert personal.band_agent_id == "alice/Scout"
-    assert svc.org.registered == []
+    with pytest.raises(ServiceError, match="Update your Band user API key"):
+        asyncio.run(svc.create_agent(name="Scout", role="researcher", instructions="", model="test-model", created_by=user.id))
+    with db() as session:
+        assert session.exec(select(AgentProfile)).first() is None
 
 
-@pytest.mark.parametrize("band_api", ["platform", "human"])
-def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypatch, band_api):
+def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypatch):
     import app.api.http as http
     from app.providers.management import create_connection
     from app.providers.models import ProviderConnection, ProviderRevision
@@ -187,18 +138,12 @@ def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypat
     async def noop(*_args, **_kwargs):
         return None
 
-    removed: list[str] = []
-
-    async def delete_agent(agent_id: str) -> None:
-        removed.append(agent_id)
-
     def reject_model(*_args, **_kwargs):
         raise ValueError("Choose a verified model")
 
     monkeypatch.setattr(http, "service", svc)
     monkeypatch.setattr(svc, "startup", noop)
     monkeypatch.setattr(svc, "shutdown", noop)
-    monkeypatch.setattr(svc.org, "delete_agent", delete_agent)
     monkeypatch.setattr("app.providers.display.set_agent_model", reject_model)
 
     with TestClient(http.app) as client:
@@ -207,9 +152,6 @@ def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypat
         headers = {"Authorization": f"Bearer {signed.json()['token']}"}
         user_id = signed.json()["user"]["id"]
         with db() as session:
-            if band_api == "human":
-                # Existing accounts without a saved platform key keep legacy registration.
-                session.delete(session.get(UserBandConnection, user_id))
             row = create_connection(session, provider="openai", label="Offline model", key="offline-secret",
                                     config={"models": ["test-model"]}, user_id=user_id)
             revision = session.get(ProviderRevision, (row.id, 1))
@@ -223,38 +165,25 @@ def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypat
         with db() as session:
             assert session.exec(select(AgentProfile).where(AgentProfile.name == "Tempest")).first() is None
             assert not session.exec(select(PlatformTeammate)).first()
-            assert bool(session.get(UserBandConnection, user_id)) == (band_api == "platform")
+            assert session.get(UserBandConnection, user_id)
             session.delete(session.get(ProviderRevision, (ref["connection_id"], 1)))
             session.delete(session.get(ProviderConnection, ref["connection_id"]))
             session.commit()
-    assert removed == (["agent-tempest"] if band_api == "human" else [])
 
 
-def test_direct_messages_are_private_rooms_the_agent_answers_without_a_mention(svc: AppService):
+def test_direct_messages_are_private_and_answer_without_a_mention(svc):
     async def scenario():
-        await svc._ensure_master()
         user = _user()
-        master = svc.master()
-        scout = await svc.create_agent(name="Scout", role="researcher", instructions="", model=master.model,
-                                       channel_id=None, created_by=user.id)
+        with db() as session:
+            session.add(UserBandConnection(user_id=user.id, band_agent_id="alice", secret_enc=encrypt_secret("band_a_alice")))
+            session.commit()
+        scout = await svc.create_agent(name="Scout", role="researcher", instructions="", model="test-model", created_by=user.id)
         dm = await svc.open_dm(user, scout)
         assert await svc.open_dm(user, scout) == dm
-        assert svc.org.rooms == ["Alice + Scout"]
         assert dm["is_dm"] and dm["dm_agent_id"] == scout.id
         assert dm["human_ids"] == [user.id] and dm["agent_ids"] == [scout.id]
-        assert svc.org.participants[dm["band_room_id"]] == {svc.org.owner.id, scout.band_agent_id}
-
-        await svc._ensure_master()
-        with db() as session:
-            assert session.get(ChannelMember, (dm["id"], "agent", master.id)) is None
-
         posted = await svc.post_human_message(user, dm["id"], "what changed this week? ask @Master too")
         assert posted["mentions"] == [{"type": "agent", "id": scout.id, "name": "Scout"}]
-        with db() as session:
-            task = session.exec(select(AgentTask).where(AgentTask.channel_id == dm["id"])).one()
-            assert task.agent_id == scout.id
-            assert session.get(ChannelMember, (dm["id"], "agent", master.id)) is None
-
         await svc.delete_agent(scout)
         with db() as session:
             assert session.get(DirectMessage, dm["id"]).agent_id is None

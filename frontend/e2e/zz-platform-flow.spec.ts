@@ -9,7 +9,7 @@ test("saved signup key powers a teammate, a Band room and the worker result", as
   await page.getByLabel("Username", { exact: true }).fill(name);
   await page.getByLabel("Display name").fill("Platform flow");
   await page.getByLabel("Password", { exact: true }).fill("test-password");
-  await page.getByLabel("Band agent API key", { exact: true }).fill(`band_a_e2e-${name}`);
+  await page.getByLabel("Band user API key", { exact: true }).fill(`band_a_e2e-${name}`);
   await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.getByRole("button", { name: "Add agents", exact: true }).click();
   await page.getByRole("button", { name: /Create agent/ }).click();
@@ -34,4 +34,13 @@ test("saved signup key powers a teammate, a Band room and the worker result", as
     const tasks = await (await fetch(`/api/channels/${room.id}/tasks`, { headers })).json();
     return tasks.some((task: { status: string; delivery_status: string }) => task.status === "completed" && task.delivery_status === "sent") ? "sent" : "pending";
   })).toBe("sent");
+  const back = page.getByRole("button", { name: "Back to conversations" });
+  if (await back.isVisible()) await back.click();
+  await page.getByRole("button", { name: /^People/ }).click();
+  await expect(page.getByRole("region", { name: "Your Band platform connection" })).toBeVisible();
+  await expect(page.getByLabel("Update Band Agent API key")).toBeVisible();
+  await expect(page.getByText("Advanced: Band Human API (Enterprise)")).toHaveCount(0);
+  await expect(page.getByLabel("Band human API key", { exact: true })).toHaveCount(0);
+  await page.getByLabel("Update Band Agent API key").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath("people-agent-api-only.png"), fullPage: true, animations: "disabled" });
 });

@@ -13,13 +13,14 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sqlmodel import select
 
 import app.tasks.teammates as teammates_module
+import app.band.connections as connections_module
 from app.api.http import service as http_service
 from app.auth import encrypt_secret, issue_token
 from app.config import settings
 from app.main import app
 from app.band.listener import QueuedAgentAdapter
 from app.persistence.models import (AgentProfile, AgentTask, Channel, ChannelMember, DirectMessage, Message,
-                                    OutsideAgent, OutsideHandoff, TaskHandoff, TeammateRequest, User, db)
+                                    OutsideAgent, OutsideHandoff, TaskHandoff, TeammateRequest, User, UserBandConnection, BandAgentOwner, BandPlatformRoom, PlatformTeammate, db)
 from app.runtime.harness import build_harness
 from app.runtime.tools import tools_for
 from app.tasks import enqueue, recover_tasks, update_task
@@ -53,19 +54,23 @@ def team(svc: AppService):  # noqa: F811
             for row in session.exec(select(model)).all():
                 session.delete(row)
         session.commit()
-    svc.org = PeerOrg()
-    asyncio.run(svc._ensure_master())
-    master = svc.master()
     with db() as session:
-        channel = Channel(name="crew", band_room_id="room-crew")
         user = User(username="alice", display_name="Alice", password_hash="x")
-        session.add_all([channel, user])
-        session.commit()
-        session.refresh(channel)
-        session.refresh(user)
-        session.add_all([ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id),
+        session.add(user); session.flush()
+        connection = UserBandConnection(user_id=user.id, band_agent_id="user-owner", secret_enc=encrypt_secret("band_a_user-owner"))
+        channel = Channel(name="crew", band_room_id="room-crew")
+        master = AgentProfile(name="Master", role="master", is_master=True, band_agent_id="agent-master", band_api_key_enc="", created_by=user.id)
+        session.add_all([connection, channel, master]); session.flush()
+        session.add_all([BandPlatformRoom(channel_id=channel.id, user_id=user.id, band_agent_id="user-owner"),
+                         PlatformTeammate(agent_id=master.id, user_id=user.id, band_agent_id="user-owner"),
+                         BandAgentOwner(agent_id=master.id, user_id=user.id, band_user_id="user-owner"),
+                         ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id),
                          ChannelMember(channel_id=channel.id, member_type="agent", member_id=master.id)])
         session.commit()
+    org = PeerOrg(user_id=user.id)
+    org.participants["room-crew"] = {"user-owner"}
+    svc._platform_orgs[user.id] = (connection.secret_enc, org)
+    svc._test_org = org
     task = enqueue(agent_id=master.id, channel_id=channel.id, room_id="room-crew", source_id="kickoff",
                    prompt="Build a small team")
     return svc, task, master, channel, user
@@ -93,7 +98,7 @@ def test_agent_created_teammate_joins_channel_once(team):
         assert other["status"] == "exists"
 
     asyncio.run(scenario())
-    assert svc.org.registered == ["Master", "Scout"]
+    assert _agent_names() == ["Master", "Scout"]
     with db() as session:
         scout = session.exec(select(AgentProfile).where(AgentProfile.name == "Scout")).one()
         assert scout.role == "researcher" and scout.created_by_agent == master.id and scout.model == master.model
@@ -103,7 +108,7 @@ def test_agent_created_teammate_joins_channel_once(team):
                                                    Message.author_type == "system")).all()
         assert [n.content for n in notes] == [
             f"{master.name} created **Scout** (Researcher) as a teammate in this channel."]
-    assert scout.band_agent_id in svc.org.participants["room-crew"]
+    assert svc._test_org.participants["room-crew"] == {"user-owner"}
 
 
 def test_teammate_requests_are_validated_and_limited(team, monkeypatch):
@@ -127,7 +132,7 @@ def test_teammate_requests_are_validated_and_limited(team, monkeypatch):
                                                       call_id="e", wait=0))["error"]
 
     asyncio.run(scenario())
-    assert svc.org.registered == ["Master", "Quill"]
+    assert _agent_names() == ["Master", "Quill"]
 
 
 def test_unclaimed_request_expires_and_is_never_created(team):
@@ -139,17 +144,23 @@ def test_unclaimed_request_expires_and_is_never_created(team):
         request = session.exec(select(TeammateRequest).where(TeammateRequest.source_key == f"{task.id}:slow")).one()
         assert request.status == "failed"
     asyncio.run(svc.process_teammate_request(request.id))
-    assert svc.org.registered == ["Master"]
+    assert _agent_names() == ["Master"]
 
 
-def test_band_offline_fails_the_request_with_a_clear_error(team):
+def test_band_offline_fails_the_request_with_a_clear_error(team, monkeypatch):
     svc, task, _, _, _ = team
-    svc.org._rest = None
+    async def offline(user_id):
+        raise ServiceError("Your Band Agent API connection is unavailable", 409)
+    monkeypatch.setattr(svc, "platform_org", offline)
     result = asyncio.run(_with_watcher(svc, create_teammate(task, name="Scout", role="researcher", instructions="",
                                                             call_id="offline", wait=5)))
-    assert "Not connected to Band" in result["error"]
+    assert "Agent API connection" in result["error"]
+    assert _agent_names() == ["Master"]
+
+
+def _agent_names():
     with db() as session:
-        assert not session.exec(select(AgentProfile).where(AgentProfile.name == "Scout")).first()
+        return session.exec(select(AgentProfile.name).order_by(AgentProfile.id)).all()
 
 
 def _status(request_id: int) -> TeammateRequest:
@@ -208,29 +219,31 @@ def test_teammate_requests_wait_until_band_has_connected(team, monkeypatch):
     request_id = teammates_module._request(task, name="Scout", role="researcher", instructions="", call_id="boot")
     during_connect = []
 
-    async def slow_connect():
-        await asyncio.sleep(1.2)  # the watcher polls every 0.5 s, so it would have claimed the request by now
+    original = svc.platform_org
+    async def slow_connect(user_id):
+        await asyncio.sleep(1.2)
         during_connect.append(_status(request_id).status)
+        return await original(user_id)
 
     async def no_listener(profile):
         return None
-    monkeypatch.setattr(svc.org, "connect", slow_connect)
+    monkeypatch.setattr(svc, "platform_org", slow_connect)
     monkeypatch.setattr(svc, "start_agent", no_listener)
 
     async def scenario():
         await svc.startup()
         try:
             for _ in range(50):
-                if _status(request_id).status != "pending":
+                if _status(request_id).status in {"created", "failed"}:
                     break
                 await asyncio.sleep(0.1)
         finally:
-            for poller in (svc._task_poller, svc._teammate_poller, svc._poller):
+            for poller in (svc._task_poller, svc._teammate_poller, svc._take_over_poller):
                 if poller:
                     poller.cancel()
                     await asyncio.gather(poller, return_exceptions=True)
     asyncio.run(scenario())
-    assert during_connect == ["pending"]
+    assert during_connect[0] == "pending"
     assert _status(request_id).status == "created"
 
 
@@ -262,21 +275,14 @@ def test_simultaneous_requests_cannot_duplicate_a_name_or_pass_the_limit(team, m
 
 
 def test_registrations_are_serialized_and_names_are_case_insensitive(team, monkeypatch):
-    svc, _, _, _, _ = team
-    register = svc.org.register_agent
-
-    async def slow_register(name, description):
-        await asyncio.sleep(0.05)  # Band takes a while, so unserialized registrations would interleave
-        return await register(name, description)
-    monkeypatch.setattr(svc.org, "register_agent", slow_register)
-
+    svc, _, _, _, user = team
     async def scenario():
-        return await asyncio.gather(*(svc.create_agent(name=name, role="researcher", instructions="", model="m")
+        return await asyncio.gather(*(svc.create_agent(name=name, role="researcher", instructions="", model="m", created_by=user.id)
                                       for name in ("Scout", "scout")), return_exceptions=True)
     made, refused = asyncio.run(scenario())
     assert made.name == "Scout"
     assert isinstance(refused, ServiceError) and refused.status == 409
-    assert svc.org.registered == ["Master", "Scout"]
+    assert _agent_names() == ["Master", "Scout"]
 
 
 def test_local_and_outside_agents_cannot_share_a_name(team):
@@ -285,7 +291,7 @@ def test_local_and_outside_agents_cannot_share_a_name(team):
     assert "outside Band agent" in teammates_module._request(task, name="tom", role="writer", instructions="",
                                                              call_id="shadow")["error"]
     with pytest.raises(ServiceError, match="outside Band agent"):
-        asyncio.run(svc.create_agent(name="TOM", role="writer", instructions="", model="m"))
+        asyncio.run(svc.create_agent(name="TOM", role="writer", instructions="", model="m", created_by=user.id))
     with db() as session:
         session.delete(session.get(OutsideAgent, (channel.id, "peer-tom")))
         session.add(AgentProfile(name="tom", role="writer", band_agent_id="agent-local-tom",
@@ -301,15 +307,18 @@ def test_removing_an_outside_agent_needs_band_to_confirm(team, monkeypatch):
 
     async def refuse(room_id, band_id):
         raise RuntimeError("band down")
-    monkeypatch.setattr(svc.org, "remove_participant", refuse)
+    monkeypatch.setattr(svc._test_org, "remove_participant", refuse)
     with pytest.raises(ServiceError) as failed:
         asyncio.run(svc.remove_outside_agent(channel.id, "peer-tom"))
     assert failed.value.status == 502
-    rest, svc.org._rest = svc.org._rest, None
+    rest, svc._test_org._rest = svc._test_org._rest, None
+    async def offline(user_id):
+        raise ServiceError("Reconnect this channel's Band Agent API connection", 409)
+    monkeypatch.setattr(svc, "platform_org", offline)
     with pytest.raises(ServiceError) as offline:
         asyncio.run(svc.remove_outside_agent(channel.id, "peer-tom"))
-    assert offline.value.status == 503
-    svc.org._rest = rest
+    assert offline.value.status == 409
+    svc._test_org._rest = rest
     with db() as session:
         assert session.get(OutsideAgent, (channel.id, "peer-tom"))
     assert [m.content for m in _system(channel.id)] == []
@@ -352,43 +361,35 @@ def test_only_master_can_create_teammates(team):
     assert "create_teammate" not in {t.name for t in tools_for(other)}
 
 
-def test_workspace_band_invites_require_an_admin(team, monkeypatch):
-    svc, _, _, channel, user = team
-    monkeypatch.setattr("app.config.uses_workspace_band_key", lambda: True)
-
-    async def scenario():
-        with pytest.raises(ServiceError, match="invite") as denied:
-            await svc.invite_outside_agent(user, channel.id, "peer-tom")
-        assert denied.value.status == 403
-        with db() as session:
-            from app.persistence.models import WorkspaceRole
-            session.add(WorkspaceRole(user_id=user.id, role="admin"))
-            session.commit()
-        await svc.invite_outside_agent(user, channel.id, "peer-tom")
-        with db() as session:
-            assert session.get(OutsideAgent, (channel.id, "peer-tom")) is not None
-
-    asyncio.run(scenario())
+def test_band_invites_require_the_connection_owner(team):
+    svc, _, _, channel, owner = team
+    with db() as session:
+        other = User(username="other", display_name="Other", password_hash="x")
+        session.add(other); session.commit()
+    with pytest.raises(ServiceError) as denied:
+        asyncio.run(svc.invite_outside_agent(other, channel.id, "peer-tom"))
+    assert denied.value.status == 403
+    asyncio.run(svc.invite_outside_agent(owner, channel.id, "peer-tom"))
 
 
 def test_outside_agents_can_be_invited_listed_and_removed(team):
     svc, _, _, channel, user = team
 
     async def scenario():
-        peers = await svc.list_peers(channel.id)
+        peers = await svc.list_peers(channel.id, user.id)
         assert [p["band_id"] for p in peers] == ["peer-tom"]
         await svc.invite_outside_agent(user, channel.id, "peer-tom")
         await svc.invite_outside_agent(user, channel.id, "peer-tom")
-        assert await svc.list_peers(channel.id) == []
+        assert await svc.list_peers(channel.id, user.id) == []
         with pytest.raises(ServiceError, match="belongs to this workspace"):
             await svc.invite_outside_agent(user, channel.id, "agent-master")
         with db() as session:
             listed = svc.serialize_channel(session, session.get(Channel, channel.id))["outside_agents"]
         assert listed == [{"band_id": "peer-tom", "handle": "pat/tom", "name": "Tom",
                            "description": "Claude Code on Pat's laptop"}]
-        assert "peer-tom" in svc.org.participants["room-crew"]
+        assert "peer-tom" in svc._test_org.participants["room-crew"]
         await svc.remove_outside_agent(channel.id, "peer-tom")
-        assert "peer-tom" not in svc.org.participants["room-crew"]
+        assert "peer-tom" not in svc._test_org.participants["room-crew"]
 
     asyncio.run(scenario())
     notes = [m.content for m in _system(channel.id)]
@@ -428,8 +429,8 @@ def _ask(task, teammate: str, call_id: str) -> dict:
 
 def test_outside_handoff_is_sent_once_through_band(team, monkeypatch):
     _, task, master, channel, _ = team
-    monkeypatch.setattr(teammates_module, "AsyncRestClient", FakeRest)
-    monkeypatch.setattr(teammates_module, "aclose_rest_client", _no_close)
+    monkeypatch.setattr(connections_module, "AsyncRestClient", FakeRest)
+    monkeypatch.setattr(connections_module, "aclose_rest_client", _no_close)
     FakeRest.sent, FakeRest.fail = [], False
     with db() as session:
         session.add(OutsideAgent(channel_id=channel.id, band_id="peer-tom", handle="pat/tom", name="Tom"))
@@ -458,8 +459,8 @@ def test_outside_handoff_is_sent_once_through_band(team, monkeypatch):
 
 def test_outside_reply_comes_back_as_the_answer_to_the_request(team, monkeypatch):
     svc, task, master, channel, _ = team
-    monkeypatch.setattr(teammates_module, "AsyncRestClient", FakeRest)
-    monkeypatch.setattr(teammates_module, "aclose_rest_client", _no_close)
+    monkeypatch.setattr(connections_module, "AsyncRestClient", FakeRest)
+    monkeypatch.setattr(connections_module, "aclose_rest_client", _no_close)
     FakeRest.sent, FakeRest.fail = [], False
     with db() as session:
         session.add(OutsideAgent(channel_id=channel.id, band_id="peer-tom", handle="pat/tom", name="Tom"))
@@ -467,9 +468,10 @@ def test_outside_reply_comes_back_as_the_answer_to_the_request(team, monkeypatch
     _ask(task, "Tom", "out-1")
 
     now = datetime.now(timezone.utc)
-    svc.org.inbox = [SimpleNamespace(id="tom-1", sender_id="peer-tom", sender_name="Tom", inserted_at=now,
-                                     content=f"@[[{master.band_agent_id}]] p95 is 120 ms.")]
-    asyncio.run(svc.sync_room(channel.id, "room-crew", now - timedelta(seconds=1)))
+    svc._test_org.participants["room-crew"].add("peer-tom")
+    incoming = SimpleNamespace(id="tom-1", sender_id="peer-tom", sender_name="Tom", inserted_at=now,
+                               content=f"@[[{master.band_agent_id}]] p95 is 120 ms.")
+    asyncio.run(svc.platform_message(svc._test_org.user_id, "user-owner", "room-crew", incoming))
     with db() as session:
         stored = session.exec(select(Message).where(Message.band_message_id == "tom-1")).one()
         assert stored.author_type == "external" and stored.content == f"@{master.name} p95 is 120 ms."
@@ -530,8 +532,8 @@ def test_outside_handoff_interrupted_mid_send_is_never_reported_as_sent(team, mo
             FakeRest.sent.append((room_id, message))
             started.set()
             await asyncio.sleep(30)
-    monkeypatch.setattr(teammates_module, "AsyncRestClient", HangingRest)
-    monkeypatch.setattr(teammates_module, "aclose_rest_client", _no_close)
+    monkeypatch.setattr(connections_module, "AsyncRestClient", HangingRest)
+    monkeypatch.setattr(connections_module, "aclose_rest_client", _no_close)
     FakeRest.sent, FakeRest.fail = [], False
     tom = _tom(channel.id)
 
@@ -559,8 +561,8 @@ def test_outside_handoff_interrupted_mid_send_is_never_reported_as_sent(team, mo
 
 def test_outside_replies_share_the_original_request_handoff_budget(team, monkeypatch):
     _, task, master, channel, _ = team
-    monkeypatch.setattr(teammates_module, "AsyncRestClient", FakeRest)
-    monkeypatch.setattr(teammates_module, "aclose_rest_client", _no_close)
+    monkeypatch.setattr(connections_module, "AsyncRestClient", FakeRest)
+    monkeypatch.setattr(connections_module, "aclose_rest_client", _no_close)
     FakeRest.sent, FakeRest.fail = [], False
     _tom(channel.id)
     for i in range(MAX_HANDOFFS - 1):
@@ -578,11 +580,12 @@ def test_outside_replies_share_the_original_request_handoff_budget(team, monkeyp
     assert len(FakeRest.sent) == MAX_HANDOFFS
 
 
-def test_outside_agent_endpoints_reject_dms_and_offline_band(team):
-    _, task, _, channel, user = team
+def test_outside_agent_endpoints_reject_dms_and_offline_band(team, monkeypatch):
+    svc, task, _, channel, user = team
+    monkeypatch.setattr(http_service, "_platform_orgs", svc._platform_orgs)
     headers = {"Authorization": f"Bearer {issue_token(user.id)}"}
     with TestClient(app) as client:
-        assert client.get(f"/api/channels/{channel.id}/peers", headers=headers).status_code == 503
+        assert client.get(f"/api/channels/{channel.id}/peers", headers=headers).status_code == 200
         with db() as session:
             session.add(DirectMessage(channel_id=channel.id, user_id=user.id, agent_id=task.agent_id))
             session.commit()

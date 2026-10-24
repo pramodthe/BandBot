@@ -11,6 +11,12 @@ from app.runtime.tools import tools_for
 from app.persistence.models import AgentTask
 
 
+@pytest.fixture(autouse=True)
+def initialized_database():
+    from app.persistence.models import init_db
+    init_db()
+
+
 def search_tool():
     task = AgentTask(id="search-test", source_key="search-test", channel_id=1,
                      agent_id=1, room_id="test", prompt="Search the web")
@@ -127,3 +133,33 @@ def test_fetch_page_http_errors_do_not_leak_response_body(monkeypatch):
 def test_fetch_page_unconfigured(monkeypatch):
     monkeypatch.setattr(module, "settings", SimpleNamespace(exa_api_key=""))
     assert "not configured" in asyncio.run(fetch_tool().ainvoke({"url": "https://example.com"}))["error"]
+
+
+@pytest.mark.parametrize('factory,arguments', [
+    (search_tool, {'query': 'AI earbuds'}),
+    (fetch_tool, {'url': 'https://example.com'}),
+])
+def test_disabled_research_reports_unavailable_without_falling_back_to_environment(monkeypatch, factory, arguments):
+    def forbidden(request):
+        pytest.fail('Disabled research must not call a provider')
+    fake_exa(monkeypatch, forbidden)
+    monkeypatch.setattr('app.providers.context.selection', lambda *args: {'disabled': True, 'connection_id': 'disabled-research'})
+    result = asyncio.run(factory().ainvoke(arguments))
+    assert result['code'] == 'not_configured' and result['retryable'] is False
+    assert 'Providers & APIs' in result['error'] and 'do not claim' in result['error']
+    assert 'test-secret' not in str(result)
+
+
+@pytest.mark.parametrize('factory,arguments', [
+    (search_tool, {'query': 'AI earbuds'}),
+    (fetch_tool, {'url': 'https://example.com'}),
+])
+def test_configured_research_revocation_still_requires_explicit_reconnection(monkeypatch, factory, arguments):
+    from app.providers.contracts import ProviderError
+    monkeypatch.setattr('app.providers.context.selection', lambda *args: {'connection_id': 'revoked-research'})
+    def revoked(*args):
+        raise ProviderError('research', 'revoked', connection_id='revoked-research')
+    monkeypatch.setattr('app.providers.connections.resolve', revoked)
+    with pytest.raises(ProviderError) as failure:
+        asyncio.run(factory().ainvoke(arguments))
+    assert failure.value.service == 'research' and failure.value.code == 'revoked'

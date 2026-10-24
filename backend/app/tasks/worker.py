@@ -100,7 +100,7 @@ def config_for(task: AgentTask) -> dict:
 
 async def execute(task: AgentTask, checkpointer, *, factory=build_harness, computer: TaskComputer | None = None) -> str:
     # Browser tests answer without a model provider. A real key disables the shortcut.
-    if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key and not settings.band_user_api_key:
+    if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key:
         return "I can help with that."
     from app.providers.context import task_services
     computer = computer or TaskComputer(task)

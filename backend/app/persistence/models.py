@@ -48,6 +48,7 @@ class ChannelMember(SQLModel, table=True):
 
 
 class UserBandAccount(SQLModel, table=True):
+    """A user's encrypted Band credential for native agent management; local chat is independent."""
     user_id: int = Field(foreign_key="user.id", primary_key=True)
     band_user_id: str | None = Field(default=None, unique=True)
     secret_enc: str = ""
@@ -56,7 +57,7 @@ class UserBandAccount(SQLModel, table=True):
 
 
 class UserBandConnection(SQLModel, table=True):
-    """A person's Band platform credential, separate from local AI teammates and Human API accounts."""
+    """A person's Agent API credential, separate from local AI teammate profiles."""
     user_id: int = Field(foreign_key="user.id", primary_key=True)
     band_agent_id: str = Field(unique=True, index=True)
     secret_enc: str

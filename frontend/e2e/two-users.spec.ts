@@ -6,7 +6,7 @@ async function signup(page: Page, username: string, displayName: string) {
   await page.getByLabel("Username").fill(username);
   await page.getByLabel("Display name").fill(displayName);
   await page.getByLabel("Password").fill("secret123");
-  await page.getByLabel("Band agent API key", { exact: true }).fill(`band_a_e2e-${username}`);
+  await page.getByLabel("Band user API key", { exact: true }).fill(`band_a_e2e-${username}`);
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByRole("button", { name: /^People/ })).toBeVisible();
 }
@@ -113,7 +113,11 @@ test("two people consent, talk, invite, and reach a workspace agent", async ({ b
   const members = bobPage.locator("aside").filter({ has: bobPage.getByRole("heading", { name: "Channel members" }) });
   await expect(members.getByRole("button", { name: agentName })).toBeVisible();
   await expect(members.getByRole("button", { name: "Remove from channel" })).toHaveCount(0);
-  await bobPage.getByRole("button", { name: "Close channel members" }).click();
+  await members.getByRole("button", { name: agentName }).click();
+  await expect(bobPage.getByRole("button", { name: `More actions for ${agentName}` })).toBeDisabled();
+  await expect(bobPage.getByRole("button", { name: "Add instructions", exact: true })).toHaveCount(0);
+  await expect(bobPage.getByText("No instructions have been added. Only this agent’s owner can manage its instructions.")).toBeVisible();
+  await bobPage.getByRole("button", { name: "Close agent profile" }).click();
   await send(bobPage, `@${agentName} please help`);
   await expect(bobPage.getByText("I can help with that.")).toBeVisible();
 

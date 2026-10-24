@@ -19,10 +19,10 @@ export default function AgentInstructions({ agent, roleInstructions, canManage =
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const start = () => { setDraft(agent.instructions); setEditing(true); setError(""); setNotice(""); };
+  const start = () => { if (!canManage) return; setDraft(agent.instructions); setEditing(true); setError(""); setNotice(""); };
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy || draft.trim() === agent.instructions) return;
+    if (!canManage || busy || draft.trim() === agent.instructions) return;
     setBusy(true);
     setError("");
     try {
@@ -41,7 +41,7 @@ export default function AgentInstructions({ agent, roleInstructions, canManage =
     <ProfileSection title="Instructions" action={!editing && canManage ? (
       <Button variant="ghost" size="icon-sm" aria-label={`Edit ${agent.name} instructions`} onClick={start}><PencilIcon /></Button>
     ) : undefined}>
-      {editing ? (
+      {editing && canManage ? (
         <form onSubmit={save} className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label htmlFor={id} className="min-w-0 text-sm font-medium break-words">How {agent.name} should work</label>
@@ -65,8 +65,8 @@ export default function AgentInstructions({ agent, roleInstructions, canManage =
         <div className="text-sm leading-relaxed"><RichText text={agent.instructions} variant="document" /></div>
       ) : (
         <div className="space-y-3">
-          <p className="text-muted-foreground text-sm leading-relaxed">Give {agent.name} guidance on its responsibilities, approach, and how to communicate.</p>
-          <Button variant="outline" size="sm" onClick={start}><PlusIcon data-icon="inline-start" />Add instructions</Button>
+          <p className="text-muted-foreground text-sm leading-relaxed">{canManage ? `Give ${agent.name} guidance on its responsibilities, approach, and how to communicate.` : "No instructions have been added. Only this agent’s owner can manage its instructions."}</p>
+          {canManage && <Button variant="outline" size="sm" onClick={start}><PlusIcon data-icon="inline-start" />Add instructions</Button>}
         </div>
       )}
       {roleInstructions ? <details className="text-muted-foreground mt-4 text-sm">

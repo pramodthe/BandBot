@@ -36,14 +36,14 @@ The workspace opens in light mode and remembers your theme preference. In a new 
 
 ### From request to result
 
-In `#general`, try:
+Create a teammate named Researcher, add it to a channel, then try:
 
 ```text
-@Master Research this product idea, build a landing page,
+@Researcher Research this product idea, build a landing page,
 and get a second opinion before sharing the result.
 ```
 
-1. **Assign the work.** Master receives the request with the conversation's context and can delegate to specialist helpers or visible teammates.
+1. **Assign the work.** Your teammate receives the request with the conversation's context and can delegate to specialist helpers or visible teammates.
 2. **Follow the task.** Progress, hand-offs, blockers, and approval requests stay connected to the conversation. Open the agent's computer when you need a closer look.
 3. **Use the outcome.** Read the answer, inspect supporting files, or interact with the webpage preview directly in the reply.
 
@@ -55,7 +55,7 @@ Research and computer work require their optional services to be configured. See
 
 - **Python 3.12+** and **uv**.
 - **Node.js 22+** and **npm**.
-- Your own **Band Agent API key** (`band_a_…`) to create an app account and connect it to Band. Create the connection identity in the Band dashboard and save its key. The app validates and encrypts the key per user; teammates share this connection while keeping their own instructions, memory, and tasks. Individual use does not require Human API access. An optional workspace Human API connection requires Band Enterprise and enables programmatic agent registration.
+- No Band key is required for signup or human chat. To create native agents from BandBot, connect your own **Band user API key** (`band_u_…`) from Band Settings → API Keys. It is verified and encrypted per user. Created agents receive their own **Agent API keys** (`band_a_…`) for runtime messaging. Existing native agents can also be imported with their agent keys.
 - A model-provider account for AI execution: configure OpenAI, Anthropic, Gemini, or a verified compatible endpoint in **Providers & APIs** after signing in. Human chat works before optional provider setup.
 
 ### 2. Install and configure
@@ -76,8 +76,7 @@ cd ..
 Edit the root `.env` file and set:
 
 ```dotenv
-# Optional Enterprise workspace registration only; individual keys are entered during signup or in People.
-BAND_USER_API_KEY=
+# Each user connects their own Band key at signup or in People, not through a shared server key.
 # Optional legacy bootstrap; provider connections can be configured in the admin UI.
 OPENAI_API_KEY=
 APP_SECRET=replace_with_a_long_random_secret
@@ -110,7 +109,7 @@ cd frontend
 npm run dev
 ```
 
-Open **[localhost:5173](http://localhost:5173)** and create an account with your own Band Agent API key. The signup form explains the key types and how to obtain one. Configure model access in **Providers & APIs**, then choose **Add agents → Create agent**, enter a display name and specialty, and optionally add the teammate to a channel. Teammates use your saved Band connection; no additional Band key or Human API access is required. Update the connection in **People** when rotating its key.
+Open **[localhost:5173](http://localhost:5173)** and create a local account. The Band connection is optional: add your own `band_u_…` user key at signup or under **People → Create and manage Band agents**. Configure model access in **Providers & APIs**, then choose **Add agents → Create agent**. The app registers a native agent in your Band account and securely saves its separate agent key for runtime access. Another app user supplies their own key; no shared server credential is used. Human accounts, contacts, invitations, channel membership, and human chat stay in the app database and WebSocket service.
 
 > The worker is required for agents to run. The API accepts messages and queues tasks; the separate worker executes them.
 
@@ -143,6 +142,14 @@ Returned image-model token usage counts against existing
 agent/channel budgets; image costs remain unknown without appropriate configured pricing.
 Interrupted or uncertain paid calls are not automatically retried. This tool generates new
 images; source-image editing is not yet supported. Restart the API and worker after upgrading.
+
+## Band agent management and coming-soon human chat
+
+**Available now:** per-user native Band agent creation and management. Band calls these account-scoped `/api/v1/me/agents` endpoints the **Human API**. They use the requesting user's encrypted `band_u_…` key and return an agent's own `band_a_…` key. Band documents account-scoped API access as an Enterprise capability; actual availability depends on the account. A rejected connection reports an error without borrowing another user's key. See [Band agent registration](https://docs.band.ai/api/human-api#agent-registration).
+
+**Coming soon:** acting as a native Band human participant, importing that person's Band chat history, or synchronizing native human conversations. These features are separate from agent management. Human chat currently uses our own database, permissions, and WebSocket service, with no Band human-room/message polling.
+
+Existing saved Agent API connections remain supported. They can transport app teammates with separate profiles, instructions, memory, and tasks, but cannot create additional native identities. Importing an agent key preserves its external ownership; disconnecting it does not delete the native agent. Deleting an app-managed native agent uses only its owner's saved Band user key. Shared transport identities are preserved. Existing history is retained; older native rooms without an Agent API binding are not silently assigned a different identity.
 
 ## How it works
 

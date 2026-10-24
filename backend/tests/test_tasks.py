@@ -242,14 +242,37 @@ def test_missing_optional_tools_report_unavailable(job, monkeypatch):
     tools = {tool.name: tool for tool in tools_for(task)}
     from app.providers.contracts import ProviderError
     async def scenario():
-        for name, arguments, service in (
-            ("web_search", {"query": "test"}, "research"),
-            ("run_python", {"code": "print(2)"}, "computer"),
-        ):
-            with pytest.raises(ProviderError) as failure:
-                await tools[name].ainvoke(arguments)
-            assert (failure.value.service, failure.value.code) == (service, "not_configured")
+        result = await tools["web_search"].ainvoke({"query": "test"})
+        assert result["code"] == "not_configured" and result["retryable"] is False
+        with pytest.raises(ProviderError) as failure:
+            await tools["run_python"].ainvoke({"code": "print(2)"})
+        assert (failure.value.service, failure.value.code) == ("computer", "not_configured")
     asyncio.run(scenario())
+
+
+def test_missing_research_does_not_abort_a_checkpointed_task(tmp_path, job, monkeypatch):
+    from langchain_core.messages import ToolMessage
+    import app.runtime.tools.web as web
+    task, _, _ = job
+    monkeypatch.setattr(web, "settings", type("Settings", (), {"exa_api_key": ""})())
+
+    class ResearchUnavailableModel(ScriptedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.index == 1:
+                results = [message for message in messages if isinstance(message, ToolMessage)]
+                assert results and "not_configured" in results[-1].content
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    model = ResearchUnavailableModel(responses=[
+        AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "local AI earbuds"}, "id": "research-1"}]),
+        AIMessage(content="Live web research is unavailable. I can draft a concept brief from the information you supplied."),
+    ])
+    saved = run_attempt(tmp_path, task, model)
+    assert saved.status == "completed"
+    assert "Live web research is unavailable" in saved.result
+    from app.providers.models import ProviderBlock
+    with db() as session:
+        assert session.get(ProviderBlock, task.id) is None
 
 
 def test_worker_replies_reach_websocket_without_band(job):

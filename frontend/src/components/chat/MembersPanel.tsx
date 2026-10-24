@@ -208,7 +208,7 @@ export default function MembersPanel({
             </a>
           </>
         ) : (
-          "Not linked to Band yet: the room is created once the server connects to Band."
+          "Local channel: people and agents collaborate here without a native Band room."
         )}
       </p>
       {error && <div className="text-destructive px-4 text-[12.5px]">{error}</div>}

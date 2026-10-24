@@ -2,6 +2,12 @@
 
 This installation runs **one API process and one worker**. They share `DATABASE_URL`, `AGENT_CHECKPOINT_PATH`, `DOCUMENTS_PATH`, and `APP_SECRET`. Pointing `DATABASE_URL` at PostgreSQL does not add replicas. The event bus, Band listeners, and checkpoint lock stay on one machine. An uncertain Band send is never replayed during migration or restore.
 
+## Optional service activation
+
+Environment keys bootstrap provider connections only on initial setup. Adding keys to `.env` after the workspace has saved service settings does not enable previously disabled services. An admin must configure the connection in **Providers & APIs**, verify it, and explicitly select it for **Cloud computers**, **Web research**, or the relevant service. Keep provider credentials server-side; do not ask users to post them in chat.
+
+Agents and their helpers receive the services disabled for each task. Missing optional execution, research, images, or document services are reported as tool limitations, so the agent can explain the requirement or continue with available work. A PDF or other file export still requires an enabled execution capability; a text reply is not proof that a downloadable file was created. Revoked, failing, or uncertain configured connections retain explicit recovery. Existing task bindings are preserved; start linked new work with current providers after changing a service rather than silently switching a saved task.
+
 ## Application secret and sessions
 
 `APP_SECRET` encrypts stored Band and provider credentials and signs session tokens. Do not rotate it as part of this upgrade. A new secret would make stored credentials unreadable. Signing and encryption still share this one secret; splitting them needs a separate migration.
@@ -34,7 +40,7 @@ Blocking is recorded in `contact_block`. Either person's block stops new contact
 
 ## Worker and provider status
 
-`GET /api/health` is public and reports only that the API is up and whether Band is configured and online. It does not include error text or credentials.
+`GET /api/health` is public and reports that the API is up, whether any Agent API connection is saved, and whether any restored connection is online. Individual connection failures do not fail API health. Authenticated bootstrap reports the signed-in user's Band connection state. Neither response includes credentials; public health also omits error text.
 
 `GET /api/status` requires a signed-in user. It reports API liveness, human chat availability, worker state (`starting`, `ready`, `busy`, or `unavailable`), and each connected runtime's state (`ready`, `sign_in_required`, or `unavailable`). `action: "reconnect"` is included only for the person who created that provider connection. Other people see that sign-in is required and do not get the action. Details are short state codes. Provider secrets and raw provider errors are not included. The worker does not call a model to prove it is healthy.
 
@@ -74,4 +80,4 @@ From `frontend/`:
 npm run e2e
 ```
 
-Playwright starts the API, the worker, and Vite with a temporary database, checkpoint file, and documents directory. `E2E_FAKE_AGENT=1` is set only by that script, and the fake reply is ignored when `OPENAI_API_KEY` or `BAND_USER_API_KEY` is set. No Band, OpenAI, Claude, Cursor, E2B, or OpenClaw credentials are required. The same command is the GitHub Actions browser job. It covers two signed-in browsers, contact consent, direct messages, invitations, a deterministic agent reply, authorization checks, the external-agent error screen, reconnect, and retry, on a desktop viewport and a compact viewport. Failure screenshots and traces stay in `frontend/test-results/` and `frontend/playwright-report/`, which are gitignored.
+Playwright starts the API, the worker, and Vite with a temporary database, checkpoint file, and documents directory. `E2E_FAKE_AGENT=1` is set only by that script, and the fake reply is ignored when `OPENAI_API_KEY` is set. No Band, OpenAI, Claude, Cursor, E2B, or OpenClaw credentials are required. The same command is the GitHub Actions browser job. It covers two signed-in browsers, contact consent, direct messages, invitations, a deterministic agent reply, authorization checks, the external-agent error screen, reconnect, and retry, on a desktop viewport and a compact viewport. Failure screenshots and traces stay in `frontend/test-results/` and `frontend/playwright-report/`, which are gitignored.

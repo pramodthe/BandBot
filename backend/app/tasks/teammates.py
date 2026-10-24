@@ -1,4 +1,4 @@
-"""Agents grow their team: new visible teammates (registered by the API process) and outside Band agents."""
+"""Agents grow their team with app teammate profiles and outside Band collaborators."""
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 CREATE_WAIT = 30.0
 REGISTER_WAIT = 60.0
 POLL = 0.5
-INTERRUPTED = "The app server restarted while registering it; try again"
+INTERRUPTED = ("The app server restarted while creating this teammate. Check the agents in Band before "
+               "requesting it again; native registration may have succeeded.")
 
 
 def _role_key(role: str) -> str | None:
@@ -112,7 +113,7 @@ def _limit_reached() -> dict:
 
 async def create_teammate(task: AgentTask, *, name: str, role: str, instructions: str, call_id: str,
                           wait: float = CREATE_WAIT, register_wait: float = REGISTER_WAIT) -> dict:
-    """Ask the API process to register a teammate, then wait for the outcome."""
+    """Ask the API process to create an app teammate, then wait for the outcome."""
     outcome = _request(task, name=name, role=role, instructions=instructions, call_id=call_id)
     if isinstance(outcome, dict):
         return outcome
@@ -136,7 +137,7 @@ async def create_teammate(task: AgentTask, *, name: str, role: str, instructions
                 return {"error": f"Couldn't create {request.name}: the app server didn't respond. Try again later."}
             if register_wait <= 0:
                 return {"status": "creating", "teammate": request.name,
-                        "note": "Band is still registering it. Try ask_teammate in a minute."}
+                        "note": "The app is still creating this teammate. Try ask_teammate in a minute."}
             deadline, register_wait = deadline + register_wait, 0
         await asyncio.sleep(POLL)
 

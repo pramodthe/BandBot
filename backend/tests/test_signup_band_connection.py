@@ -24,8 +24,8 @@ def user_exists(name):
         return session.exec(select(User.id).where(User.username == name)).first() is not None
 
 
-@pytest.mark.parametrize('key', [None, '', 'band_u_human-key', 'sk-model-key', 'band_a_' + 's' * 2000])
-def test_signup_requires_own_agent_api_key_and_redacts_rejected_credentials(key):
+@pytest.mark.parametrize('key', ['sk-model-key', 'band_a_' + 's' * 2000])
+def test_signup_redacts_invalid_optional_credentials(key):
     init_db()
     body = payload(key)
     with TestClient(app) as client:
@@ -35,6 +35,25 @@ def test_signup_requires_own_agent_api_key_and_redacts_rejected_credentials(key)
     assert body['password'] not in result.text
     if key: assert key not in result.text
     assert not user_exists(body['username'])
+
+
+@pytest.mark.parametrize('kind', ['omitted', 'empty', 'user'])
+def test_signup_accepts_local_accounts_and_optional_management_key(kind):
+    init_db()
+    key = None if kind == 'omitted' else '' if kind == 'empty' else 'band_u_' + uuid4().hex
+    body = payload(key)
+    with TestClient(app) as client:
+        result = client.post('/api/auth/signup', json=body)
+        assert result.status_code == 200, result.text
+        user_id = result.json()['user']['id']
+        with db() as session:
+            assert session.get(UserBandConnection, user_id) is None
+            account = session.get(UserBandAccount, user_id)
+            if kind == 'user':
+                assert decrypt_secret(account.secret_enc) == key
+                assert key not in result.text
+            else:
+                assert account is None
 
 
 def test_signup_stores_a_platform_connection_without_creating_a_teammate():

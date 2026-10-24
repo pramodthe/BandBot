@@ -8,7 +8,7 @@ BAND_BOTS keeps humans and persistent AI teammates in the same channel context. 
 backend/
   app/
     api/              REST endpoints, WebSockets, and authenticated file access
-    band/             Band Human API bridge and enqueue-only agent listeners
+    band/             Per-user native agent management, Agent API transport and enqueue-only SDK listeners
     computer/         E2B lifecycle, observations, actions, desktop and app proxies
     persistence/      SQLModel models and database access
     runtime/          Deep Agent harness, internal helpers, skills, and tools

@@ -106,6 +106,7 @@ jobs:
           tests/test_people.py tests/test_computer_bindings.py tests/test_provider_settings.py
           tests/test_provider_contracts.py tests/test_provider_recovery.py
           tests/test_signup_band_connection.py tests/test_band_platform_transport.py
+          tests/test_band_agent_management.py tests/test_band_transport_boundaries.py
 
   browser:
     name: Two-user browser tests

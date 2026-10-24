@@ -1,7 +1,7 @@
 import { useCallback, useId, useState } from "react";
 import { ArrowLeftIcon, CheckCircle2Icon, ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
 import { api } from "@/api";
-import { isAdmin, type State } from "@/store";
+import type { State } from "@/store";
 import type { AgentConnection, Channel, ConnectedAgentRuntime } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -48,11 +48,9 @@ export default function ConnectAgentModal({ state, channel, runtime, onBack, onC
   const [joinChannel, setJoinChannel] = useState(!!targetChannel);
   const [busy, setBusy] = useState(false);
   const [bandKey, setBandKey] = useState("");
-  const [register, setRegister] = useState(false);
-  const usesPlatform = state.band.api === "agent" && state.band.configured;
-  const canRegister = !usesPlatform && state.band.online && (isAdmin(state) || !!state.band.personal);
-  const usesRegistration = register && canRegister;
-  const needsBand = usesPlatform ? !state.band.online : !usesRegistration && !bandKey.trim();
+  const canManage = !!state.band.can_manage_agents;
+  const usesPlatform = canManage || (state.band.api === "agent" && state.band.configured);
+  const needsBand = usesPlatform ? !canManage && !state.band.online : !bandKey.trim();
   const [error, setError] = useState("");
   const chooseConnection = useCallback((next: AgentConnection | null) => {
     setConnection(next); setModel(modelFor(runtime, next)); setError("");
@@ -62,7 +60,7 @@ export default function ConnectAgentModal({ state, channel, runtime, onBack, onC
     setBusy(true); setError("");
     try {
       await api("POST", "/api/agents", { runtime, connection_id: connection.id, name: name.trim(), model,
-        band_agent_api_key: usesPlatform || usesRegistration ? undefined : bandKey.trim(),
+        band_agent_api_key: usesPlatform ? undefined : bandKey.trim(),
         role: "custom", instructions: "", specialty: "", plugins: [],
         channel_id: joinChannel ? targetChannel?.id ?? null : null });
       onClose();
@@ -95,11 +93,11 @@ export default function ConnectAgentModal({ state, channel, runtime, onBack, onC
           </div>}
         </>}
         <p className="text-muted-foreground text-xs leading-relaxed">Conversations with this agent appear in this workspace. Existing chats in your provider's app stay separate.</p>
-        {usesPlatform ? <p role="status" className="bg-sidebar rounded-xl border p-4 text-sm">{state.band.online
-          ? "Using your saved Band connection. No additional Band key is needed."
+        {usesPlatform ? <p role="status" className="bg-sidebar rounded-xl border p-4 text-sm">{canManage
+          ? "Your saved Band user key will create an agent in your account. Its runtime uses its own agent key."
+          : state.band.online ? "Using your saved Band connection. No additional Band key is needed."
           : "Reconnect your Band key in People before adding this teammate."}</p>
-          : <BandAgentKeyField value={bandKey} onChange={(key) => { setBandKey(key); setError(""); }} disabled={busy}
-            canRegister={canRegister} register={usesRegistration} onRegisterChange={setRegister} />}
+          : <BandAgentKeyField value={bandKey} onChange={(key) => { setBandKey(key); setError(""); }} disabled={busy} />}
         {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
       </div>
       <div className="border-border flex shrink-0 justify-end gap-2 border-t px-6 py-4">

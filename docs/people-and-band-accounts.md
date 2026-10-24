@@ -1,6 +1,6 @@
 # People, contacts, and shared channels
 
-New accounts require each person’s own Band Agent API key (`band_a_…`) during signup. The app validates the key against Band and stores it encrypted as that user’s platform connection. Existing users can sign in as before and add or update their connection in People. Signup does not create an AI teammate. The server Band key stays on the server. Browsing or inviting that account's other agents is limited to workspace admins.
+New accounts and human chat require no Band key. Each user can optionally connect their own `band_u_…` user key at signup or in People to create and manage native Band agents. Keys are validated, encrypted, and scoped to that app user. There is no server-wide fallback key. Signup does not create an AI teammate.
 
 Open **People** using the person-plus navigation button or the user menu.
 
@@ -30,20 +30,12 @@ After Alice invites Bob into a channel with Master, Bob can address the agent th
 
 ## Band and agent ownership
 
-The operator's workspace Band connection supplies the shared agents and their transport. A member can chat with those agents without a Band key. Creating another agent on that same account is limited to workspace admins. Human collaboration continues when Band is offline. A channel without a Band room can acquire one when an agent is explicitly added and a connection is available.
+Use **People → Create and manage Band agents** to save your Band user key (`band_u_…`) from Band Settings → API Keys. **Add agents → Create agent** registers an identity in your Band account and saves its separate Agent API key (`band_a_…`) for runtime messaging. Agent profiles, instructions, memory, tasks, approvals, and computers stay separate. User A never uses B's credentials, and failed requests never fall back to a workspace environment key.
 
-Channel messages mirrored to Band use the room's owning connection with the app author's display name. Agent routing and model execution remain in the separate worker. Human app members do not automatically become native Band participants. App friendship and native Band contact consent are separate relationships.
+Band calls native registration and deletion the Human API; these agent-management calls are supported. Native Band human-chat synchronization is **coming soon**. Human app accounts, friendship, invitations, membership and messages remain local, and human DMs are never relayed to Band or an agent.
 
-Individual users connect the app to Band during signup using their own **Band Agent API key** (`band_a_…`). Create the connection identity in [Band’s dashboard](https://app.band.ai/agents) first. The key is validated against the Agent API, encrypted on the server, and bound to the signed-in app user. Signup stores a platform connection separately from AI teammate profiles. Choose **Add agents → Create agent** to create teammates with their own instructions, memory, and tasks using that saved connection. No additional Band key is needed. Existing users can add the connection in People, where key updates must retain the same Band identity.
+Existing Agent API connections and imported native identities remain supported. Compatibility app teammates may share a saved Agent API connection without registering another native identity. Imported agents are disconnected locally, preserving native ownership; deleting a native identity created by the app uses its original owner's management key. Shared transport identities are preserved.
 
-New Band rooms and outgoing results use the room owner's saved Agent API connection. Incoming messages are accepted only for rooms pinned to that connection and from native room participants. An unavailable or revoked personal key never falls back to another user's or the operator's credential. Internal report-back and interim teammate replies stay local; the final answer is delivered to Band once. Unconfirmed sends remain visible for review rather than being retried automatically.
+Local channels can contain people and agents from both users without native Band human memberships. Their messages and agent tasks are saved atomically. Agent reasoning runs in the worker and results appear through our WebSocket service. When an existing native room is connected, Agent API sends use its pinned identity; native incoming messages are restricted to mapped rooms and participants. Native sends with uncertain receipts are not blindly retried.
 
-Existing accounts can also import a separate Band identity through **Add agents → Connect Band agent** with that identity's own key. These teammates use durable tasks and the existing model/approval policies. Conversations stay local in legacy app rooms; rooms using a saved platform connection can relay through the room owner's Agent API credential. Removing an imported teammate preserves its original Band identity. An existing Band identity can only be imported once in a workspace; other users cannot manage it through a shared channel. Removing a platform teammate also preserves the user's saved connection and native Band identity.
-
-The **Advanced: Band Human API (Enterprise)** section in People remains available for Enterprise accounts that need programmatic registration and human room mirroring. This is separate from the individual agent-key flow. Existing rooms and registered agents keep their original account. A Band human identity can be linked to one app user, and key updates must retain that identity. Human keys are encrypted and never returned to the browser.
-
-Band's own contacts can be managed independently in Band. Bringing agents owned by different native Band accounts into a Band room also follows Band's own contact and participant permissions.
-
-Codex, Claude, Cursor, and OpenClaw authentication is separate again: users connect their own provider credentials to run those agents. Provider connections belong to their creator. Custom agents use the configured workspace model provider. Workspace app access and skills remain governed by admin policies.
-
-Runtime installation, model billing, MCP services, E2B and workspace roles remain operator-managed. This is a shared installation, not separate hosted execution environments or tenant isolation. Run one API process and one worker with the same database, checkpoints, environment, and stable `APP_SECRET`. Unconfirmed Band sends are not blindly retried.
+Historical rooms and conversation history remain intact. Older native rooms without an Agent API binding do not silently use a different connection. App friendship and native Band contacts are separate relationships. Provider credentials are configured independently of Band keys.

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { Bootstrap } from "../src/types";
+import type { Bootstrap, Task } from "../src/types";
 
 function snapshot(online = false): Bootstrap {
   const me = { id: 1, username: "individual", display_name: "Individual user", online: true };
@@ -25,7 +25,22 @@ async function mockWorkspace(page: Page, boot: Bootstrap) {
   });
 }
 
-test("signup requires a personal Band platform key, explains it, and handles validation", async ({ page }, info) => {
+test("a failed optional service names the missing connection", async ({ page }, info) => {
+  await mockWorkspace(page, snapshot(true));
+  const task: Task = { id: "research-disabled", agent_id: 7, status: "failed", progress: "Needs connection",
+    error: "Web research is disabled", attempts: 1, cancel_requested: false, delivery_status: "pending",
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    provider_block: { service: "research", code: "not_configured", connection_id: "", detail: "Web research is disabled" } };
+  await page.route("**/api/channels/1/tasks", (route) => route.fulfill({ json: [task] }));
+  await page.addInitScript(() => localStorage.setItem("band-slack-token", "offline-test-token"));
+  await page.goto("/");
+  await page.getByRole("button", { name: "general", exact: true }).click();
+  await expect(page.getByText("Web research not configured", { exact: true })).toBeVisible();
+  await expect(page.getByText("Needs connection", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("research-service-status.png"), fullPage: true });
+});
+
+test("signup optionally accepts a Band user key and preserves validation feedback", async ({ page }, info) => {
   await mockWorkspace(page, snapshot());
   let attempts = 0;
   let release: () => void = () => {};
@@ -34,10 +49,10 @@ test("signup requires a personal Band platform key, explains it, and handles val
     attempts += 1;
     const body = route.request().postDataJSON();
     expect(body).toMatchObject({ username: "individual", display_name: "Individual user", password: "test-password" });
-    if (body.band_api_key === "band_a_invalid-test") {
-      await route.fulfill({ status: 422, json: { detail: "Band could not verify this key. Check your Agent API key and try again.", field: "band_api_key" } });
+    if (body.band_api_key === "band_u_invalid-test") {
+      await route.fulfill({ status: 422, json: { detail: "Band could not verify this user key.", field: "band_api_key" } });
     } else {
-      expect(body.band_api_key).toBe("band_a_valid-test");
+      expect(body.band_api_key).toBe("band_u_valid-test");
       await ready;
       await route.fulfill({ json: { token: "offline-test-token" } });
     }
@@ -47,36 +62,31 @@ test("signup requires a personal Band platform key, explains it, and handles val
   await page.getByLabel("Username", { exact: true }).fill("individual");
   await page.getByLabel("Display name").fill("Individual user");
   await page.getByLabel("Password", { exact: true }).fill("test-password");
-  const key = page.getByLabel("Band agent API key", { exact: true });
-  await expect(key).toHaveAttribute("required", "");
+  const key = page.getByLabel("Band user API key", { exact: true });
+  await expect(key).not.toHaveAttribute("required");
   await expect(key).toHaveAttribute("type", "password");
+  await page.getByText("How do I get a Band user key?", { exact: true }).click();
+  await expect(page.getByRole("link", { name: "Band Settings" })).toHaveAttribute("href", "https://app.band.ai/users/settings");
+  await key.fill("sk_wrong-provider-key");
   await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await expect(key).toBeFocused();
+  await expect(page.getByRole("alert")).toContainText("Enter your Band user API key");
   expect(attempts).toBe(0);
-  await page.getByText("How do I get an agent key?", { exact: true }).click();
-  await expect(page.getByRole("link", { name: "Agents in Band" })).toHaveAttribute("href", "https://app.band.ai/agents");
-  await expect(page.getByText("Connect remote agent", { exact: true })).toBeVisible();
-  await expect(page.getByText(/An Enterprise key for managing agents and rooms/)).toBeVisible();
-  await key.fill("band_u_wrong-human-key");
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("That’s a Human API key");
-  expect(attempts).toBe(0);
-  await key.fill("band_a_invalid-test");
-  await page.getByRole("button", { name: "Show Band agent API key" }).click();
+  await key.fill("band_u_invalid-test");
+  await page.getByRole("button", { name: "Show Band user API key" }).click();
   await expect(key).toHaveAttribute("type", "text");
-  await page.getByRole("button", { name: "Hide Band agent API key" }).click();
+  await page.getByRole("button", { name: "Hide Band user API key" }).click();
   await page.getByRole("button", { name: "Create account", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Band could not verify");
   await expect(key).toHaveAttribute("aria-invalid", "true");
   await expect(key).toBeFocused();
   await expect(page.getByLabel("Username", { exact: true })).toHaveValue("individual");
   await key.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: info.outputPath("signup-band-required-help.png"), fullPage: true });
-  await key.fill("band_a_valid-test");
+  await page.screenshot({ path: info.outputPath("signup-band-user-key-help.png"), fullPage: true });
+  await key.fill("band_u_valid-test");
   await key.press("Enter");
   await expect(page.getByRole("button", { name: "Checking your Band key…" })).toBeDisabled();
   await expect(key).toBeDisabled();
-  await expect(page.getByRole("status")).toContainText("Verifying your connection with Band");
+  await expect(page.getByRole("status")).toContainText("Verifying your optional Band connection");
   release();
   await expect(page.getByRole("button", { name: "Add agents", exact: true })).toBeVisible();
   await expect(page.getByText("No agents found.")).toBeVisible();

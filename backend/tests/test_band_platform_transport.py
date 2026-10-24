@@ -21,15 +21,10 @@ from test_service import svc
 def platform_app(svc, monkeypatch, offline_band_platform):
     async def noop(*args): pass
     monkeypatch.setattr(svc, 'startup', noop)
-    monkeypatch.setattr(svc.org, 'close', noop)
     monkeypatch.setattr(http, 'service', svc)
     monkeypatch.setattr(people, 'service', svc)
     monkeypatch.setattr(service_module, 'service', svc)
     monkeypatch.setattr(service_module, 'configuration', lambda: ('offline-model-key', ['gpt-6-luna'], 'gpt-6-luna'))
-    # The old workspace connection must never be used for these users.
-    async def forbidden(*args, **kwargs): raise AssertionError('Workspace Human API fallback')
-    for method in ('create_room', 'register_agent', 'send', 'agent_peers', 'add_participant', 'messages_since'):
-        monkeypatch.setattr(svc.org, method, forbidden)
     with TestClient(http.app) as client:
         users = []
         for name in ('alpha', 'beta'):

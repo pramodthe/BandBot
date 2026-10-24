@@ -86,7 +86,10 @@ def test_direct_messages_are_visible_only_to_their_owner():
             channel_id, agent_id = channel.id, agent.id
 
         assert client.post(f"/api/agents/{agent_id}/dm", headers=auth_d).json()["id"] == channel_id
-        assert client.post(f"/api/agents/{agent_id}/dm", headers=auth_e).status_code == 503
+        other_dm = client.post(f"/api/agents/{agent_id}/dm", headers=auth_e)
+        assert other_dm.status_code == 200
+        assert other_dm.json()["id"] != channel_id
+        assert client.get(f"/api/channels/{other_dm.json()['id']}/messages", headers=auth_d).status_code == 404
 
         mine = next(c for c in client.get("/api/bootstrap", headers=auth_d).json()["channels"] if c["id"] == channel_id)
         assert mine["is_dm"] and mine["dm_agent_id"] == agent_id
@@ -112,7 +115,6 @@ class _Socket:
 
 
 def test_login_does_not_ask_for_a_band_key_or_list_server_agents(monkeypatch):
-    monkeypatch.setattr("app.config.uses_workspace_band_key", lambda: True)
     with TestClient(app) as client:
         with db() as session:
             user = User(username="legacy", display_name="Legacy", password_hash=hash_password("secret123"))
@@ -130,20 +132,20 @@ def test_login_does_not_ask_for_a_band_key_or_list_server_agents(monkeypatch):
         boot = client.get("/api/bootstrap", headers=auth)
         assert boot.status_code == 200 and "band_u_" not in boot.text
         peers = client.get(f"/api/channels/{general_id}/peers", headers=auth)
-        assert peers.status_code == 403 and "band_u_" not in peers.text
+        assert peers.status_code == 409 and "band_u_" not in peers.text
         invited = client.post(f"/api/channels/{general_id}/outside-agents", headers=auth,
                               json={"band_id": "00000000-0000-0000-0000-000000000000"})
-        assert invited.status_code == 403 and "invite" in invited.json()["detail"]
+        assert invited.status_code == 409 and "Agent API" in invited.json()["detail"]
         assert "band_u_" not in invited.text
         created = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=auth)
-        assert created.status_code == 403 and "admin" in created.json()["detail"]
+        assert created.status_code == 409 and "Agent API" in created.json()["detail"]
         assert "band_u_" not in created.text and "own Band" not in created.text
         with db() as session:
             from app.persistence.models import WorkspaceRole
             session.add(WorkspaceRole(user_id=user.id, role="admin"))
             session.commit()
         allowed = client.post("/api/agents", json={"name": "Writer", "role": "writer"}, headers=auth)
-        assert allowed.status_code == 503 and "band_u_" not in allowed.text
+        assert allowed.status_code == 409 and "band_u_" not in allowed.text
 
 
 def test_agent_model_update_rejects_a_missing_provider_revision():
