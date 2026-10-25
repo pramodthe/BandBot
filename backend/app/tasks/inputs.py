@@ -70,6 +70,8 @@ def answer_input(session, channel_id: int, component_id: int, user, values: dict
     task = session.get(AgentTask, request.task_id) if request else None
     if component.kind != "input" or not task:
         raise UIError("Input request not found", 404)
+    from app.computer.access import require_computer_owner
+    require_computer_owner(session, task, user.id)
     try:
         clean = validate_answer(component.props["ui"], component.props["required"], values)
     except (ValueError, OverflowError) as exc:

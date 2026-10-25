@@ -1328,6 +1328,10 @@ async def decide(approval_id: str, body: DecisionBody, user: User = Depends(curr
         raise HTTPException(403, "Only the computer owner can approve publishing a private file")
     if not session.get(ChannelMember, (approval.channel_id, "human", user.id)):
         raise HTTPException(403, "Join the channel to decide its approvals")
+    from app.computer.access import require_computer_owner
+    task = session.get(AgentTask, approval.task_id)
+    if task is not None:
+        require_computer_owner(session, task, user.id)
     # A private export names its owner. Channel approver policy still gates every other request.
     if not private and not allowed(session, user.id, approval.channel_id, "approvers"):
         raise HTTPException(403, "Only workspace admins can decide approvals in this channel")

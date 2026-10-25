@@ -10,8 +10,10 @@ and sign-ins are per profile; they are not automatically synchronized.
 Memory and private chat remain scoped to agent and channel. Other users and their
 agents cannot browse, view, control or mount this computer, even in a shared channel.
 Computer work requires a task originating from the owner; hand-offs and schedules
-retain that original authority. Group file exports require approval from the computer
-owner and publish bounded copies. Interactive app previews stay in private chats.
+retain that original authority. Only the computer owner can answer input requests or
+decide approvals for its tasks; channel approval policies still apply. Group file
+exports require approval from the computer owner and publish bounded copies.
+Interactive app previews stay in private chats.
 Private computer details and controls are hidden from group-channel computer listings.
 Owners can inspect their agents from their private profiles.
 

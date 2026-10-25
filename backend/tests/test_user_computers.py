@@ -272,3 +272,41 @@ def test_new_defaults_and_desktop_ports_are_bounded(crew):
     assert profile_root("desktop-one") != profile_root("desktop-two")
     assert ports(1) != ports(2)
     with pytest.raises(ValueError): setup_script(0, "invalid")
+
+
+def test_private_computer_workflow_approval_requires_owner(crew):
+    task = crew.task(crew.agents[0], crew.users[0], crew.group.id)
+    with db() as session:
+        row = session.get(AgentTask, task.id)
+        row.status = "running"
+        session.add(row); session.commit()
+    await_approval(task, [("owner-browser-action", {"action": "Submit a form in the owner's browser"})])
+    with TestClient(app) as client:
+        for user, expected in ((crew.users[1], 403), (crew.users[0], 200)):
+            headers = {"Authorization": "Bearer " + issue_token(user.id)}
+            response = client.post("/api/approvals/owner-browser-action", json={"approve": True}, headers=headers)
+            assert response.status_code == expected, response.text
+
+
+def test_private_computer_workflow_input_requires_owner(crew):
+    from app.persistence.models import TaskInput, ComponentResponse
+    task = crew.task(crew.agents[0], crew.users[0], crew.group.id)
+    with db() as session:
+        row = session.get(AgentTask, task.id)
+        row.status = "running"
+        session.add(row); session.commit()
+    await_approval(task, [("owner-input", {"kind": "user_input", "tool_call_id": "choose-scope", "props": {
+        "title": "Choose the work", "ui": {"_type": "Input", "name": "scope", "label": "Scope"},
+        "required": ["scope"]}})])
+    with db() as session:
+        component_id = session.get(TaskInput, "owner-input").component_id
+    path = f"/api/channels/{crew.group.id}/components/{component_id}/answer"
+    with TestClient(app) as client:
+        other = {"Authorization": "Bearer " + issue_token(crew.users[1].id)}
+        response = client.post(path, json={"values": {"scope": "Use the private files"}}, headers=other)
+        assert response.status_code == 403, response.text
+        with db() as session:
+            assert session.get(ComponentResponse, component_id) is None
+            assert session.get(AgentTask, task.id).status == "waiting"
+        owner = {"Authorization": "Bearer " + issue_token(crew.users[0].id)}
+        assert client.post(path, json={"values": {"scope": "Approved scope"}}, headers=owner).status_code == 200

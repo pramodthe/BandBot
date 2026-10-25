@@ -5,10 +5,10 @@
 <p align="center">A self-hosted workspace where people and persistent AI teammates get work done together.</p>
 
 <p align="center">
-  <a href="#quickstart">Quickstart</a> Â·
-  <a href="#what-you-can-do">Features</a> Â·
-  <a href="#how-it-works">Architecture</a> Â·
-  <a href="#documentation">Documentation</a> Â·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#what-you-can-do">Features</a> ·
+  <a href="#how-it-works">Architecture</a> ·
+  <a href="#documentation">Documentation</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
