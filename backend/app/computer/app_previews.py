@@ -26,7 +26,7 @@ def aware(value):
 
 
 def validate_port(port: int) -> int:
-    if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 49151 or 5900 <= port <= 6100 or port in {2375, 2376, 9222, 9223}:
+    if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 49151 or 5900 <= port <= 6100 or 10000 <= port <= 10129 or 20000 <= port <= 20129 or port in {2375, 2376, 9222, 9223}:
         raise ValueError("Use an app port from 1024–49151, excluding desktop, browser-debugging and infrastructure ports.")
     return port
 
@@ -65,6 +65,9 @@ def host_token(host: str) -> str | None:
 def authorize(session, preview: AppPreview, user: User) -> AgentTask:
     from app.computer.desktop import computer_key
     task = session.get(AgentTask, preview.task_id)
+    if task:
+        from app.computer.access import require_computer_owner
+        require_computer_owner(session, task, user.id)
     dm = session.get(DirectMessage, preview.channel_id)
     if not task or (dm and dm.user_id != user.id):
         raise HTTPException(404, "App preview not found")
@@ -121,6 +124,10 @@ async def publish(computer, *, port: int, title: str, path: str, call_id: str) -
     if not title.strip() or len(title) > 100:
         raise ValueError("Give the app a title up to 100 characters.")
     task = computer.task
+    if getattr(computer, "user_mode", False):
+        with db() as session:
+            if session.get(DirectMessage, task.channel_id) is None:
+                raise ComputerUnavailable("Live apps on a private user computer can only be published in its owner's private conversation. Share exported output copies in group channels.")
     preview_id = hashlib.sha256(f"{task.id}:{call_id}".encode()).hexdigest()[:32]
     with db() as session:
         if prior := session.get(AppPreview, preview_id):

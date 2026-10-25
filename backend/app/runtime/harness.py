@@ -11,7 +11,7 @@ from app.openai_provider import configuration, pin_task
 from app.agent_connections import pin_runtime, runtime_for
 from app.runtime.connected import ConnectedRuntimeModel
 from app.computer import TaskComputer
-from app.persistence.models import AgentPersona, AgentProfile, AgentTask, OutsideAgent, db
+from app.persistence.models import AgentPersona, AgentProfile, AgentTask, LocalTeammate, OutsideAgent, db
 from app.runtime.helpers.coder import coder
 from app.runtime.helpers.computer import computer as computer_helper
 from app.runtime.helpers.critic import critic
@@ -75,6 +75,12 @@ def build_harness(task: AgentTask, profile: AgentProfile, checkpointer, *, model
                   "Use the coder helper or run_python for calculations and data work. ")
     if task_bindings.get("computer", {}).get("disabled"):
         computer_context = "No cloud computer is enabled for this task. Do not promise desktop access, running code, or exporting files through a computer. "
+    elif getattr(computer, "user_mode", False):
+        computer_context = ("Your agents share your owner's private computer and persistent project files across conversations. "
+            "You have your own independent desktop, cursor, and browser profile. Other owners and their agents cannot access this host. "
+            "Only tasks originating from your owner may use it; hand-offs do not grant another owner's access. "
+            "Memory and chat history remain scoped to agent and channel. Browser sign-ins are per browser profile; "
+            "do not claim cookies are automatically shared. Group exports require the computer owner's approval. ")
     elif getattr(computer, "shared", False):
         computer_context = ("Your cloud computer is shared by agents across workspace channels. Files, installed applications and "
             "browser logins are common workspace data. Keep durable project notes and files in named project folders "
@@ -103,10 +109,16 @@ def build_harness(task: AgentTask, profile: AgentProfile, checkpointer, *, model
         teammates = [a for a in channel_teammates(session, task.channel_id) if a.id != profile.id]
         outsiders = session.exec(select(OutsideAgent).where(OutsideAgent.channel_id == task.channel_id)).all()
         personas = {p.agent_id: p.specialty for p in session.exec(select(AgentPersona)).all() if p.specialty}
+        local_master = profile.is_master and session.get(LocalTeammate, profile.id) is not None
     specialty = f"Your specialty: {personas[profile.id]}.\n" if profile.id in personas else ""
     roster = "; ".join(f"{a.name} ({personas.get(a.id) or role_label(a.role)})" for a in teammates) or "none yet"
     outside_roster = "; ".join(f"{o.name}" + (f" ({o.description[:200]})" if o.description else "") for o in outsiders)
     recruiting = (
+        "When your owner asks for a persistent new bot, use create_teammate; do not only draft its setup. "
+        "Create teammates from your owner's private Master chat. The new teammate appears in their team, "
+        "outside this one-on-one conversation; tell the owner to open its chat or invite it to a channel. "
+        "Do not use ask_teammate to bring another agent into this private chat. "
+        if local_master else
         "If no visible teammate's role fits focused work the humans should see, create one with create_teammate "
         "(once; reuse existing teammates), then hand off to it with ask_teammate. "
         if profile.is_master else "")
@@ -135,7 +147,7 @@ def build_harness(task: AgentTask, profile: AgentProfile, checkpointer, *, model
             "Use relative browser API/WebSocket URLs and proxy backend routes through that app port. Keep the server "
             "running; never expose public tunnels or send sandbox localhost links as if they worked on the human's device. "
             "Use the cheapest tool that can do the job. Answer from knowledge, memory, or channel history when they suffice. "
-            "Use web_search to find sources and fetch_page to read a specific URL. "
+            "Use web_search to find sources and fetch_page to read a specific URL when the Web research API is available. "
             "Uploaded and saved documents live in this conversation's Documents library. "
             "For a targeted question about those files, call search_documents directly, including on follow-ups "
             "without new attachments. Use list_documents to find file IDs or processing status, and read_document "
@@ -157,9 +169,11 @@ def build_harness(task: AgentTask, profile: AgentProfile, checkpointer, *, model
             "or a rasterized SVG for an image-generation request. SVG is for explicitly requested vectors, icons or diagrams. "
             "If image generation fails or lacks model access, report that plainly instead of inventing a completed image. "
             "Image generation needs no cloud computer. Return the tool's actual durable download link. "
-            "Use the computer helper only when a real browser or desktop is required: "
+            "Use the computer helper when the human explicitly asks to use the computer, when the enabled computer is needed "
+            "for browsing because the Web research API is disabled, or when a real browser or desktop is required: "
             "logging in, filling forms, interactive or script-heavy pages, checking how something looks, or when "
-            "fetch_page cannot read a page the user needs. Never use the computer only to read a page. "
+            "fetch_page cannot read a page the user needs. Prefer fetch_page for plain page text when that service is available "
+            "and the human has not explicitly requested browser use. "
             "Delegate GUI/browser work to a single computer helper. Avoid concurrent code/desktop workflows on the shared computer. "
             "Use screenshots to observe and verify GUI actions; screen_ids cannot be reused. "
             "Only claim searches or code execution that tools actually performed. "

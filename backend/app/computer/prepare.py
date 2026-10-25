@@ -7,7 +7,7 @@ from sqlmodel import select
 from app.computer import TaskComputer
 from app.computer.providers import scope_provider
 from app.computer.providers import scope_computer_key
-from app.persistence.models import AgentProfile, AgentTask, Channel, ChannelMember, db, init_db
+from app.persistence.models import AgentProfile, AgentTask, Channel, ChannelMember, TaskPrincipal, db, init_db
 
 
 def register_access(agent_id: int, channel_id: int):
@@ -25,7 +25,8 @@ def register_access(agent_id: int, channel_id: int):
             task = AgentTask(id=uuid4().hex, source_key=source_key, agent_id=agent_id, channel_id=channel_id,
                 room_id=channel.band_room_id or "", prompt="Operator computer preparation; no model or message delivery",
                 status="completed", progress="Computer prepared by operator", delivery_status="sent")
-            session.add(task); session.commit()
+            from app.workspace.access import agent_owner
+            session.add_all([task, TaskPrincipal(task_id=task.id, user_id=agent_owner(session, profile))]); session.commit()
     return task, profile, channel, provider
 
 

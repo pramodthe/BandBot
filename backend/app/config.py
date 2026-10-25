@@ -53,11 +53,11 @@ class Settings:
     computer_provider: str = _env("COMPUTER_PROVIDER", "e2b").lower()
     tenki_api_key: str = _env("TENKI_API_KEY")
     tenki_desktop_image: str = _env("TENKI_DESKTOP_IMAGE")
-    tenki_computer_sharing: str = _env("TENKI_COMPUTER_SHARING", "agent_channel").lower()
+    tenki_computer_sharing: str = _env("TENKI_COMPUTER_SHARING", "user").lower()
     tenki_timeout: int = max(60, min(3600, int(_env("TENKI_TIMEOUT_SECONDS", "1200"))))
     tenki_pause_retention: int = max(3600, int(_env("TENKI_PAUSE_RETENTION_SECONDS", "604800")))
     tenki_lifecycle_timeout: int = max(60, min(600, int(_env("TENKI_LIFECYCLE_TIMEOUT_SECONDS", "180"))))
-    tenki_disk_gib: int = max(1, min(50, int(_env("TENKI_DISK_GIB", "20"))))
+    tenki_disk_gib: int = max(1, min(50, int(_env("TENKI_DISK_GIB", "1"))))
     app_preview_base_url: str = _env("APP_PREVIEW_BASE_URL", "http://localhost:8000")
     codex_executable: str = _env("CODEX_EXECUTABLE", "codex")
     # Exact gateway base URLs approved by the server operator; never arbitrary browser-supplied hosts.

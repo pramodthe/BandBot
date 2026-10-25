@@ -36,6 +36,8 @@ def resolve_viewer(token: str) -> tuple[str, str, float]:
         user = session.get(User, data.get("user"))
         if task is None or user is None:
             raise HTTPException(403, "Desktop access unavailable")
+        from app.computer.access import require_computer_owner
+        require_computer_owner(session, task, user.id)
         dm = session.get(DirectMessage, task.channel_id)
         if (dm and dm.user_id != user.id) or not session.get(ChannelMember, (task.channel_id, "human", user.id)):
             raise HTTPException(403, "Desktop access unavailable")
@@ -47,8 +49,16 @@ def resolve_viewer(token: str) -> tuple[str, str, float]:
         control = active_control(computer_key(task))
         interactive = control is not None and control.user_id == user.id
         # A separate VNC server enforces view-only access even for a modified browser client.
-        host, secret = endpoint(computer_key(task), record.sandbox_id, 6080 if interactive else 6081)
+        host, secret = endpoint(computer_key(task), record.sandbox_id, desktop_port(computer_key(task), interactive))
         return host, secret, max(0, VIEW_SECONDS - (utcnow() - issued_at).total_seconds())
+
+
+def desktop_port(key, interactive):
+    from app.persistence.models import UserDesktop
+    from app.computer.user_desktop import ports
+    with db() as session:
+        screen = session.get(UserDesktop, key)
+    return ports(screen.display)[0 if interactive else 1] if screen else 6080 if interactive else 6081
 
 
 def viewer_route(token):
@@ -59,7 +69,7 @@ def viewer_route(token):
         task = session.get(AgentTask, data["task"])
     key = computer_key(task)
     control = active_control(key)
-    port = 6080 if control and control.user_id == data["user"] else 6081
+    port = desktop_port(key, control is not None and control.user_id == data["user"])
     return host, ingress_headers(key, secret, port), remaining, (host, port)
 
 

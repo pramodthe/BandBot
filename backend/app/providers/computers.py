@@ -26,7 +26,7 @@ def config_from(binding, defaults=settings, *, safe=False):
     config = connection.config
     if connection.provider == "tenki":
         values.update(tenki_api_key=key, tenki_desktop_image=config.get("image", ""),
-            tenki_computer_sharing=config.get("sharing", "workspace"), tenki_disk_gib=config.get("disk_gib", 20),
+            tenki_computer_sharing=config.get("sharing", "workspace"), tenki_disk_gib=config.get("disk_gib", 1),
             tenki_timeout=config.get("timeout", 1200), tenki_pause_retention=config.get("pause_retention", 604800))
     elif connection.provider == "e2b":
         values.update(e2b_api_key=key, e2b_template=config.get("template", "desktop"), e2b_timeout=config.get("timeout", 1200))

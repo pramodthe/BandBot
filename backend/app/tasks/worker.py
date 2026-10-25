@@ -237,12 +237,13 @@ async def deliver(task: AgentTask) -> None:
     """At-most-once send attempt; ambiguous sends require human review, never blind retry."""
     with db() as session:
         profile = session.get(AgentProfile, task.agent_id)
-        from app.persistence.models import BandAgentLink, BandPlatformRoom, PlatformTeammate, Channel, ChannelMember
+        from app.persistence.models import BandAgentLink, BandPlatformRoom, PlatformTeammate, LocalTeammate, Channel, ChannelMember
         platform = session.get(BandPlatformRoom, task.channel_id)
         teammate = session.get(PlatformTeammate, task.agent_id)
         channel = session.get(Channel, task.channel_id)
         member = session.get(ChannelMember, (task.channel_id, "agent", task.agent_id))
-        local_connection = session.get(BandAgentLink, task.agent_id) is not None
+        local_connection = (session.get(BandAgentLink, task.agent_id) is not None
+                            or session.get(LocalTeammate, task.agent_id) is not None)
         internal_reply = report_target(session, task) is not None or is_interim(session, task)
     if internal_reply:
         update_task(task.id, delivery_status="local_only")

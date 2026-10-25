@@ -148,7 +148,9 @@ def test_missing_or_revoked_management_never_falls_back_to_another_user(manageme
     result = client.post('/api/agents', headers=a, json={'name': 'Revoked connection'})
     assert result.status_code == 502 and 'band_u_alice' not in result.text
     with db() as session:
-        assert session.exec(select(AgentProfile)).all() == []
+        profiles = session.exec(select(AgentProfile)).all()
+        assert len(profiles) == 2 and all(profile.is_master for profile in profiles)
+        assert all(not profile.band_api_key_enc for profile in profiles)
 
 
 def test_name_conflict_does_not_register_an_extra_native_agent(management_app):

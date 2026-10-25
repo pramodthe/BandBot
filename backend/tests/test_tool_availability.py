@@ -76,6 +76,20 @@ def test_capability_guidance_does_not_promise_disabled_computers_or_exports():
     assert 'Cloud computers' in note and 'Image generation' in note
     assert 'hosted code execution is not enabled' in note
     assert 'never invent a download link' in note
+    assert 'A cloud computer is enabled' not in note
+
+
+@pytest.mark.parametrize('computer', [
+    {'provider': 'tenki', 'connection_id': 'verified-tenki', 'revision': 1},
+    {'legacy': True},
+])
+def test_enabled_computer_browser_is_independent_of_disabled_research(computer):
+    note = capability_note({'computer': computer, 'research': {'disabled': True},
+                            'document_analysis': {'disabled': True}}, hosted_execution=False)
+    assert 'A cloud computer is enabled' in note
+    assert 'browser and network access are independent of the Web research API' in note
+    assert 'computer helper' in note and 'request approval before purchases' in note
+    assert 'Document analysis' in note
 
 
 def test_optional_service_handling_never_suppresses_permission_denials():

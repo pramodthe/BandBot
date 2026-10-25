@@ -132,6 +132,12 @@ class BandAgentOwner(SQLModel, table=True):
     band_user_id: str
 
 
+class LocalTeammate(SQLModel, table=True):
+    """An app-owned teammate; no native Band registration or private SDK listener."""
+    agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+
+
 class BandAgentLink(SQLModel, table=True):
     """An existing Band identity connected with its own key, never registered or deleted here."""
     agent_id: int = Field(foreign_key="agentprofile.id", primary_key=True)
@@ -414,6 +420,27 @@ class ComputerDisk(SQLModel, table=True):
     state: str = "new"
 
 
+class UserDesktop(SQLModel, table=True):
+    """One agent display inside its owner's VM; screens never share frame/input state."""
+    __table_args__ = (UniqueConstraint("host_key", "display"),)
+    key: str = Field(primary_key=True)
+    host_key: str = Field(index=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    agent_identity: str
+    display: int
+
+
+class TaskPrincipal(SQLModel, table=True):
+    """Immutable originating app user. Missing identity never grants private computer access."""
+    task_id: str = Field(primary_key=True)
+    user_id: int | None = None
+
+
+class ComputerPublishApproval(SQLModel, table=True):
+    approval_id: str = Field(primary_key=True)
+    user_id: int = Field(foreign_key="user.id")
+
+
 class ComputerGateway(SQLModel, table=True):
     key: str = Field(primary_key=True)
     sandbox_id: str
@@ -475,7 +502,7 @@ class TaskHandoff(SQLModel, table=True):
 
 
 class TeammateRequest(SQLModel, table=True):
-    """An agent asked for a new visible teammate; only the API process can register it on Band."""
+    """An agent asked for a visible teammate; the API process owns its creation."""
     id: int | None = Field(default=None, primary_key=True)
     source_key: str = Field(unique=True, index=True)  # requesting task + tool call, for replay-safe creation
     task_id: str
@@ -878,6 +905,7 @@ def dm_owner(channel_id: int) -> int | None:
 
 
 import app.providers.document_hooks  # register atomic document bindings
+import app.persistence.principals  # register immutable task principals
 
 
 def get_session():

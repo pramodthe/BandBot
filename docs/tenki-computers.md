@@ -1,18 +1,27 @@
 # Persistent Tenki computers
 
-Tenki can provide the full cloud computer: XFCE desktop, native Chrome, terminal,
-files, live viewing, human take-over and private server-app previews. Enable
-`TENKI_COMPUTER_SHARING=workspace` for one workspace-owned computer shared by
-agents across regular channels. Its files, apps, desktop and browser logins are
-common workspace data. Private chats and private channels retain separate agent/channel computers.
-Saved agent memory, message history, approvals and connected-app permissions
-retain their existing scopes; a common filesystem does not merge those records.
+Tenki provides XFCE desktops, Chrome, terminal tools, persistent files, live viewing,
+human take-over and private server-app previews. The default `user` sharing mode gives
+each app user a separate VM and durable filesystem. Their agents share project files,
+installed tools and common home credentials, while each agent gets its own X display,
+mouse/keyboard state, browser profile, screenshots and viewer ports. Browser cookies
+and sign-ins are per profile; they are not automatically synchronized.
 
-The default `agent_channel` mode keeps a separate computer per agent and channel.
-An OS lock serializes computer operations across the API and worker, including
-pause/resume. Agents must take a new screenshot after another operation changes
-the screen. Human take-over blocks every agent using that computer. Finishing
-one task cannot pause a computer another agent is still using.
+Memory and private chat remain scoped to agent and channel. Other users and their
+agents cannot browse, view, control or mount this computer, even in a shared channel.
+Computer work requires a task originating from the owner; hand-offs and schedules
+retain that original authority. Group file exports require approval from the computer
+owner and publish bounded copies. Interactive app previews stay in private chats.
+Private computer details and controls are hidden from group-channel computer listings.
+Owners can inspect their agents from their private profiles.
+
+`workspace` and `agent_channel` remain legacy opt-in modes. Historical tasks retain
+their pinned provider revision and computer, even when the selected mode changes.
+Existing disks are never resized, migrated, or deleted automatically.
+
+A cross-process host lock serializes VM lifecycle and computer operations. Independent
+displays keep input and screenshot observations separate. Take-over pauses input only
+on the selected desktop. A task finishing must not pause a sibling task or active viewer.
 
 The computer starts on first use, resumes when a tool or viewer needs it, and
 pauses after task completion unless someone is viewing it. API/worker crashes
@@ -43,7 +52,7 @@ The app does not silently substitute an empty disk if its saved disk is missing.
 The profile's viewer follows the computer identity across task changes, keeping
 its live connection, selected tab and file location when another run starts.
 
-Default resources are 2 vCPU, 4 GiB RAM, 20 GiB root disk and a 20 GiB data volume.
+Default resources are 2 vCPU, 4 GiB RAM, 20 GiB root disk and a 1 GiB data volume.
 `TENKI_DISK_GIB` selects 1–50 GiB for new data volumes. It does not resize existing
 volumes. There is no claim of a 120 GiB included disk. Paused VM retention defaults
 to 7 days; the data volume survives VM termination until explicitly deleted.
@@ -59,8 +68,8 @@ from local trial folders. Configure the root environment:
 COMPUTER_PROVIDER=e2b
 TENKI_API_KEY=your_workspace_key
 TENKI_DESKTOP_IMAGE=snapshot:your_clean_snapshot_id
-TENKI_COMPUTER_SHARING=workspace
-TENKI_DISK_GIB=20
+TENKI_COMPUTER_SHARING=user
+TENKI_DISK_GIB=1
 TENKI_TIMEOUT_SECONDS=1200
 TENKI_PAUSE_RETENTION_SECONDS=604800
 TENKI_LIFECYCLE_TIMEOUT_SECONDS=180

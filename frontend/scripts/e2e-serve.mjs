@@ -34,6 +34,7 @@ process.on("SIGTERM", () => stop()); process.on("SIGINT", () => stop());
 // Test-only Agent API stub. The production app never accepts fake keys.
 const apiServer = `
 import uvicorn
+from fastapi import WebSocket
 from app.main import app
 from app.band import connections
 from app.band.listener import BandIdentity
@@ -58,6 +59,12 @@ async def start_agent(manager, profile, *, owner_id=""):
     manager._band_ids[profile.id] = profile.band_agent_id
     manager.status[profile.id] = {"state": "online", "error": None}
 service.AgentManager.start = start_agent
+@app.websocket("/api/e2e/desktop-transport")
+async def desktop_transport(socket: WebSocket):
+    await socket.accept(subprotocol="binary")
+    await socket.send_bytes(b"RFB 003.008\\n")
+    await socket.send_bytes(await socket.receive_bytes())
+    await socket.close()
 uvicorn.run(app, host="127.0.0.1", port=${Number(env.BAND_E2E_API_PORT)})
 `;
 start("uv", ["run", "python", "-c", apiServer], backend);

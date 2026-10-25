@@ -36,7 +36,7 @@ from app.workspace.permissions import policy_of, serialize_policy
 from app.runtime.tools.composio import plugin_slugs, set_plugin_access
 from app.workspace.roles import ROLES, role_label
 from app.persistence.models import (UserBandConnection, PrivateConversation, HumanDirectMessage,
-                                    BandAgentOwner, BandAgentLink, BandPlatformRoom, PlatformTeammate, ContactBlock)
+                                    BandAgentOwner, BandAgentLink, BandPlatformRoom, PlatformTeammate, LocalTeammate, ContactBlock)
 from app.workspace.access import channel_audience, agent_event_visible, agent_owner
 from app.workspace.components import current_components
 from app.tasks import channel_context, display_names
@@ -453,9 +453,12 @@ class AppService:
             return
         status, agent_id, error = "failed", None, ""
         try:
-            profile = await self.create_agent(name=request.name, role=request.role, instructions=request.instructions,
-                                              model=request.model, channel_id=request.channel_id,
-                                              created_by_agent=request.requested_by_agent_id)
+            if self.local_teammate(request.requested_by_agent_id):
+                profile = await self.create_local_teammate(request)
+            else:
+                profile = await self.create_agent(name=request.name, role=request.role, instructions=request.instructions,
+                                                  model=request.model, channel_id=request.channel_id,
+                                                  created_by_agent=request.requested_by_agent_id)
             status, agent_id = "created", profile.id
         except asyncio.CancelledError:
             settle_interrupted(request_id)
@@ -475,8 +478,9 @@ class AppService:
                                                         "model": profile.model}, session=session)
             session.commit()
         if status == "created":
+            location = "in your team" if self.local_teammate(request.requested_by_agent_id) else "in this channel"
             await self.system_message(request.channel_id, f"{requester.name if requester else 'An agent'} created "
-                                      f"**{profile.name}** ({role_label(profile.role)}) as a teammate in this channel.")
+                                      f"**{profile.name}** ({role_label(profile.role)}) as a teammate {location}.")
 
     def master(self) -> AgentProfile | None:
         with db() as session:
@@ -494,12 +498,13 @@ class AppService:
             owner = session.get(BandAgentOwner, profile.id) if profile.id else None
             imported = session.get(BandAgentLink, profile.id) if profile.id else None
             teammate = session.get(PlatformTeammate, profile.id) if profile.id else None
+            local = session.get(LocalTeammate, profile.id) if profile.id else None
             transport = session.exec(select(UserBandConnection).where(UserBandConnection.band_agent_id == profile.band_agent_id)).first()
             managed = bool(owner and owner.band_user_id and not imported and not teammate and not transport)
         reference = model_reference(profile.id) if not runtime else None
         return {
             "id": profile.id,
-            "band_auth": "platform" if teammate else "managed" if managed else "agent_key",
+            "band_auth": "local" if local else "platform" if teammate else "managed" if managed else "agent_key",
             "name": profile.name,
             "handle": profile.handle,
             "role": profile.role,
@@ -623,7 +628,7 @@ class AppService:
                 org = await self.platform_org(teammate.user_id)
                 if org.identity != teammate.band_agent_id:
                     raise ServiceError("Reconnect this teammate's original Band connection", 409)
-            else:
+            elif not self.local_teammate(profile.id):
                 org = await self.account_org(user.id)
             room_id = None
             if org:
@@ -675,7 +680,8 @@ class AppService:
         with db() as session:
             platform_room = session.get(BandPlatformRoom, channel_id)
             teammate = session.get(PlatformTeammate, profile.id)
-        if teammate or (self.uses_agent_key(profile) and not platform_room):
+            local = session.get(LocalTeammate, profile.id)
+        if local or teammate or (self.uses_agent_key(profile) and not platform_room):
             with db() as session:
                 if not session.get(Channel, channel_id):
                     raise ServiceError("Channel not found", 404)
@@ -849,6 +855,11 @@ class AppService:
             return
         with db() as session:
             teammate = session.get(PlatformTeammate, profile.id)
+            local = session.get(LocalTeammate, profile.id)
+        if local:
+            self.agents.status[profile.id] = {"state": "online", "error": None}
+            await self.agent_status(profile.id, "online", None)
+            return  # Local reasoning uses the worker; no native Band listener is needed.
         if teammate:
             org = await self.platform_org(teammate.user_id)
             if org.identity != teammate.band_agent_id:
@@ -903,6 +914,39 @@ class AppService:
     def platform_teammate(self, agent_id):
         with db() as session:
             return session.get(PlatformTeammate, agent_id)
+
+    def local_teammate(self, agent_id):
+        with db() as session:
+            return session.get(LocalTeammate, agent_id)
+
+    async def create_local_teammate(self, request: TeammateRequest) -> AgentProfile:
+        """A private Master creates app teammates without registering native identities."""
+        async with self._register_lock:
+            with db() as session:
+                parent = session.get(AgentProfile, request.requested_by_agent_id)
+                local = session.get(LocalTeammate, request.requested_by_agent_id)
+                dm = session.get(DirectMessage, request.channel_id)
+                if (not parent or not parent.is_master or not local or not dm
+                        or dm.agent_id != parent.id or dm.user_id != local.user_id
+                        or agent_owner(session, parent) != local.user_id):
+                    raise ServiceError("Ask your own Master in its private conversation to create a teammate", 403)
+                named = session.exec(select(AgentProfile).join(BandAgentOwner).where(
+                    BandAgentOwner.user_id == local.user_id,
+                    func.lower(AgentProfile.name) == request.name.lower())).first()
+                if named:
+                    raise ServiceError("You already have a teammate with that name", 409)
+                profile = AgentProfile(name=request.name, role=request.role, model=request.model,
+                    instructions=request.instructions, created_by=local.user_id, created_by_agent=parent.id,
+                    band_agent_id=f"local-{uuid4().hex}", handle=f"app-{uuid4().hex[:12]}", band_api_key_enc="")
+                session.add(profile); session.flush()
+                session.add_all([LocalTeammate(agent_id=profile.id, user_id=local.user_id),
+                    BandAgentOwner(agent_id=profile.id, user_id=local.user_id, band_user_id=""),
+                    AgentPluginAccess(agent_id=profile.id, slugs=[]),
+                    AgentPersona(agent_id=profile.id)])
+                session.commit(); session.refresh(profile)
+        await self.start_agent(profile)
+        await bus.publish({"type": "agent", "agent": self.serialize_agent(profile)}, users={local.user_id})
+        return profile
 
     async def _register_native_agent(self, *, name, role, instructions, model, created_by,
                                      created_by_agent, plugins, specialty, avatar, runtime, connection_id):
@@ -1161,6 +1205,8 @@ class AppService:
                 session.delete(link)
             if teammate := session.get(PlatformTeammate, profile.id):
                 session.delete(teammate)
+            if local := session.get(LocalTeammate, profile.id):
+                session.delete(local)
             session.delete(session.get(AgentProfile, profile.id))
             session.commit()
             rooms = [c.band_room_id for c in session.exec(select(Channel)).all() if c.band_room_id]

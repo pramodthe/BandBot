@@ -40,10 +40,10 @@ def clean_config(provider: str, config: dict) -> dict:
     if provider == "tenki":
         if not isinstance(value.get("image"), str) or not 1 <= len(value["image"]) <= 300:
             raise ValueError("A prepared Tenki desktop image is required")
-        value.setdefault("sharing", "workspace")
-        if value["sharing"] not in {"workspace", "agent_channel"}:
-            raise ValueError("Choose workspace or agent_channel sharing")
-        for name, default, low, high in (("disk_gib", 20, 1, 50), ("timeout", 1200, 60, 3600), ("pause_retention", 604800, 3600, 2592000)):
+        value.setdefault("sharing", "user")
+        if value["sharing"] not in {"user", "workspace", "agent_channel"}:
+            raise ValueError("Choose user, workspace or agent_channel sharing")
+        for name, default, low, high in (("disk_gib", 1, 1, 50), ("timeout", 1200, 60, 3600), ("pause_retention", 604800, 3600, 2592000)):
             value.setdefault(name, default)
             if type(value[name]) is not int or not low <= value[name] <= high:
                 raise ValueError(f"Invalid {name}")
