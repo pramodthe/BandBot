@@ -20,7 +20,7 @@ from app.workspace.service import AppService
 from app.persistence.models import UserBandAccount, PrivateConversation, HumanDirectMessage, BandAgentOwner, ChannelInvitation
 from app.persistence.models import MessageComponent, ComponentResponse, TaskInput, AgentRuntime, AgentConnection, AgentOAuthAttempt
 from app.persistence.models import AppContact, AppContactRequest, BandRoomAccount, BandAgentLink, UserBandConnection, BandPlatformRoom, PlatformTeammate
-from app.persistence.models import OutsideAgent
+from app.persistence.models import AgentPluginAccess, LocalTeammate, OutsideAgent, TeammateRequest, UserDesktop, TaskPrincipal, ComputerPublishApproval
 from app.persistence.models import (AuthSession, ClientMessage, ConnectionHealth, ContactBlock, PasswordReset,
                                     RecoveryAddress, WorkerHeartbeat)
 
@@ -62,8 +62,12 @@ def svc(monkeypatch) -> Iterator[AppService]:
 
     def clear_database() -> None:
         with db() as session:
-            for model in (ClientMessage, AuthSession, RecoveryAddress, PasswordReset, ContactBlock, ConnectionHealth,
-                          WorkerHeartbeat, AppContact, AppContactRequest, BandRoomAccount, BandAgentLink, UserBandConnection, BandPlatformRoom, PlatformTeammate,
+            from app.providers.models import ServiceSelection, ServiceSelectionHistory
+            for model in (ServiceSelectionHistory, ServiceSelection):
+                for row in session.exec(select(model).where(model.scope != "workspace")).all():
+                    session.delete(row)
+            for model in (UserDesktop, TaskPrincipal, ComputerPublishApproval, AgentPluginAccess, TeammateRequest, ClientMessage, AuthSession, RecoveryAddress, PasswordReset, ContactBlock, ConnectionHealth,
+                          WorkerHeartbeat, AppContact, AppContactRequest, BandRoomAccount, BandAgentLink, UserBandConnection, BandPlatformRoom, PlatformTeammate, LocalTeammate,
                           ComponentResponse, TaskInput, MessageComponent, AgentRuntime, AgentOAuthAttempt, AgentConnection,
                           ChannelInvitation, HumanDirectMessage, PrivateConversation, BandAgentOwner, UserBandAccount, OutsideAgent,
                           AgentTask, DirectMessage, Message, ChannelMember, AgentPersona, AgentProfile,

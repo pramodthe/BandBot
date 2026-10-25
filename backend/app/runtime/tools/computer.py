@@ -110,6 +110,16 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
 
         Export final deliverables before finishing. Paused computers retain files until explicitly deleted.
         """
+        if getattr(computer, "user_mode", False):
+            from app.persistence.models import DirectMessage, db
+            from langgraph.types import interrupt
+            with db() as session:
+                group = session.get(DirectMessage, task.channel_id) is None
+            if group:
+                decision = interrupt({"kind": "private_computer_export", "action": "Publish a private computer file to this channel",
+                    "details": "The computer owner must approve sharing this file's contents with the channel."})
+                if not decision.get("approved"):
+                    return {"error": "The computer owner did not approve publishing this file"}
         return await computer_call(lambda: computer.export_file(path))
 
     @tool

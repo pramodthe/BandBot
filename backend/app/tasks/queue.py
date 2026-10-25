@@ -291,6 +291,13 @@ def await_approval(task: AgentTask, requests: list[tuple[str, dict]]) -> None:
                 continue
             action = str(value.get("action") or "Unspecified action")[:500]
             details = str(value.get("details") or "")[:4000]
+            if value.get("kind") == "private_computer_export":
+                from app.computer.access import computer_owner_id
+                from app.persistence.models import ComputerPublishApproval
+                owner = computer_owner_id(session, task)
+                if owner is None:
+                    raise ValueError("Private computer export has no owner")
+                session.add(ComputerPublishApproval(approval_id=approval_id, user_id=owner))
             session.add(TaskApproval(id=approval_id, task_id=task.id, channel_id=task.channel_id,
                                      agent_id=task.agent_id, action=action, details=details))
             session.add(Message(channel_id=task.channel_id, author_type="agent", author_id=task.agent_id,

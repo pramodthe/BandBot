@@ -12,12 +12,12 @@ from sqlmodel import select
 from app.auth import decrypt_secret
 from app.config import settings
 from app.openai_provider import configuration
-from app.persistence.models import (AgentProfile, AgentTask, DirectMessage, Message, OutsideAgent, OutsideHandoff,
+from app.persistence.models import (AgentProfile, AgentTask, BandAgentOwner, DirectMessage, LocalTeammate, Message, OutsideAgent, OutsideHandoff,
                                     TaskHandoff, TeammateRequest, db)
 from app.tasks.queue import MAX_HANDOFFS, handoff_root, handoffs_used
 from app.workspace.audit import record_agent
 from app.workspace.roles import ROLES, role_label
-from app.workspace.access import channel_teammates
+from app.workspace.access import agent_owner, channel_teammates
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,11 @@ def _role_key(role: str) -> str | None:
     return next((key for key, info in ROLES.items() if wanted in (key, info["label"].lower())), None)
 
 
-def _created(name: str, role: str) -> dict:
+def _created(name: str, role: str, *, private: bool = False) -> dict:
     return {"status": "created", "teammate": name, "role": role_label(role),
-            "note": f"{name} is now a visible teammate in this channel. Hand off with ask_teammate."}
+            "note": (f"{name} is now in your team. Open its private conversation from AI teammates, or invite it "
+                     "to a channel. This one-on-one chat stays private; do not hand off to it here." if private else
+                     f"{name} is now a visible teammate in this channel. Hand off with ask_teammate.")}
 
 
 def _request(task: AgentTask, *, name: str, role: str, instructions: str, call_id: str) -> dict | int:
@@ -48,21 +50,39 @@ def _request(task: AgentTask, *, name: str, role: str, instructions: str, call_i
         return {"error": "Give the teammate a name of 3-40 characters."}
     source_key = f"{task.id}:{call_id}"
     with db() as session:
-        if session.get(DirectMessage, task.channel_id):
+        requester = session.get(AgentProfile, task.agent_id)
+        if not requester or not requester.is_master:
+            return {"error": "Only Master can create teammates."}
+        local = session.get(LocalTeammate, requester.id)
+        dm = session.get(DirectMessage, task.channel_id)
+        if local and (not dm or dm.agent_id != requester.id or dm.user_id != local.user_id
+                      or agent_owner(session, requester) != local.user_id):
+            return {"error": "Ask your own Master in its private conversation to create a teammate."}
+        if dm and not local:
             return {"error": "This is a private one-on-one conversation, so teammates can't join it."}
         if existing := session.exec(select(TeammateRequest).where(TeammateRequest.source_key == source_key)).first():
             return existing.id
-        same = next((a for a in channel_teammates(session, task.channel_id) if a.name.lower() == name.lower()), None)
+        # Include imported/native teammates owned by this person when reusing a name.
+        if local:
+            candidates = session.exec(select(AgentProfile).join(BandAgentOwner).where(
+                BandAgentOwner.user_id == local.user_id)).all()
+        else:
+            candidates = channel_teammates(session, task.channel_id)
+        same = next((a for a in candidates if a.name.lower() == name.lower()), None)
         if same:
             return {"status": "exists", "teammate": same.name, "role": role_label(same.role),
-                    "note": f"{same.name} already exists; reuse it with ask_teammate instead of creating another."}
+                    "note": (f"{same.name} already exists in your team; open its private chat or invite it to a channel."
+                             if local else f"{same.name} already exists; reuse it with ask_teammate instead of creating another.")}
         if outsider := session.exec(select(OutsideAgent).where(OutsideAgent.channel_id == task.channel_id,
                 func.lower(OutsideAgent.name) == name.lower())).first():
             return {"error": f"{outsider.name} is an outside Band agent. Hand off to it with ask_teammate, "
                              "or choose another name."}
-        in_progress = session.exec(select(TeammateRequest).where(
+        pending = select(TeammateRequest).where(
             func.lower(TeammateRequest.name) == name.lower(),
-            TeammateRequest.status.in_(["pending", "creating"]))).first()
+            TeammateRequest.status.in_(["pending", "creating"]))
+        if local:
+            pending = pending.where(TeammateRequest.requested_by_agent_id == requester.id)
+        in_progress = session.exec(pending).first()
         if in_progress:
             return in_progress.id
         made = session.exec(select(func.count()).select_from(AgentProfile).where(
@@ -71,7 +91,6 @@ def _request(task: AgentTask, *, name: str, role: str, instructions: str, call_i
             TeammateRequest.status.in_(["pending", "creating"]))).one()
         if made + waiting >= settings.max_agent_teammates:
             return _limit_reached()
-        requester = session.get(AgentProfile, task.agent_id)
         request = TeammateRequest(source_key=source_key, task_id=task.id, channel_id=task.channel_id,
                                   requested_by_agent_id=task.agent_id, name=name, role=key,
                                   instructions=instructions.strip()[:4000],
@@ -88,8 +107,11 @@ def _request(task: AgentTask, *, name: str, role: str, instructions: str, call_i
 def _settle_race(session, request: TeammateRequest) -> dict | int:
     """Tasks run in parallel, so two requests can pass the checks at once; the earliest one wins."""
     active = TeammateRequest.status.in_(["pending", "creating"])
-    earlier = session.exec(select(TeammateRequest).where(
-        active, TeammateRequest.id < request.id, func.lower(TeammateRequest.name) == request.name.lower())).first()
+    earlier_query = select(TeammateRequest).where(
+        active, TeammateRequest.id < request.id, func.lower(TeammateRequest.name) == request.name.lower())
+    if session.get(LocalTeammate, request.requested_by_agent_id):
+        earlier_query = earlier_query.where(TeammateRequest.requested_by_agent_id == request.requested_by_agent_id)
+    earlier = session.exec(earlier_query).first()
     made = session.exec(select(func.count()).select_from(AgentProfile).where(
         AgentProfile.created_by_agent != None)).one()  # noqa: E711
     ahead = session.exec(select(func.count()).select_from(TeammateRequest).where(
@@ -122,8 +144,9 @@ async def create_teammate(task: AgentTask, *, name: str, role: str, instructions
         with db() as session:
             request = session.get(TeammateRequest, outcome)
             agent = session.get(AgentProfile, request.agent_id) if request.agent_id else None
+            private = bool(session.get(LocalTeammate, request.requested_by_agent_id))
         if request.status == "created" and agent:
-            return _created(agent.name, agent.role)
+            return _created(agent.name, agent.role, private=private)
         if request.status == "failed":
             return {"error": f"Couldn't create {request.name}: {request.error or 'unknown error'}"}
         if asyncio.get_running_loop().time() >= deadline:

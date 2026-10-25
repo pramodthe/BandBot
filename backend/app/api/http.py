@@ -190,6 +190,8 @@ async def signup(body: SignupBody, request: Request, session: Session = Depends(
         session.rollback()
         return JSONResponse({"detail": error.detail, "field": "band_api_key"}, status_code=error.status_code)
     _join_general(session, user)
+    from app.workspace.masters import ensure_user_master
+    ensure_user_master(session, user)
     session.commit()
     session.refresh(user)
     ensure_owner(session)
@@ -280,6 +282,12 @@ def recover_password(body: PasswordResetBody):
 
 @app.get("/api/bootstrap")
 async def bootstrap(user: User = Depends(current_user), session: Session = Depends(get_session)):
+    # Repair existing accounts as well as provisioning new accounts at signup.
+    from app.workspace.masters import ensure_user_master
+    master, created = ensure_user_master(session, user)
+    session.commit()
+    if created or master.id not in service.agents.status:
+        await service.start_agent(master)
     # Read the cursor before the snapshot so a change committed during this request has a newer cursor
     # and is replayed from the live socket instead of being dropped as already included.
     cursor = current_cursor(session)
@@ -398,11 +406,11 @@ async def channel_audit(channel_id: int, before: int | None = None, after: int |
         query = query.where(AuditEvent.task_id == task_id)
     if after is not None:
         rows = session.exec(query.where(AuditEvent.id > after).order_by(AuditEvent.id).limit(AUDIT_PAGE)).all()
-        return JSONResponse([serialize_event(event) for event in rows], headers=NO_STORE)
+        return JSONResponse([_private_event(session, event, user) for event in rows], headers=NO_STORE)
     if before:
         query = query.where(AuditEvent.id < before)
     rows = session.exec(query.order_by(AuditEvent.id.desc()).limit(AUDIT_PAGE)).all()
-    return JSONResponse([serialize_event(event) for event in rows], headers=NO_STORE)
+    return JSONResponse([_private_event(session, event, user) for event in rows], headers=NO_STORE)
 
 
 @app.get("/api/audit")
@@ -415,7 +423,18 @@ async def workspace_audit(before: int | None = None, user: User = Depends(curren
     if before:
         query = query.where(AuditEvent.id < before)
     rows = session.exec(query.order_by(AuditEvent.id.desc()).limit(AUDIT_PAGE)).all()
-    return JSONResponse([serialize_event(event) for event in rows], headers=NO_STORE)
+    return JSONResponse([_private_event(session, event, user) for event in rows], headers=NO_STORE)
+
+
+def _private_event(session, event, user):
+    payload = serialize_event(event)
+    if event.task_id:
+        from app.computer.identity import is_user_desktop
+        from app.computer.access import computer_owner_id
+        task = session.get(AgentTask, event.task_id)
+        if task and is_user_desktop(computer_key(task)) and computer_owner_id(session, task) != user.id:
+            payload["detail"] = {"notice": "Private agent activity"}
+    return payload
 
 
 # --- channels ---
@@ -964,6 +983,8 @@ async def task_detail(task_id: str, user: User = Depends(current_user), session:
 async def task_computer(task_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     task = _task_or_404(session, task_id)
     _require_task_member(session, task, user)
+    from app.computer.access import require_computer_owner
+    require_computer_owner(session, task, user.id)
     # Task bindings preserve historical machines when the workspace sharing mode changes.
     row = sandbox_record(computer_key(task)) or sandbox_record(task_id)
     display = display_state(computer_key(task))
@@ -995,6 +1016,8 @@ NO_STORE = {"Cache-Control": "no-store"}
 def agent_computers(agent_id: int, user: User = Depends(current_user), session: Session = Depends(get_session)):
     """Discover this agent's computers only in channels the caller belongs to. Never starts one."""
     profile = _agent_or_404(session, agent_id)
+    if agent_owner(session, profile) not in {None, user.id}:
+        raise HTTPException(403, "Only this agent's owner can access its private computer")
     member_channels = select(ChannelMember.channel_id).where(
         ChannelMember.member_type == "human", ChannelMember.member_id == user.id)
     agent_channels = select(ChannelMember.channel_id).where(
@@ -1040,6 +1063,11 @@ async def channel_computers(channel_id: int, user: User = Depends(current_user),
         if not profile:
             continue
         key = scope_computer_key(session, profile, channel_id, settings)
+        from app.computer.identity import is_user_desktop
+        if is_user_desktop(key) and session.get(DirectMessage, channel_id) is None:
+            continue  # User computers are accessed privately from the owner's agent profile.
+        if agent_owner(session, profile) not in {None, user.id}:
+            continue
         latest = session.exec(select(AgentTask).join(TaskComputerBinding, TaskComputerBinding.task_id == AgentTask.id)
                               .where(AgentTask.channel_id == channel_id, AgentTask.agent_id == agent_id,
                                      TaskComputerBinding.computer_key == key)
@@ -1075,6 +1103,8 @@ def _control_json(control, user: User) -> dict | None:
 def _member_task(session: Session, task_id: str, user: User) -> AgentTask:
     task = _task_or_404(session, task_id)
     _require_task_member(session, task, user)
+    from app.computer.access import require_computer_owner
+    require_computer_owner(session, task, user.id)
     return task
 
 
@@ -1085,6 +1115,11 @@ def _agent_name(session: Session, task: AgentTask) -> str:
 
 def _computer_name(session: Session, task: AgentTask) -> str:
     return "the workspace computer" if is_shared(computer_key(task)) else f"{_agent_name(session, task)}'s computer"
+
+
+def _computer_notice_visible(session, task):
+    from app.computer.identity import is_user_desktop
+    return not is_user_desktop(computer_key(task)) or session.get(DirectMessage, task.channel_id) is not None
 
 
 async def _on_computer(task: AgentTask, operation):
@@ -1131,8 +1166,9 @@ async def computer_live(task_id: str, body: LiveBody, user: User = Depends(curre
         _audit(user, "computer_taken_over", channel_id=task.channel_id, task_id=task.id,
                agent=_agent_name(session, task))
         waiting = "Agents wait" if is_shared(key) else "The agent waits"
-        await service.system_message(task.channel_id, f"{user.display_name} took control of {_computer_name(session, task)}. "
-                                                      f"{waiting} until it is handed back.")
+        if _computer_notice_visible(session, task):
+            await service.system_message(task.channel_id, f"{user.display_name} took control of {_computer_name(session, task)}. "
+                                                          f"{waiting} until it is handed back.")
     else:
         control = active_control(key)
     return JSONResponse({**view, "control": _control_json(control, user)}, headers=NO_STORE)
@@ -1146,7 +1182,8 @@ async def computer_release(task_id: str, user: User = Depends(current_user), ses
         release_control(computer_key(task), user_name=user.display_name)
         _audit(user, "computer_handed_back", channel_id=task.channel_id, task_id=task.id,
                agent=_agent_name(session, task))
-        await service.system_message(task.channel_id, f"{user.display_name} handed {_computer_name(session, task)} back.")
+        if _computer_notice_visible(session, task):
+            await service.system_message(task.channel_id, f"{user.display_name} handed {_computer_name(session, task)} back.")
     return {"ok": True}
 
 
@@ -1181,8 +1218,9 @@ async def computer_upload(task_id: str, name: str, request: Request, user: User 
     path = await _on_computer(task, lambda computer: computer.upload(name, bytes(content)))
     _audit(user, "computer_upload", channel_id=task.channel_id, task_id=task.id, path=path, bytes=len(content))
     # Agents read the channel, so this tells them where the file is.
-    await service.system_message(task.channel_id, f"{user.display_name} uploaded {name} to "
-                                                  f"{_computer_name(session, task)} at {path}.")
+    if _computer_notice_visible(session, task):
+        await service.system_message(task.channel_id, f"{user.display_name} uploaded {name} to "
+                                                      f"{_computer_name(session, task)} at {path}.")
     return {"path": path}
 
 
@@ -1284,9 +1322,18 @@ async def decide(approval_id: str, body: DecisionBody, user: User = Depends(curr
     approval = session.get(TaskApproval, approval_id)
     if approval is None:
         raise HTTPException(404, "Approval request not found")
+    from app.persistence.models import ComputerPublishApproval
+    private = session.get(ComputerPublishApproval, approval_id)
+    if private and private.user_id != user.id:
+        raise HTTPException(403, "Only the computer owner can approve publishing a private file")
     if not session.get(ChannelMember, (approval.channel_id, "human", user.id)):
         raise HTTPException(403, "Join the channel to decide its approvals")
-    if not allowed(session, user.id, approval.channel_id, "approvers"):
+    from app.computer.access import require_computer_owner
+    task = session.get(AgentTask, approval.task_id)
+    if task is not None:
+        require_computer_owner(session, task, user.id)
+    # A private export names its owner. Channel approver policy still gates every other request.
+    if not private and not allowed(session, user.id, approval.channel_id, "approvers"):
         raise HTTPException(403, "Only workspace admins can decide approvals in this channel")
     decided = decide_approval(approval_id, approve=body.approve, decided_by=user.display_name, note=body.note)
     if decided is None:

@@ -31,10 +31,12 @@ def teammate_tools(task: AgentTask):
     @tool
     async def create_teammate(name: str, role: str, instructions: str,
                               tool_call_id: Annotated[str, InjectedToolCallId]) -> dict:
-        """Create a new visible teammate agent in this channel, with its own Band identity, role, and memory.
+        """Create a persistent visible app teammate, with its own role, instructions, and memory.
 
         Only when no existing teammate's role fits the work. role is one of: coordinator, researcher, writer,
-        coder, critic, custom. instructions describe its focus. Returns its name; then hand off with ask_teammate.
+        coder, critic, custom. instructions describe its focus. From your owner's private Master chat, creates
+        a teammate in that person's team without adding it to this one-on-one chat or registering a native Band
+        identity. The owner opens its private chat or invites it to a channel. Follow the returned note.
         """
         return await request_teammate(task, name=name, role=role, instructions=instructions, call_id=tool_call_id)
 

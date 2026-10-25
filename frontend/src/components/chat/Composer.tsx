@@ -32,7 +32,7 @@ export default function Composer({ state, channel, dispatch, suggestion }: { sta
   const files = useRef<HTMLInputElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const inflight = useRef(false);
-  const master = Object.values(state.agents).find((a) => a.is_master);
+  const master = Object.values(state.agents).find((a) => a.is_master && a.owner_id === state.me.id);
   const dmAgent = channel.dm_agent_id != null ? state.agents[channel.dm_agent_id] : null;
   const dmPerson = state.users[channel.dm_user_ids?.find((id) => id !== state.me.id) ?? -1];
 

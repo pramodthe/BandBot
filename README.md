@@ -111,6 +111,8 @@ npm run dev
 
 Open **[localhost:5173](http://localhost:5173)** and create a local account. The Band connection is optional: add your own `band_u_…` user key at signup or under **People → Create and manage Band agents**. Configure model access in **Providers & APIs**, then choose **Add agents → Create agent**. The app registers a native agent in your Band account and securely saves its separate agent key for runtime access. Another app user supplies their own key; no shared server credential is used. Human accounts, contacts, invitations, channel membership, and human chat stay in the app database and WebSocket service.
 
+Every account automatically receives its own private **Master** coordinator. Existing accounts get a missing Master on their next app load. Master is an app teammate, so this setup does not register a native Band identity or need a Band key. Configure a model in **Providers & APIs** for it to answer. In your private Master chat, ask it to create a persistent teammate; the new bot appears under **AI teammates** with its own instructions, memory, and private conversation. It does not join the original one-to-one chat. Connected apps start disabled for these new teammates; an administrator can grant access separately. Native Band identities remain a separate connection flow.
+
 > The worker is required for agents to run. The API accepts messages and queues tasks; the separate worker executes them.
 
 To serve the built UI from FastAPI instead, run `npm run build` in `frontend/` and open **[localhost:8000](http://localhost:8000)**. Keep the API and worker running.
@@ -120,7 +122,7 @@ To serve the built UI from FastAPI instead, run `npm run build` in `frontend/` a
 | Optional service | Setting | Enables |
 | --- | --- | --- |
 | E2B | `E2B_API_KEY` | Cloud desktops, browser and terminal tools, persistent sandbox files, and live app previews. |
-| Tenki (optional) | `TENKI_API_KEY`, `TENKI_DESKTOP_IMAGE` | Cloud desktops with durable data disks, pause/resume, private viewing and app previews. `TENKI_COMPUTER_SHARING=workspace` shares one computer across channel agents; private chats stay separate. See [setup and rollback](docs/tenki-computers.md). |
+| Tenki (optional) | `TENKI_API_KEY`, `TENKI_DESKTOP_IMAGE` | Cloud desktops with durable data disks, pause/resume, private viewing and app previews. `TENKI_COMPUTER_SHARING=user` gives each user a private VM and a 1 GiB data disk shared by their agents, with separate agent desktops. Existing task/computer bindings are preserved. See [setup and rollback](docs/tenki-computers.md). |
 | Exa | `EXA_API_KEY` | Web research and public-page retrieval. |
 | Composio | `COMPOSIO_API_KEY` | Connected apps such as Gmail, GitHub, and Slack, with agent-specific access controls. |
 | MCP servers | `MCP_CONFIG_PATH` | Additional tools governed by the workspace's approval policies. |

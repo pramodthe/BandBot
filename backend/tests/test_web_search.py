@@ -151,6 +151,22 @@ def test_disabled_research_reports_unavailable_without_falling_back_to_environme
 
 
 @pytest.mark.parametrize('factory,arguments', [
+    (search_tool, {'query': 'Current Sydney phone prices'}),
+    (fetch_tool, {'url': 'https://example.com'}),
+])
+def test_disabled_research_directs_agent_to_its_enabled_computer(monkeypatch, factory, arguments):
+    fake_exa(monkeypatch, lambda request: pytest.fail('Research API is disabled'))
+    monkeypatch.setattr('app.providers.context.selection', lambda *args: {'disabled': True})
+    monkeypatch.setattr('app.providers.bindings.bindings_for', lambda task: {
+        'research': {'disabled': True}, 'computer': {'provider': 'tenki', 'connection_id': 'selected-tenki', 'revision': 1}})
+    result = asyncio.run(factory().ainvoke(arguments))
+    assert result['code'] == 'not_configured'
+    assert 'selected cloud computer is enabled' in result['error']
+    assert 'computer helper' in result['error']
+    assert 'test-secret' not in str(result)
+
+
+@pytest.mark.parametrize('factory,arguments', [
     (search_tool, {'query': 'AI earbuds'}),
     (fetch_tool, {'url': 'https://example.com'}),
 ])

@@ -56,7 +56,7 @@ def test_signup_accepts_local_accounts_and_optional_management_key(kind):
                 assert account is None
 
 
-def test_signup_stores_a_platform_connection_without_creating_a_teammate():
+def test_signup_stores_a_platform_connection_and_its_private_app_master():
     init_db()
     key = 'band_a_' + uuid4().hex
     body = payload('  ' + key + '  ')
@@ -77,7 +77,10 @@ def test_signup_stores_a_platform_connection_without_creating_a_teammate():
             connection = session.get(UserBandConnection, user_id)
             assert decrypt_secret(connection.secret_enc) == key and connection.secret_enc != key
             assert session.get(UserBandAccount, user_id) is None
-            assert len(session.exec(select(AgentProfile.id)).all()) == before
+            assert len(session.exec(select(AgentProfile.id)).all()) == before + 1
+            master = session.exec(select(AgentProfile).where(AgentProfile.created_by == user_id,
+                                                           AgentProfile.is_master == True)).one()
+            assert master.band_api_key_enc == "" and master.band_agent_id == f"local-master-{user_id}"
 
 
 def test_signup_validation_failure_leaves_no_account_and_can_retry(monkeypatch):

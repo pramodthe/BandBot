@@ -8,6 +8,8 @@ Environment keys bootstrap provider connections only on initial setup. Adding ke
 
 Agents and their helpers receive the services disabled for each task. Missing optional execution, research, images, or document services are reported as tool limitations, so the agent can explain the requirement or continue with available work. A PDF or other file export still requires an enabled execution capability; a text reply is not proof that a downloadable file was created. Revoked, failing, or uncertain configured connections retain explicit recovery. Existing task bindings are preserved; start linked new work with current providers after changing a service rather than silently switching a saved task.
 
+The Web research API and the cloud computer's browser are independent. Disabling research API tools does not disable internet browsing on an enabled computer. Agents can use the computer helper for an explicit browser request or when research API tools are unavailable, while retaining approval requirements for purchases and account changes.
+
 ## Application secret and sessions
 
 `APP_SECRET` encrypts stored Band and provider credentials and signs session tokens. Do not rotate it as part of this upgrade. A new secret would make stored credentials unreadable. Signing and encryption still share this one secret; splitting them needs a separate migration.

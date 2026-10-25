@@ -16,7 +16,7 @@ from e2b import NotFoundException, RateLimitException, SandboxException
 from app.computer.e2b import DesktopOptions, E2BDesktopClient
 from app.computer.providers import ComputerMissing, ComputerProviderError, configured, key_for, provider_for
 from app.computer.providers import running_on
-from app.computer.identity import is_shared, shared_key
+from app.computer.identity import is_shared, is_user_desktop, shared_key, user_keys
 from app.computer.locking import ComputerLock
 
 from sqlmodel import select
@@ -111,7 +111,14 @@ def computer_key(task: AgentTask) -> str:
 
 def sandbox_record(key: str) -> TaskSandbox | None:
     with db() as session:
-        return session.get(TaskSandbox, key)
+        row = session.get(TaskSandbox, key)
+        if is_user_desktop(key):
+            from app.persistence.models import UserDesktop
+            desktop = session.get(UserDesktop, key)
+            host = session.get(TaskSandbox, desktop.host_key) if desktop else None
+            if row and host:
+                return row.model_copy(update={"status": host.status, "sandbox_id": host.sandbox_id, "error": host.error})
+        return row
 
 
 def save_sandbox(key: str, **values) -> TaskSandbox:
@@ -151,7 +158,14 @@ class TaskComputer:
         self.sandbox = None
         self.desktop_started = False
         self.shared = is_shared(self.key)
-        self.lock = ComputerLock(self.key)
+        self.user_mode = is_user_desktop(self.key)
+        self.host_key = self.key
+        if self.user_mode:
+            with db() as session:
+                keys = user_keys(session, self.owner, self.config)
+            if keys and keys[1] == self.key:
+                self.host_key = keys[0]
+        self.lock = ComputerLock(self.host_key)
 
     async def __aenter__(self):
         return self
@@ -179,6 +193,12 @@ class TaskComputer:
         People viewing a computer pass create=False: looking must never allocate a new one.
         """
         from app.providers.computers import config_for_task
+        if self.user_mode:
+            self.config = config_for_task(self.task, defaults=settings)
+            if not configured(self.provider, self.config):
+                raise ComputerUnavailable("Private computer access is not configured")
+            from app.computer.user_desktop import ensure
+            return await ensure(self, desktop=desktop, create=create)
         with db() as session:
             profile = session.get(AgentProfile, self.task.agent_id)
             shared_access = (self.shared and self.provider == "tenki" and self.key == shared_key(self.config)
@@ -449,6 +469,8 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
                 raise ComputerUnavailable("Export currently supports UTF-8 text files") from None
             with db() as session:
                 task = session.get(AgentTask, self.task.id)
+                if self.user_mode and session.get(DirectMessage, task.channel_id) is None:
+                    path = path.rsplit("/", 1)[-1]  # Publish a bounded copy, never a private filesystem link.
                 artifacts = [a for a in task.artifacts if a["path"] != path]
                 if len(artifacts) >= 20 or sum(len(a["content"]) for a in artifacts) + len(content) > 200000:
                     raise ComputerUnavailable("Task export limit reached (20 files / 200000 characters)")
@@ -521,6 +543,10 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
             await self._close(force=force)
 
     async def _close(self, *, force: bool = False) -> None:
+        if self.user_mode:
+            from app.computer.user_desktop import close
+            await close(self, force=force)
+            return
         from app.providers.computers import config_for_task
         from app.providers.contracts import ProviderError
         try:

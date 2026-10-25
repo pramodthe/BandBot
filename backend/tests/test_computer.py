@@ -486,6 +486,51 @@ def test_computer_subagent_can_observe_desktop(tmp_path, desktop_job):
     asyncio.run(scenario())
 
 
+def test_disabled_research_allows_browser_work_and_preserves_purchase_approval(tmp_path, desktop_job):
+    from app.persistence.models import TaskApproval
+    from app.providers.models import TaskServiceBinding
+    from app.tasks.worker import process
+    from app.tasks import update_task
+    task, _, _, computer, _, sandbox = desktop_job
+    with db() as session:
+        binding = session.get(TaskServiceBinding, task.id)
+        binding.bindings = {**binding.bindings, 'research': {'disabled': True}}
+        session.add(binding)
+        session.commit()
+
+    class BrowserModel(ScriptedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if self.index in (0, 1):
+                prompt = '\n'.join(str(message.content) for message in messages if message.type == 'system')
+                assert 'A cloud computer is enabled' in prompt
+                assert 'browser and network access are independent of the Web research API' in prompt
+                assert 'Never use the computer only to read a page' not in prompt
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    model = BrowserModel(responses=[
+        AIMessage(content='', tool_calls=[{'id': 'delegate-browser', 'name': 'task', 'args': {
+            'subagent_type': 'computer', 'description': 'Use the enabled browser to inspect the requested seller, then request approval before a purchase.'}}]),
+        AIMessage(content='', tool_calls=[{'id': 'browse-seller', 'name': 'computer_open_browser',
+            'args': {'url': 'https://example.com'}}]),
+        AIMessage(content='', tool_calls=[{'id': 'approve-purchase', 'name': 'request_approval', 'args': {
+            'action': 'Purchase the selected phone', 'details': 'Confirm the exact model, seller, total and delivery before checkout.'}}]),
+    ])
+
+    async def scenario():
+        async with AsyncSqliteSaver.from_conn_string(str(tmp_path / 'browser-without-research.db')) as saver:
+            await saver.setup()
+            update_task(task.id, status='running')
+            await process(task, saver, executor=lambda t, s: execute(t, s, computer=computer,
+                factory=lambda t2, p, c, **kwargs: build_harness(t2, p, c, model=model, computer=computer)))
+    asyncio.run(scenario())
+    with db() as session:
+        assert session.get(AgentTask, task.id).status == 'waiting'
+        approval = session.exec(select(TaskApproval).where(TaskApproval.task_id == task.id)).one()
+        assert approval.status == 'pending' and approval.action == 'Purchase the selected phone'
+    assert any('https://example.com' in str(call.args) for call in sandbox.process.exec.await_args_list)
+    sandbox.computer_use.mouse.click.assert_not_awaited()
+
+
 def test_cleanup_recovers_computer_when_graph_already_finished(desktop_job):
     task, _, _, computer, client, sandbox = desktop_job
     save_sandbox(computer.key, sandbox_id=sandbox.id, status="running")
@@ -664,6 +709,28 @@ def test_live_computer_api_requires_membership_and_coordinates_control(desktop_j
 async def _create_computer(computer):
     async with computer:
         await computer.command("echo setup")
+
+
+def test_channel_member_can_use_an_owned_agents_per_channel_computer(desktop_job, monkeypatch):
+    import app.api.http as main_module
+    from app.persistence.models import BandAgentOwner
+    task, agent, member, computer, client, _ = desktop_job
+    asyncio.run(_create_computer(computer))
+    monkeypatch.setattr(main_module, "computer_factory", lambda current: TaskComputer(current, client_factory=lambda: client))
+    with db() as session:
+        owner = User(username=uuid4().hex, display_name="Agent owner", password_hash="unused")
+        session.add(owner)
+        session.commit()
+        session.refresh(owner)
+        session.add(BandAgentOwner(agent_id=agent.id, user_id=owner.id, band_user_id="band-user"))
+        session.commit()
+    headers = {"Authorization": f"Bearer {issue_token(member.id)}"}
+    base = f"/api/tasks/{task.id}/computer"
+    with TestClient(app) as http:
+        assert http.get(base + "/files", headers=headers).status_code == 200
+        assert http.post(base + "/live", json={}, headers=headers).status_code == 200
+        assert http.post(base + "/files", params={"name": "brief.txt"}, content=b"Read me", headers=headers).status_code == 200
+        assert http.post(base + "/stop", headers=headers).status_code == 200
 
 
 def test_agent_profile_discovers_channel_computers_without_starting_them(desktop_job):

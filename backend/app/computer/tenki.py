@@ -133,6 +133,9 @@ class TenkiDesktopSession(DesktopSession):
         super().__init__(client, remote.id, dict(remote.info.metadata),
                          "running" if remote.state == "RUNNING" else "paused", remote)
         self.key = key_from_labels(self.labels)
+        self.host_key = self.key
+        self.display_number = 0
+        self.desktop_key = self.key
         # A transitional VM has not confirmed a durable pause yet. Cleanup must
         # wait for PAUSED rather than treating every non-running state as stopped.
         self.state = {"RUNNING": "started", "PAUSED": "stopped"}.get(remote.state, "pausing")
@@ -183,12 +186,17 @@ class TenkiDesktopSession(DesktopSession):
             await checked_sdk(self.sdk.extend(extra))
 
     async def exec(self, command: str, *, timeout=30):
+        if self.display_number:
+            from app.computer.desktop_session import profile_root
+            command = (f"export DISPLAY=:{self.display_number} XDG_CONFIG_HOME=" +
+                       shlex.quote(profile_root(self.key) + "/config") + "; " + command)
         result = await checked_sdk(self.sdk.exec("bash", "-c", command, cwd=WORKSPACE, timeout=timeout))
         return SimpleNamespace(exit_code=result.exit_code if result.exit_code is not None else 1,
                                result=result.stdout_text, stderr=result.stderr_text)
 
     async def prepare_home(self):
-        fields = ("workspace", "scope") if self.labels.get("scope") == "workspace" else ("workspace", "agent", "channel")
+        fields = (("workspace", "scope", "user", "host_key") if self.labels.get("scope") == "user" else
+                  ("workspace", "scope") if self.labels.get("scope") == "workspace" else ("workspace", "agent", "channel"))
         owner = json.dumps({k: self.labels.get(k) for k in fields}, sort_keys=True)
         script = home_script(owner=owner, vm_id=self.id, home="/home/tenki", root=WORKSPACE)
         # The volume mount can initially be root-owned; set only its root ownership.
@@ -196,6 +204,15 @@ class TenkiDesktopSession(DesktopSession):
         await self.checked("python3 -c " + shlex.quote(script), timeout=120)
 
     async def desktop(self, **kwargs):
+        if self.display_number:
+            from app.computer.desktop_session import setup_script
+            await self.checked(setup_script(self.display_number, self.key), timeout=90)
+            for _ in range(60):
+                check = await self.exec(f"DISPLAY=:{self.display_number} xprop -root _NET_SUPPORTING_WM_CHECK | grep -q 'window id'", timeout=5)
+                if check.exit_code == 0:
+                    return
+                await asyncio.sleep(.25)
+            raise ComputerProviderError("The agent desktop did not become ready")
         await self.checked("sudo systemctl start band-desktop band-web-control band-web-watch")
         for _ in range(60):
             if not (await self.exec("DISPLAY=:0 xdpyinfo >/dev/null 2>&1 && pgrep -x xfdesktop >/dev/null", timeout=5)).exit_code:
@@ -204,6 +221,15 @@ class TenkiDesktopSession(DesktopSession):
         raise ComputerProviderError("Desktop did not become ready")
 
     async def open_browser(self, url):
+        if self.display_number:
+            from app.computer.desktop_session import profile_root
+            unit = "band-browser-" + uuid4().hex
+            await self.checked("sudo systemd-run --quiet --collect --unit=" + unit +
+                " --property=User=tenki --setenv=HOME=/home/tenki --setenv=DISPLAY=:" + str(self.display_number) +
+                " -- /usr/bin/google-chrome --no-first-run --restore-last-session --disable-quic "
+                "--disk-cache-size=33554432 --media-cache-size=16777216 --user-data-dir=" +
+                profile_root(self.key) + "/browser " + shlex.quote(url))
+            return
         unit = "band-browser-" + uuid4().hex
         await self.checked("sudo systemd-run --quiet --collect --unit=" + unit +
             " --property=User=tenki --setenv=HOME=/home/tenki --setenv=DISPLAY=:0 -- "
@@ -212,6 +238,17 @@ class TenkiDesktopSession(DesktopSession):
 
     async def get_work_dir(self):
         return WORKSPACE
+
+    def select_desktop(self, desktop):
+        self.display_number, self.key = desktop.display, desktop.key
+
+    async def display_info(self, **kwargs):
+        output = await self.checked(f"DISPLAY=:{self.display_number} xdotool getdisplaygeometry")
+        width, height = map(int, output.split())
+        return SimpleNamespace(displays=[SimpleNamespace(width=width, height=height, is_active=True)])
+
+    async def xdo(self, *args):
+        await self.checked(f"DISPLAY=:{self.display_number} xdotool " + shlex.join([str(arg) for arg in args]))
 
     def path(self, path):
         return posixpath.normpath(path if path.startswith("/") else WORKSPACE + "/" + path)
@@ -268,8 +305,8 @@ print(json.dumps(out))'''
         await self.checked("mkdir -p -- " + shlex.quote(self.path(path)))
 
     async def screenshot(self, options=None, **kwargs):
-        path = "/home/tenki/band-observation.png"
-        await self.checked("DISPLAY=:0 scrot --overwrite --pointer " + path)
+        path = f"/tmp/band-observation-{self.display_number}.png"
+        await self.checked(f"DISPLAY=:{self.display_number} scrot --overwrite --pointer " + path)
         data = await self.read_file(path)
         def encode():
             with Image.open(io.BytesIO(data)) as screen:
@@ -279,15 +316,18 @@ print(json.dumps(out))'''
 
     async def prepare_app_connection(self, *, seconds: int, port=6080):
         await self.keepalive(seconds)
+        from app.computer.user_desktop import ports
+        desktop_ports = set(ports(self.display_number)) if self.display_number else {6080, 6081}
+        gateway_key = self.host_key
         with db() as session:
-            gateway = session.get(ComputerGateway, self.key)
+            gateway = session.get(ComputerGateway, gateway_key)
             if not gateway or gateway.sandbox_id != self.id:
                 secret = secrets.token_hex(32)
                 if session.get_bind().dialect.name == "sqlite":
-                    statement = sqlite_insert(ComputerGateway).values(key=self.key, sandbox_id=self.id,
+                    statement = sqlite_insert(ComputerGateway).values(key=gateway_key, sandbox_id=self.id,
                         secret_enc=encrypt_secret(secret)).on_conflict_do_nothing(index_elements=["key"])
                     session.connection().execute(statement); session.commit()
-                    gateway = session.get(ComputerGateway, self.key)
+                    gateway = session.get(ComputerGateway, gateway_key)
                     if gateway.sandbox_id != self.id:
                         gateway.sandbox_id, gateway.secret_enc = self.id, encrypt_secret(secret)
                         session.add(gateway); session.commit()
@@ -295,14 +335,14 @@ print(json.dumps(out))'''
                         from app.auth import decrypt_secret
                         secret = decrypt_secret(gateway.secret_enc)
                 else:
-                    gateway = ComputerGateway(key=self.key, sandbox_id=self.id, secret_enc=encrypt_secret(secret))
+                    gateway = ComputerGateway(key=gateway_key, sandbox_id=self.id, secret_enc=encrypt_secret(secret))
                     session.merge(gateway); session.commit()
             else:
                 from app.auth import decrypt_secret
                 secret = decrypt_secret(gateway.secret_enc)
         # Merge port grants in a guest lock so concurrent preview renewals do not revoke one another.
         payload = "/home/tenki/.band-gateway-" + uuid4().hex
-        await checked_sdk(self.sdk.fs.write_text(payload, json.dumps({"secret": secret, "ports": [port, 6080, 6081]})))
+        await checked_sdk(self.sdk.fs.write_text(payload, json.dumps({"secret": secret, "ports": sorted({port, *desktop_ports})})))
         script = '''import json,pathlib,re,sys
 p=pathlib.Path(sys.argv[1]);new=json.loads(p.read_text());p.unlink()
 assert re.fullmatch('[a-f0-9]{64}',new['secret'])
@@ -326,7 +366,7 @@ pathlib.Path('/home/tenki/.band-nginx.conf').write_text(config)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
             raise ComputerProviderError("Invalid private gateway endpoint")
         with db() as session:
-            for allowed in {port, 6080, 6081}:
+            for allowed in {port, *desktop_ports}:
                 session.merge(ComputerEndpoint(key=self.key, port=allowed, sandbox_id=self.id,
                     endpoint_enc=encrypt_secret(json.dumps({"origin": exposed.url.rstrip("/"), "secret": secret})),
                     expires_at=utcnow() + timedelta(seconds=ttl)))
@@ -334,5 +374,8 @@ pathlib.Path('/home/tenki/.band-nginx.conf').write_text(config)
 
     async def create_signed_preview_url(self, port, *, expires_in_seconds, task_id, user_id):
         from app.computer.viewer import signed_viewer_url
+        if self.display_number:
+            from app.computer.user_desktop import ports
+            port = ports(self.display_number)[0]
         await self.prepare_app_connection(seconds=expires_in_seconds, port=port)
         return SimpleNamespace(url=signed_viewer_url(task_id, user_id, self.id))
