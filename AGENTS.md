@@ -4,7 +4,7 @@
 
 BAND_BOTS is a shared workspace where people and AI teammates get work done together. "Grok Bot meets Slack" is the informal product analogy: Slack-style channels and conversation combined with persistent agents that use tools, remember context, delegate work, and operate cloud computers.
 
-The product promise is: **A shared workspace where your team and AI teammates get work done together.** The implementation uses Band for messaging and agent identity, OpenAI models with Deep Agents for execution, and E2B or Tenki for cloud computers.
+The product promise is: **A shared workspace where your team and AI teammates get work done together.** The implementation uses Band for messaging and agent identity, Deep Agents with the selected model connection (OpenAI, Anthropic, Gemini, or a verified compatible endpoint) for execution, and E2B or Tenki for cloud computers.
 
 When changing the product:
 
@@ -36,29 +36,25 @@ When changing the product:
 - `backend/app/tasks/`: durable queue, worker, hand-offs, teammate creation requests, approvals, schedules, streaming drafts, usage, and budgets. `backend/app/worker.py` is the worker process entry.
 - `backend/app/runtime/`: the per-task Deep Agent harness, internal helpers, and tools for memory, research, teammates, approvals, integrations, and computers.
 - `backend/app/computer/`: E2B and Tenki desktop lifecycle, durable disks, observations, actions, and files.
-- `backend/app/persistence/`: SQLModel database models. Authentication and configuration live in `backend/app/auth.py` and `backend/app/config.py`.
+- `backend/app/providers/`: provider connections, per-task service bindings, verification, and model/service adapters.
+- `backend/app/persistence/`: SQLModel database models. Authentication and configuration live in `backend/app/auth.py` and `backend/app/config.py`; schema migrations live in `backend/alembic/`.
 - `backend/tests/`: offline pytest regression tests.
-- `frontend/src/`: React/TypeScript UI; application components are grouped by feature in `components/{agents,chat,computer,documents,generated,settings,shared,workspace}/`. Shared API types live in `types.ts`, API helpers in `api.ts`, state in `store.ts`, and shared workspace UI types in `components/workspace/types.ts`. See `docs/architecture.md` for placement guidance.
+- `frontend/src/`: React/TypeScript UI; application components are grouped by feature in `components/{agents,chat,computer,documents,generated,people,settings,shared,workspace}/`. Shared API types live in `types.ts`, API helpers in `api.ts`, state in `store.ts`, and shared workspace UI types in `components/workspace/types.ts`. See `docs/architecture.md` for placement guidance.
 - `frontend/public/`: static assets; `frontend/dist/`: generated production UI.
 
-The API and Band listeners enqueue tasks; model reasoning runs in a separate worker. The worker persists execution in LangGraph checkpoints and publishes results through the application database. See `README.md` for configuration and deployment limits, and `CLAUDE.md` for detailed implementation notes and Tool UI installation steps.
+The API and Band listeners enqueue tasks; model reasoning runs in a separate worker. The worker persists execution in LangGraph checkpoints and publishes results through the application database. See `docs/reference.md` for configuration and [deployment limits](docs/reference.md#deployment-limits), and `CLAUDE.md` for detailed implementation notes and Tool UI installation steps.
 
 ## Build, Test, and Development Commands
 
-Use Python 3.12+ with uv and Node 20+. Run commands from the indicated directory.
+Use Python 3.12+ with uv and Node.js 22.12+. Install and start the API, worker, and Vite as described in the [README quickstart](README.md#quickstart); `CONTRIBUTING.md` covers the development workflow. The checks, run from the indicated directory:
 
 | Directory | Command | Purpose |
 | --- | --- | --- |
-| `backend/` | `uv sync --locked` | Install backend and development dependencies. |
-| `backend/` | `uv run uvicorn app.main:app --reload --port 8000` | Start the API and Band listeners. |
-| `backend/` | `uv run python -m app.worker` | Start the separate worker required for agents to answer. |
+| `backend/` | `uv run ruff check` | Minimal Python lint (unused or undefined names, bare `except`). |
 | `backend/` | `uv run pytest` | Run the offline backend suite. |
-| `frontend/` | `npm ci` | Install frontend dependencies from the lockfile. |
-| `frontend/` | `npm run dev` | Start Vite at port 5173; `/api` and `/ws` proxy to port 8000. |
-| `frontend/` | `npm run build` | Run TypeScript checks and build production assets. |
-| `frontend/` | `npm test` | Run offline worker and syntax-loader regression tests with Node's built-in runner. |
-
-For local development, run the API, worker, and Vite in separate terminals. FastAPI can serve `frontend/dist/` at port 8000 after a production build.
+| `frontend/` | `npm test` | Run offline regression tests with Node's built-in runner. |
+| `frontend/` | `npm run build` | Check the UI catalogue and TypeScript, build production assets, and check bundle budgets. |
+| `frontend/` | `npm run e2e` | Run the two-user Playwright suite against a temporary API, worker, and Vite. |
 
 ## Coding Style & UI Conventions
 
@@ -69,7 +65,7 @@ For local development, run the API, worker, and Vite in separate terminals. Fast
 - Reuse shadcn primitives in `components/ui/`; add missing ones with `npx shadcn@latest add <name>` from `frontend/`.
 - Tool UI elements live in `components/assistant-ui/elements/`, with shared helpers in `components/assistant-ui/utils/`. Add them with `npx shadcn@latest add @assistant-ui/elements-<name> --yes`, then follow the move, import, duplicate-file, and stylesheet cleanup steps in `CLAUDE.md`.
 - Keep polling, API calls, mention matching, and scroll behavior in application components; Tool UI elements remain presentational.
-- No dedicated formatter or linter is configured. The frontend build checks unused declarations and switch fallthrough.
+- Python uses ruff for a minimal lint (`uv run ruff check` in `backend/`); no formatter is configured. The frontend build checks unused declarations and switch fallthrough.
 
 ## Application Invariants
 

@@ -1,14 +1,42 @@
+# Keep secrets, local state, and build output out of the image.
+# Do not add a broad *.lock pattern: uv.lock is required.
+
+# Repository metadata and documentation
 .git
+.github
+docs
+
+# Secrets
 .env
 **/.env
+**/.env.*
+!.env.example
+backend/mcp_servers.json
+
+# Dependencies and caches
 **/.venv
 **/__pycache__
 **/*.pyc
 **/.pytest_cache
+**/.ruff_cache
 frontend/node_modules
 frontend/dist
-backend/band_slack.db
-backend/agent_checkpoints.db
+
+# Local databases, checkpoints, documents, and locks
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.sqlite
+**/*.sqlite3
+**/*.worker.lock
+**/schema-*.lock
+**/providers-*.lock
+**/computer-locks
 backend/documents
-demo-video
+
+# Logs and local QA output
+**/*.log
+.tmp-*
+frontend/test-results
+frontend/playwright-report
 output

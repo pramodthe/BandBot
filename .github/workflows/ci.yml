@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend tests
+    name: Backend lint and tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -33,6 +33,8 @@ jobs:
           cache-dependency-glob: backend/uv.lock
       - name: Install locked dependencies
         run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check
       - name: Run offline regression tests
         run: uv run pytest -q
 
@@ -58,6 +60,17 @@ jobs:
         run: npm test
       - name: Check types, UI catalogue, bundle budgets, and compiled worker
         run: npm run build
+
+  docker:
+    name: Production image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the deployable image (not pushed)
+        run: docker build --tag band-bots:ci .
 
   postgres:
     name: PostgreSQL migrations and workspace behavior

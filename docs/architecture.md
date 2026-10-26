@@ -1,26 +1,31 @@
 # Repository architecture
 
-BAND_BOTS keeps humans and persistent AI teammates in the same channel context. Band provides messaging and agent identities, OpenAI and Deep Agents execute tasks, and E2B provides channel-scoped cloud computers.
+BAND_BOTS keeps humans and persistent AI teammates in the same channel context. Band provides messaging and agent identities, Deep Agents execute tasks with the selected model connection, and E2B or Tenki provide cloud computers.
 
 ## Source map
 
 ```text
 backend/
+  alembic/            Versioned application-database migrations
   app/
     api/              REST endpoints, WebSockets, and authenticated file access
     band/             Per-user native agent management, Agent API transport and enqueue-only SDK listeners
-    computer/         E2B lifecycle, observations, actions, desktop and app proxies
-    persistence/      SQLModel models and database access
+    computer/         E2B and Tenki lifecycle, observations, actions, desktop and app proxies
+    persistence/      SQLModel models, migrations runner, and database access
+    providers/        Provider connections, task bindings, verification, and model/service adapters
     runtime/          Deep Agent harness, internal helpers, skills, and tools
     tasks/            Durable queue, worker, approvals, schedules, and usage
     workspace/        Channels, teammates, policies, skills, events, and audit
     auth.py           Sessions, password hashing, and secret encryption
+    auth_throttle.py  Signup and login attempt limits
     agent_connections.py Encrypted provider connections and runtime model pinning
+    codex_login.py    Isolated Codex app-server sign-in
     openclaw_gateway.py  Approved Gateway transport and native-tool policy verification
     config.py         Environment configuration
     documents.py      Document storage, extraction, and ingestion
     main.py           API process entry
-    openai_provider.py Shared OpenAI configuration and task model snapshots
+    openai_provider.py Legacy OpenAI settings and task model snapshots
+    recovery.py       Recovery email verification and password reset
     worker.py         Worker process entry
   tests/              Offline Python regression tests and provider fakes
 frontend/
@@ -31,26 +36,31 @@ frontend/
       computer/       Agent computers, live desktop, files, and observations
       documents/      Conversation documents, previews, and attachment cards
       generated/      Saved views, reply components, isolated app previews and input
+      icons/          Third-party brand marks (Lobe Icons, MIT)
       people/         App contacts, human chats, invitations, and optional Band accounts
-      settings/       OpenAI settings and connected-app management
+      settings/       Providers & APIs, OpenAI quick setup, and connected-app management
       shared/         Reusable application presentation components
       workspace/      App shell, navigation, sign-in, and shared UI types
       ui/             shadcn primitives
       assistant-ui/   Presentational Tool UI elements and their utilities
+    hooks/            Shared React hooks
+    lib/              Small shared utilities and loaders
     api.ts            Authenticated requests, uploads, and downloads
     store.ts          Workspace state and server-event updates
     types.ts          Shared API contracts
     app.css           Theme tokens and the sole application stylesheet
     App.tsx           Authentication and workspace bootstrap
     main.tsx          React entry
+  e2e/                Playwright two-user browser tests
   public/             Static assets served without bundling
-  scripts/            UI catalogue generation and production bundle checks
+  scripts/            UI catalogue generation, bundle checks, and the e2e server
   tests/              Offline JavaScript and compiled-worker tests
+deploy/               Container start script and DigitalOcean spec
 docs/                 Repository architecture and supporting documentation
-.github/workflows/    Automated backend and frontend checks
+.github/              CI workflows, issue and pull request templates
 ```
 
-The Add agents chooser keeps existing custom teammates on the workspace OpenAI connection and assigns connected teammates an `AgentRuntime` row pointing to an encrypted `AgentConnection`. These separate tables avoid altering existing agent columns. Every task snapshots its provider and model atomically. Legacy OpenAI migration skips connected agents. The API continues to enqueue only; the worker selects `ConnectedRuntimeModel` for Codex, Claude, Cursor, and OpenClaw and applies that same connection to task helpers. Provider credentials are refreshed only on the worker, and keys are omitted from serialized connections, agents, bootstrap responses and audit details. Cursor uses the bundled SDK bridge in a clean temporary home with an explicit empty native toolset. OpenClaw accepts only operator-configured Gateway URLs, rechecks the dedicated agent's deny-all native tool policy, and uses a fresh session per model step with the pinned backend model. Neither bridge bypasses app tool approvals or uses provider session history for recovery. See [setup](connected-agents.md).
+The Add agents chooser keeps existing custom teammates on the workspace model connection and assigns connected teammates an `AgentRuntime` row pointing to an encrypted `AgentConnection`. These separate tables avoid altering existing agent columns. Every task snapshots its provider and model atomically. Legacy OpenAI migration skips connected agents. The API continues to enqueue only; the worker selects `ConnectedRuntimeModel` for Codex, Claude, Cursor, and OpenClaw and applies that same connection to task helpers. Provider credentials are refreshed only on the worker, and keys are omitted from serialized connections, agents, bootstrap responses and audit details. Cursor uses the bundled SDK bridge in a clean temporary home with an explicit empty native toolset. OpenClaw accepts only operator-configured Gateway URLs, rechecks the dedicated agent's deny-all native tool policy, and uses a fresh session per model step with the pinned backend model. Neither bridge bypasses app tool approvals or uses provider session history for recovery. See [setup](connected-agents.md).
 
 `runtime/connected.py` adapts vendor reasoning steps to the checkpointed Deep Agents tool loop. `connected_runner.py` executes in a fresh subprocess with a temporary home, an allowlisted environment and native tools disabled. It returns structured tool selections; the vendor process never executes app tools. The graph validates tool names, executes scoped tools and records usage through the existing callbacks. This preserves approval interrupts and replay-safe application tool results without depending on a vendor process surviving an approval pause. Cancellation kills the child process tree. Computers and integrations remain governed by their existing app controllers.
 
@@ -62,7 +72,7 @@ The API process handles authentication, permissions, messages, WebSockets, Band 
 
 Visible teammates have Band identities, roles, instructions, and persistent memory. Internal helpers are scoped to one task. Channel membership and policies are enforced on the server; frontend permission controls reflect those rules.
 
-This deployment supports one API process and one worker on a shared local filesystem. The worker may run several independent tasks concurrently while maintaining order for each agent in each channel. Multiple API replicas, independent worker replicas, multi-host execution, and tenant isolation require architectural changes; see the README's deployment limits.
+This deployment supports one API process and one worker on a shared local filesystem. The worker may run several independent tasks concurrently while maintaining order for each agent in each channel. Multiple API replicas, independent worker replicas, multi-host execution, and tenant isolation require architectural changes; see the [deployment limits](reference.md#deployment-limits).
 
 ## Frontend boundaries
 

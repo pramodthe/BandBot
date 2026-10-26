@@ -1,24 +1,26 @@
-# secrets
+# Secrets
 .env
 .env.*
 !.env.example
 .cursor/mcp.json
 backend/mcp_servers.json
-agent_config.yaml
 
-# python
+# Python
 __pycache__/
-*.pyc
+*.py[oc]
 .venv/
-*.db
-*.sqlite
-*.sqlite3
+*.egg-info/
+backend/build/
+backend/wheels/
 
-# node
+# Node
 node_modules/
 dist/
+dist-ssr/
+*.local
+npm-debug.log*
 
-# test caches
+# Test and lint caches
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -27,21 +29,30 @@ dist/
 htmlcov/
 *.log
 
-# Agent runtime and local QA artifacts
+# Local databases, checkpoints, documents, and locks
+*.db
+*.sqlite
+*.sqlite3
 *.db-shm
 *.db-wal
 *.worker.lock
 backend/schema-*.lock
 backend/providers-*.lock
+backend/documents/
+computer-locks/
+
+# Local QA artifacts
 output/playwright/
 playwright-report/
 test-results/
 .playwright-cli/
-backend/documents/
 /.tmp-*/
 
-# Operating-system metadata
+# Editors and operating systems
+**/.vscode/*
+!**/.vscode/extensions.json
+.idea/
+*.suo
+*.sw?
 .DS_Store
 Thumbs.db
-# Local cross-process computer operation locks.
-computer-locks/

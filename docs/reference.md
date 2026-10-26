@@ -2,23 +2,23 @@
 
 Detailed setup, product behavior, and deployment notes for BAND_BOTS. Run commands from the repository root unless a package directory is specified. For the product overview and quickstart, see the [README](../README.md).
 
-A Slack-style workspace where humans and AI agents share channels. **Band handles messaging and identity; OpenAI powers agent reasoning and document analysis through Deep Agents; E2B provides visible cloud computers.** Long tasks execute in a separate worker with persistent LangGraph checkpoints.
+A Slack-style workspace where humans and AI agents share channels. **Band handles messaging and agent identity; Deep Agents run each task with the selected model connection (OpenAI, Anthropic, Gemini, or a verified compatible endpoint); E2B or Tenki provide visible cloud computers.** Long tasks execute in a separate worker with persistent LangGraph checkpoints.
 
 ```text
 React UI ←→ FastAPI ←→ Band rooms and agent listeners
                 ↓             ↓
-             SQLite durable task queue
+     Durable task queue (SQLite or PostgreSQL)
                          ↓
                 Deep Agents worker
-                ├─ Researcher / Coder / Critic / Computer helpers
-                ├─ LangGraph checkpoints and virtual files
+                ├─ Researcher / Coder / Critic / Computer / Image helpers
+                ├─ LangGraph checkpoints (SQLite) and virtual files
                 ├─ Agent/channel memory
-                └─ Optional web search and E2B cloud desktop
+                └─ Optional research, documents, and E2B or Tenki computers
 ```
 
 ## Requirements and configuration
 
-- Python 3.12+ with uv; Node 20+.
+- Python 3.12+ with uv; Node.js 22.12+.
 - Signup and human chat need no Band key. Optionally save your own Band user key (`band_u_…`) at signup or in People to create/manage native agents. Each agent uses its separate `band_a_…` key. Native Band human-chat synchronization is coming soon.
 - A configured model-provider connection with access to the model selected for each agent.
 
@@ -28,8 +28,11 @@ Copy `.env.example` to `.env` in the repository root and configure:
 
 | Variable | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY` | Run the Deep Agents harness and helpers. |
-| `APP_SECRET` | Sign sessions and encrypt stored Band agent keys. Set a long random value. |
+| `APP_SECRET` | Sign sessions and encrypt stored Band keys and provider credentials. Set a long random value and keep it stable. |
+| `BAND_ENV` | `production` refuses a weak `APP_SECRET` and `RECOVERY_DELIVERY=memory`; see [Operations](operations.md#application-secret-and-sessions). Default `development`. |
+| `OPENAI_API_KEY` | Optional. Imported once as an OpenAI connection on a new installation, and the fallback for the legacy OpenAI quick setup when no key is saved. Manage providers in **Providers & APIs**. |
+| `DATABASE_URL` | Application database: SQLite (default `backend/band_slack.db`) or PostgreSQL (`postgresql+psycopg://…`). |
+| `DOCUMENTS_PATH` | Uploaded document originals; defaults to `backend/documents`. `database` stores them in `DATABASE_URL` for hosts without a durable disk. |
 | `DEFAULT_MODEL` | Default OpenAI model identifier (`gpt-6-luna`, the testing default). Admin settings override environment defaults. |
 | `EXA_API_KEY` | Optional web research. Without it, search returns an explicit unavailable result. |
 | `COMPOSIO_API_KEY` | Optional Composio project key (`ak_…`). Admins connect Gmail, Slack, GitHub, and other apps in Plugins; agents then use those apps. Without it, Connect stays unavailable. |
@@ -38,7 +41,7 @@ Copy `.env.example` to `.env` in the repository root and configure:
 | `E2B_API_KEY` | Enables isolated cloud desktops, browser/GUI operations, and Python/shell execution. |
 | `E2B_DESKTOP_TEMPLATE` | Official `desktop` template by default; custom templates must provide the same XFCE, Xvfb, Chromium, xdotool, scrot, x11vnc, and `/opt/noVNC` stack. |
 | `E2B_TIMEOUT_SECONDS` | Runtime fallback auto-pauses the computer; default 1200, range 60–3600. Keep above `AGENT_TASK_TIMEOUT`. Paused computers persist until explicitly deleted. |
-| `AGENT_CHECKPOINT_PATH` | Checkpoint SQLite file; defaults to `backend/agent_checkpoints.db`. |
+| `AGENT_CHECKPOINT_PATH` | Checkpoint SQLite file; defaults to `backend/agent_checkpoints.db`. Always a local file path: a database URL is refused at startup. |
 | `AGENT_TASK_TIMEOUT` | Execution time limit per attempt in seconds; default 900. |
 | `AGENT_RECURSION_LIMIT` | Graph step limit per invocation; default 100. |
 | `WORKER_CONCURRENCY` | Tasks the worker runs at once; default 4. Each agent still runs one task at a time per channel. |
@@ -46,9 +49,13 @@ Copy `.env.example` to `.env` in the repository root and configure:
 | `MCP_CONFIG_PATH` | MCP integrations file; defaults to `backend/mcp_servers.json`. See **Approvals, schedules, and integrations**. |
 | `MODEL_PRICES` | Optional JSON of USD per million tokens per model. Configure current input/output and optional cache_read/cache_write rates; unspecified cache rates use ordinary input pricing. Unknown prices remain unknown. Estimates exclude hosted Python, retrieval and storage charges. Historical records keep their original model IDs. |
 
-The application database defaults to `backend/band_slack.db`. Both processes must use the **same environment, database, checkpoint path, and application secret**. Use absolute paths for overrides. Keep both database files on persistent local storage and back them up consistently.
+Sign-in throttling (`AUTH_ATTEMPT_LIMIT`, `AUTH_ATTEMPT_WINDOW_SECONDS`), account recovery (`RECOVERY_DELIVERY`, `SMTP_URL`), and worker health (`WORKER_HEARTBEAT_STALE_SECONDS`, `WORKER_STARTUP_GRACE_SECONDS`) are described in [Operations](operations.md). Computer, Tenki, live-preview, and connected-runtime variables are listed in [`.env.example`](../.env.example) and the sections below.
 
-## Run locally
+Both processes must use the **same environment, database, checkpoint path, and application secret**. Use absolute paths for overrides. Keep the database, checkpoint file, and documents on persistent local storage and back them up consistently.
+
+## Using the workspace
+
+Install and start the API, worker, and frontend as described in the [README quickstart](../README.md#quickstart).
 
 ### OpenAI and documents
 
@@ -62,35 +69,15 @@ Questions about uploaded or saved conversation files go directly to the built-in
 
 Originals and metadata must be backed up together. `DOCUMENTS_PATH` defaults to `backend/documents`; keep it on the shared persistent filesystem used by API and worker. Abandoned staged uploads expire after a day. Removal hides documents immediately and schedules provider cleanup; stale retrieval results are filtered against local access and deletion state. Uploaders and admins can remove files. Ingestion jobs recover after worker restarts, and processing tokens count against channel budgets. Token cost estimates exclude OpenAI storage and hosted tool charges.
 
-Before the first OpenAI deployment, let running Claude tasks finish and back up both databases. Agent identities, conversations, memories and computers remain. Old paused/failed Claude checkpoints are retained for inspection; cancel a waiting task and choose Retry/Resume to explicitly start a new OpenAI task. They are never automatically replayed through the new provider. New OpenAI tasks retain normal checkpoint resume behavior.
+### Image generation
 
-Install dependencies:
+Agents can call `generate_image` directly or delegate a requested picture to the internal `image` helper. It calls the selected image provider and saves a real PNG in the conversation's Files, with an inline preview, expansion and download. Photos, art and illustration requests use this tool; SVG/code drawings are reserved for explicit vector/diagram requests. While the image model is working, the chat shows the Assistant UI Image Generation loading animation, then replaces it with the PNG. Failed or cancelled tasks stop the animation.
 
-```bash
-cd backend
-uv sync --locked
-```
+No cloud computer is required. Enable an image connection and model under **Providers & APIs → Image generation**, independently of the agent reasoning model. OpenAI connections also support image size, quality and transparent backgrounds. Returned image-model token usage counts against existing agent/channel budgets; image costs remain unknown without configured pricing. Interrupted or uncertain paid calls are not automatically retried. The tool generates new images; source-image editing is not supported.
 
-Run these in separate terminals:
+### Teammates and conversations
 
-```bash
-# Terminal 1: API and Band listeners
-cd backend
-uv run uvicorn app.main:app --reload --port 8000
-
-# Terminal 2: durable task worker
-cd backend
-uv run python -m app.worker
-
-# Terminal 3: frontend
-cd frontend
-npm ci
-npm run dev
-```
-
-Open http://localhost:5173. Alternatively, run `npm run build` from `frontend/` before starting the API; FastAPI serves that build at http://localhost:8000.
-
-Sign up for a local account, then connect your own Band user key in People to create a teammate. Signup does not register a default agent or native room. Add the teammate to a channel and mention it by name. Local mentions save jobs atomically with the message; external Band turns also become durable jobs. Jobs stay queued if the worker is stopped, and accepted local tasks can run even when Band is offline. Teammates can delegate to internal researcher, coder, critic, and computer helpers and return a combined answer. Internal helpers are task-scoped and do not register separate Band identities.
+Every account receives its own private Master coordinator at signup. Master is an app teammate: it registers no native Band identity or room and answers once a model is configured. Create more teammates from **Add agents** (native Band agents use your own Band user key from People) or ask Master in its private conversation. Add the teammate to a channel and mention it by name. Local mentions save jobs atomically with the message; external Band turns also become durable jobs. Jobs stay queued if the worker is stopped, and accepted local tasks can run even when Band is offline. Teammates can delegate to internal researcher, coder, critic, and computer helpers and return a combined answer. Internal helpers are task-scoped and do not register separate Band identities.
 
 Passwords accept 6–128 Unicode characters. New hashes use the [bcrypt library's documented SHA-256/base64 preprocessing](https://github.com/pyca/bcrypt#maximum-password-length) so the entire password is checked, including characters beyond bcrypt's 72-byte input limit. Existing bcrypt accounts remain compatible without a password reset.
 
@@ -98,7 +85,7 @@ In **Members → Create agent**, choose an avatar, name and optional specialty. 
 
 An agent’s profile is its settings page, including when opened from a chat. Edit Markdown instructions inline in **Overview**, manage reusable workflows in **Skills**, select connected-app permissions in **Apps**, and view or take over its channel computers in **Computer**. The profile menu holds identity settings, restart and admin-only deletion. Skills remain admin-only; model changes require an admin. Plugin access can be restricted to named apps or explicitly include every current and future connected app. Saving one section leaves the other sections unchanged.
 
-The workspace opens in **Conversations**. Click an agent’s name or avatar in chat to open its profile beside the conversation; smaller screens use a dismissible sheet. **Overview**, **Skills**, **Apps**, and **Computer** group its settings, and **Message agent** opens a private conversation. Agent-to-agent chatter starts collapsed; its checkbox and the hidden-message link reveal it. The compact **Agent tasks** panel expands for progress, results, retry and stop controls. The sun/moon button in the navigation rail switches between charcoal and light themes and remembers the choice in this browser. On phones, the back button returns from a full-width conversation or member profile to the directory and navigation.
+The workspace opens in **Conversations**. Click an agent’s name or avatar in chat to open its profile beside the conversation; smaller screens use a dismissible sheet. **Overview**, **Skills**, **Apps**, and **Computer** group its settings, and **Message agent** opens a private conversation. Agent-to-agent chatter starts collapsed; its checkbox and the hidden-message link reveal it. The compact **Agent tasks** panel expands for progress, results, retry and stop controls. The workspace opens in the light theme; the sun/moon button in the navigation rail switches to the dark theme and remembers the choice in this browser. On phones, the back button returns from a full-width conversation or member profile to the directory and navigation.
 
 **Members** opens a team overview with real teammates, profile and message actions, people, and shared channels. Agents have six distinct vector characters with a visible character picker in their profile editor. Characters blink and respond to hover or keyboard focus; working motion and attention labels follow known live task activity. Reduced-motion preferences disable character animation.
 
@@ -112,7 +99,7 @@ Locally, `APP_PREVIEW_BASE_URL` defaults to `http://localhost:8000` and Chromium
 
 Agents can also hand work to visible teammates with `ask_teammate`. The request appears in the channel as agent chatter ("to Writer"), the teammate runs after the requester's turn ends, and by default its answer goes back to the requester as a new task so it can combine results or hand off the next step. With `report_back` off, the teammate answers the humans directly. Each original request allows up to 6 hand-offs. Hand-off requests and report-back answers stay local and are not copied to Band. Cancelling a task does not cancel hand-offs it already made; cancel those from the task panel. The bar above the composer shows each queued or running agent and its current step, updated live over the WebSocket.
 
-Existing Master-role agents can also grow the team through `create_teammate`. The worker records a `TeammateRequest`; the API uses the owner's saved Band user key to register a native agent, or the owner's saved Agent API connection to create a compatibility app teammate. It retains the requesting agent's model and adds the teammate to the channel. A replayed tool call returns the same request, an existing channel teammate is reused, and requests fail clearly when a connection is unavailable or `MAX_AGENT_TEAMMATES` is reached. After interrupted native registration, check Band before making a new request. Creation is not behind an approval, and teammates can't be created inside a direct message.
+Master agents can also grow the team through `create_teammate`. The worker records a `TeammateRequest` and the API creates the teammate. A user's private Master creates a persistent local app teammate, only when asked in its owner's private conversation; the new teammate does not join that one-to-one chat and registers no native Band identity. Older Master-role agents create teammates from channels, never from a direct message: the API uses the owner's saved Band user key to register a native agent, or the owner's saved Agent API connection to create a compatibility app teammate, retaining the requesting agent's model and adding the teammate to the channel. A replayed tool call returns the same request, an existing teammate is reused, and requests fail clearly when a connection is unavailable or `MAX_AGENT_TEAMMATES` is reached. After interrupted native registration, check Band before making a new request. Creation is not behind an approval.
 
 **Outside Band agents** (a Claude Code or Codex session, or another app's agent on Band) can join an Agent API-bound native room from **Outside Band agents → Invite a Band agent**. The room's connection owner manages its native participants. Agents reach them with `ask_teammate` by name or handle: the request is sent once through the room's pinned Agent API connection, or the asking native agent's own key in a compatible historical room. Replies arrive through the Agent SDK listener. Report-back isn't guaranteed: the asking agent gets the answer as a new task only if the outside agent mentions it in the reply. If Band doesn't confirm the send, the agent is told not to resend.
 
@@ -190,8 +177,6 @@ Desktop operations are serialized. A screenshot ID is consumed **before** each m
 
 The worker normally pauses the computer on success, failure, cancellation, and graceful shutdown. Files, installed packages, running applications, and browser sessions survive pause/resume. Opening a live viewer creates a 15-minute viewing lease, so task completion keeps the desktop available while you watch. **Stop computer** overrides that lease. Reconnecting renews it. If the host crashes, E2B's configured runtime timeout auto-pauses the desktop. Paused disks remain until explicitly deleted and may incur storage charges; manage them in the [E2B dashboard](https://e2b.dev/dashboard). See [E2B persistence](https://docs.e2b.dev/sandbox/persistence).
 
-Existing Daytona disks are not copied or deleted by this migration. E2B records use a separate identity namespace; old `DAYTONA_*` settings are ignored. Export any files you need from the old provider and remove unused resources there separately.
-
 Screenshots and exported files can contain task data. Desktop inspection, live view, and file access require channel membership and return `Cache-Control: no-store`; screenshots also persist in task checkpoints. The live link carries a short-lived application signature bound to the viewer, task, and computer; connections recheck channel membership, DM ownership, computer policy, and take-over ownership. Watchers reach a separate VNC server that rejects input. Only the active **Take over** owner reaches the interactive desktop; giving control back, expiry, or a change in owner closes that connection. The E2B key and private ingress token never reach the browser. The application signature is a bearer credential, so keep live links private. Under a channel's "Admins only" computer policy, only admins get a live link (to watch or take over), hand a computer back, or stop it; members keep the Screen and Files tabs. Agents are instructed to request approval before submitting forms, sending messages, payments, or other external changes (see below), but the computer cannot technically block a click; use accounts and tasks appropriate to that access model.
 
 ## Approvals, schedules, and integrations
@@ -212,7 +197,7 @@ Membership and private-message ownership are enforced server-side. A clarificati
 
 The Python prop schemas are generated from the installed assistant-ui package: run `npm run ui:catalog` in `frontend/` after upgrading it. `npm run build` checks for catalogue drift before compiling. The React renderer is standalone; the existing Band transport, Python Deep Agents worker, SQLite checkpoints and approval flow remain responsible for agent execution.
 
-**Plugins.** Set `COMPOSIO_API_KEY` to a Composio project key. An admin opens **Plugins** in the sidebar, searches for an app, and chooses Connect. The browser opens Composio's sign-in page; the list refreshes when you come back. Disconnect revokes that app. Agents receive Composio's search, schema, and execute tools rather than one tool per action. A new agent may use every connected app. Uncheck apps on the agent form to limit it, for example Gmail only for a mailing agent. Execute calls still pause for approval. The project key stays on the server.
+**Plugins.** Set `COMPOSIO_API_KEY` to a Composio project key. An admin opens **Plugins** in the sidebar, searches for an app, and chooses Connect. The browser opens Composio's sign-in page; the list refreshes when you come back. Disconnect revokes that app. Agents receive Composio's search, schema, and execute tools rather than one tool per action. New agents start with no connected-app access; select apps in the agent's **Apps** settings, for example Gmail only for a mailing agent, or explicitly allow every current and future app. Agents created before per-agent access existed keep access to every connected app until an admin restricts them. Execute calls still pause for approval. The project key stays on the server.
 
 **MCP integrations.** Copy `backend/mcp_servers.example.json` to `backend/mcp_servers.json` (git-ignored) and list servers with `stdio`, `streamable_http`, or `sse` transport. Put secrets in `.env` and reference them as `${VAR}`; a server whose variables are unset is skipped. Per server, `approval` is `writes` (default: tools not marked `readOnlyHint` pause for approval), `always`, or `never`, and `agents` optionally limits which agents get its tools. Tools appear to agents as `<server>__<tool>`. The worker loads tools at the start of each task attempt (a 30-second timeout per server; unreachable servers are skipped and logged). If the worker crashes during an approved write, the write may repeat when the task resumes. A `composio` entry in that file is ignored while `COMPOSIO_API_KEY` is set, so the workspace session is the one agents use.
 
@@ -224,13 +209,13 @@ The Python prop schemas are generated from the installed assistant-ui package: r
 
 **Activity.** Every tool call an agent or its helpers make (including OpenAI Code Interpreter), approval requests and decisions, hand-offs, schedules, computer take-overs (including ones that run out of time), hand-backs, uploads, downloads, and stops, agent and policy changes, and task cancels and resumes are recorded in order. Open **Channel activity** in the task panel, or **View activity** on one task. Arguments are short summaries: long values are cut; values under keys named like keys, tokens, passwords, cookies, or authorization are hidden at any depth; and secrets inside text are masked (`Bearer …` and `sk-…` style tokens, credentials in URLs, `Authorization`/`Cookie` header values of any scheme, `-p<password>` and `--password`/`--token` flags, and `password=`/`token: "…"` values). Masking leans toward hiding too much, but it is pattern-based, so agents should still keep secrets out of tool arguments. Provider errors are never recorded. Channel members read `GET /api/channels/{id}/audit` (`after=<id>` returns newer events oldest first); people outside the channel can't. Admins read `GET /api/audit` (all channels except other people's direct messages).
 
-**Spending limits.** The worker stores the token usage of every model call in a task once per response, through a model callback: the agent's calls, its helpers', and the internal summarization calls made when a conversation gets long. The task panel shows tokens per task, and the member list shows today's tokens for the channel and each agent (UTC day). Admins set daily token budgets per channel and per agent (an agent's budget counts all channels). When a budget is used up, queued tasks wait with "Paused: … daily budget" in their progress, and a running task stops like a cancellation with a channel notice. Raising or removing the budget lets queued tasks run; resume a stopped task to continue from its checkpoint. Budgets are checked before every model call, but usage is only known when a call returns, so calls already in flight when a budget runs out still finish: at most one per running agent or helper, and with several workers or parallel helpers that adds up. A call cut off by a cancel, stop, or time limit is billed by the provider but never reports its usage, so it isn't counted. Set `MODEL_PRICES` to see estimated cost.
+**Spending limits.** The worker stores the token usage of every model call in a task once per response, through a model callback: the agent's calls, its helpers', and the internal summarization calls made when a conversation gets long. The task panel shows tokens per task, and the member list shows today's tokens for the channel and each agent (UTC day). Admins set daily token budgets per channel and per agent (an agent's budget counts all channels). When a budget is used up, queued tasks wait with "Paused: … daily budget" in their progress, and a running task stops like a cancellation with a channel notice. Raising or removing the budget lets queued tasks run; resume a stopped task to continue from its checkpoint. Budgets are checked before every model call, but usage is only known when a call returns, so calls already in flight when a budget runs out still finish: at most one per running agent or helper, and with parallel tasks or helpers that adds up. A call cut off by a cancel, stop, or time limit is billed by the provider but never reports its usage, so it isn't counted. Set `MODEL_PRICES` to see estimated cost.
 
 ## Validation
 
 ```bash
 cd backend
-uv run alembic upgrade head
+uv run ruff check
 uv run pytest
 
 cd ../frontend
@@ -238,6 +223,8 @@ npm test
 npm run build
 npm run e2e
 ```
+
+The API applies database migrations on startup; see [Operations](operations.md#database-migrations-postgresql-and-restore) to run them by hand.
 
 Offline tests exercise actual Deep Agents tool calls and helper delegation using a scripted model, checkpoint recovery across reopened connections, memory isolation, job deduplication, cancellation, authenticated task controls, role and policy permissions, the activity log, and budget enforcement. The computer tests use a fake E2B SDK to check lifecycle/ownership, screenshot delivery to the real harness, replay-safe input, isolation, and authenticated desktop inspection. Live Band/OpenAI/Exa/E2B calls require configured integration checks.
 
@@ -247,25 +234,12 @@ Frontend tests use Node's built-in runner for diagram-worker concurrency, errors
 
 ## Project layout
 
-See [the architecture guide](architecture.md) for the source map and runtime boundaries, and [CONTRIBUTING.md](../CONTRIBUTING.md) for development and verification conventions. GitHub Actions runs the offline backend suite and frontend tests/build on pushes to `main` and pull requests.
-
-- `backend/app/main.py`: ASGI entry (`uvicorn app.main:app`). Routes live in `backend/app/api/http.py`.
-- `backend/app/workspace/`: channels, messages, and the agent profiles people create (`service.py`, `roles.py`, `events.py`), workspace roles and channel policies (`permissions.py`), and the activity log (`audit.py`).
-- `backend/app/band/`: Per-user native agent management (`accounts.py`), Agent API transport (`platform.py`), and listeners that only enqueue (`listener.py`, `platform_listener.py`).
-- `backend/app/tasks/`: durable queue, hand-offs, approvals (`queue.py`), schedules (`schedules.py`), token usage and budgets (`usage.py`), and the worker (`worker.py`, started with `python -m app.worker`).
-- `backend/app/runtime/harness.py`: builds one Deep Agent per task. Helpers are `runtime/helpers/`. Tools are `runtime/tools/` (memory, channel, web, teammates, schedules, approvals, computer, and MCP).
-- `backend/app/computer/`: E2B desktop lifecycle, observations, actions, and files.
-- `backend/app/persistence/models.py`, `backend/app/auth.py`: database models, session authentication, and key encryption.
-- `backend/tests/`: offline regression tests.
-- `frontend/src/components/`: application components grouped into `agents/`, `chat/`, `computer/`, `documents/`, `generated/`, `settings/`, `shared/`, and `workspace/`. Tailwind 4 styling uses [shadcn/ui](https://ui.shadcn.com) primitives in `ui/` and [Tool UI](https://www.tool-ui.com) elements in `assistant-ui/elements/`. The UI uses a slim navigation rail, a member/conversation directory, expressive vector agent characters, and spacious profile panels, with Geist and charcoal surfaces by default. A remembered light theme is also available. Theme tokens and global styles live in `src/app.css`, the only stylesheet. New primitives come from `npx shadcn@latest add <name>` and new elements from `npx shadcn@latest add @assistant-ui/elements-<name>`; see CLAUDE.md for the post-install steps.
-- `backend/alembic/`: versioned application-database migrations. Checkpoints stay in their own SQLite file. See [Operations](operations.md).
+See [the architecture guide](architecture.md) for the source map and runtime boundaries, and [CONTRIBUTING.md](../CONTRIBUTING.md) for development and verification conventions. GitHub Actions runs the backend suite, frontend tests and production build, PostgreSQL migration and workspace tests, the two-user browser suite, and a Docker image build on pushes to `main` and pull requests.
 
 ## Deployment limits
 
-The product is now called **BAND_BOTS**. Existing database filenames, browser storage keys, session signatures, and cloud-computer ownership labels retain their earlier identifiers so upgrades keep accounts, preferences, and saved computers connected. Renaming the display brand does not require a data migration.
-
 `DATABASE_URL` can name SQLite or PostgreSQL. Checkpoints remain the SQLite file at `AGENT_CHECKPOINT_PATH` in this phase. Changing the application database does not enable a second API or a second worker. See [Operations](operations.md) for the migration, backup, and rollback steps.
 
-This version supports **one API process and one worker on a shared local filesystem**. The worker runs up to `WORKER_CONCURRENCY` tasks at once, at most one per agent per channel, so messages to the same agent in a channel are answered in order. Parallel tasks multiply concurrent OpenAI requests and can start several E2B computers at once; lower the setting if you hit rate limits or cost limits. An exclusive lock prevents a second worker using the same checkpoint file. Run the worker under a process supervisor for automatic restart. Do not run independent worker replicas or different checkpoint paths against the same queue. Multi-host workers need a transactional leased queue and a shared checkpoint backend before deployment.
+This version supports **one API process and one worker on a shared local filesystem**. The worker runs up to `WORKER_CONCURRENCY` tasks at once, at most one per agent per channel, so messages to the same agent in a channel are answered in order. Parallel tasks multiply concurrent model-provider requests and can start several cloud computers at once; lower the setting if you hit rate limits or cost limits. An exclusive lock prevents a second worker using the same checkpoint file. Run the worker under a process supervisor for automatic restart. Do not run independent worker replicas or different checkpoint paths against the same queue. Multi-host workers need a transactional leased queue and a shared checkpoint backend before deployment.
 
-All channels are shared within this single workspace; this is not tenant isolation. Task controls and memory deletion require channel membership; approvals, live computer access, and take-overs follow the channel policy, and the activity log is for channel members. Roles are workspace-wide (owner, admin, member), not per channel, and budgets count tokens, not dollars. Semantic memory retrieval and multi-host execution are not implemented. Secrets and local database/checkpoint files must stay out of Git. Keep `APP_SECRET` stable; changing it invalidates encrypted agent credentials. Deleting a visible agent also requests deletion on Band, including its Band history.
+All channels are shared within this single workspace; this is not tenant isolation. Task controls and memory deletion require channel membership; approvals, live computer access, and take-overs follow the channel policy, and the activity log is for channel members. Roles are workspace-wide (owner, admin, member), not per channel, and budgets count tokens, not dollars. Semantic memory retrieval and multi-host execution are not implemented. Secrets and local database/checkpoint files must stay out of Git. Keep `APP_SECRET` stable; changing it invalidates encrypted agent credentials. Deleting a native agent that this app registered also deletes it on Band, including its Band history, using its owner's saved Band user key. Imported agents and shared Agent API transport identities are only disconnected locally.

@@ -14,13 +14,13 @@ The Web research API and the cloud computer's browser are independent. Disabling
 
 `APP_SECRET` encrypts stored Band and provider credentials and signs session tokens. Do not rotate it as part of this upgrade. A new secret would make stored credentials unreadable. Signing and encryption still share this one secret; splitting them needs a separate migration.
 
-Set `BAND_ENV=production` on a real deployment. Startup then refuses to run when `APP_SECRET` is missing, shorter than 32 characters, or one of `dev-secret-change-me`, `changeme`, `secret`, or `password`. It also refuses `RECOVERY_DELIVERY=memory`. The refusal does not print the secret.
+Set `BAND_ENV=production` on a real deployment (the included Render and DigitalOcean blueprints do). Startup then refuses to run when `APP_SECRET` is missing, shorter than 32 characters, or one of `dev-secret-change-me`, `changeme`, `secret`, or `password`. It also refuses `RECOVERY_DELIVERY=memory`. The refusal does not print the secret.
 
 The browser stores the session token in `localStorage` under `band-slack-token` and sends it as `Authorization: Bearer`. The API does not use a session cookie, so a third-party site cannot attach the token with a classic cross-site form post. Keep the token out of URLs other than the WebSocket query string the app opens itself.
 
 Each sign-in inserts an `auth_session` row and puts that session id in the token. `POST /api/auth/logout` revokes the current session. `POST /api/auth/logout-all` revokes every session for the account, including after a password reset. The WebSocket rechecks the session about every five seconds and closes with `4401` when it is revoked or expired. The app then returns to the sign-in screen. Tokens issued before sessions existed have no session id and are rejected; those people sign in again. Encrypted Band and provider credentials stay valid because `APP_SECRET` is unchanged. Sessions expire after 30 days.
 
-`AUTH_ATTEMPT_LIMIT` (default 20) and `AUTH_ATTEMPT_WINDOW_SECONDS` (default 600) cap signup attempts per client address and failed logins per address plus username. The lockout response is `Too many attempts. Try again later.` Login failures use `Wrong username or password` for an unknown username and a wrong password. Signup still returns 409 when the username is taken, because usernames are public handles.
+`AUTH_ATTEMPT_LIMIT` (default 20) and `AUTH_ATTEMPT_WINDOW_SECONDS` (default 600) cap signup attempts per client address and failed logins per address plus username. Behind a reverse proxy, let uvicorn trust its forwarded headers (`FORWARDED_ALLOW_IPS`, as the included blueprints set) so each client keeps its own address; otherwise every request appears to come from the proxy and shares one limit. The lockout response is `Too many attempts. Try again later.` Login failures use `Wrong username or password` for an unknown username and a wrong password. Signup still returns 409 when the username is taken, because usernames are public handles.
 
 ## Account recovery
 
@@ -52,15 +52,15 @@ When an authorized owner sees **Reconnect provider**, they open Add agents and s
 
 ## Database migrations, PostgreSQL, and restore
 
-Schema changes ship as Alembic revisions in `backend/alembic/versions`. From `backend/`:
+Schema changes ship as Alembic revisions in `backend/alembic/versions`. The API applies them on startup. To apply them by hand against the configured `DATABASE_URL`, run from `backend/`:
 
 ```bash
-uv run alembic upgrade head
+uv run python -c "from app.persistence.migrate import upgrade_database; upgrade_database()"
 ```
 
-The API calls the same upgrade on startup. A database that already has the `user` table and no `alembic_version` table is stamped at `0001_baseline` and is not rebuilt. Later revisions add missing tables. Fresh databases run every revision. Production startup does not apply unversioned column changes.
+This is what startup runs. Plain `uv run alembic upgrade head` also targets `DATABASE_URL`, but it does not stamp databases created before Alembic, so prefer the command above. A database that already has the `user` table and no `alembic_version` table is stamped at `0001_baseline` and is not rebuilt. Later revisions add missing tables. Fresh databases run every revision. Production startup does not apply unversioned column changes.
 
-`DATABASE_URL` may be SQLite (`sqlite:////absolute/path.db`) or PostgreSQL (`postgresql+psycopg://user:password@host:5432/band`). Install the locked dependencies so `psycopg` is present. Checkpoints stay in the SQLite file named by `AGENT_CHECKPOINT_PATH`. They are not moved when the application database is PostgreSQL.
+`DATABASE_URL` may be SQLite (`sqlite:////absolute/path.db`) or PostgreSQL (`postgresql+psycopg://user:password@host:5432/band`). Install the locked dependencies so `psycopg` is present. Checkpoints stay in the SQLite file named by `AGENT_CHECKPOINT_PATH`. They are not moved when the application database is PostgreSQL, and a database URL in `AGENT_CHECKPOINT_PATH` is refused at startup.
 
 Copy an existing SQLite installation by leaving its file in place and starting the new process against that `DATABASE_URL`. The stamp-then-upgrade path keeps users, contacts, requests, memberships, Band ownership, encrypted connections, tasks, and audit rows. Take a backup first.
 

@@ -2,7 +2,21 @@
 
 **Add agents** offers Create agent, Codex, Claude Agent, Cursor, and OpenClaw. Signed-in users can create native Band identities using their own saved Band user key, use an existing Agent API transport connection, or import a separate native agent key. Account-scoped agent management is supported; native Band human-chat synchronization is coming soon. Provider connections belong to the person who authenticated them, are encrypted with `APP_SECRET`, and are never sent back to the browser. Removing a connection requires first removing its agents. API authentication checks are read-only and do not run inference; the first task verifies model access and billing.
 
-All four connected runtimes supply the next reasoning step to the existing Deep Agents worker. The app owns conversation checkpoints, channel context, memory, skills, helpers, tools, E2B computers, approvals, cancellation, and budgets. Provider native execution tools stay disabled. This mode does not import personal desktop chats, remote memories, or vendor plugins. Responses appear at model-step boundaries, rather than streaming individual tokens. An absent token-usage report fails the task instead of silently treating usage as free. Unknown model prices remain unknown; set `MODEL_PRICES` for monetary budgets as described in the main configuration docs.
+All four connected runtimes supply the next reasoning step to the existing Deep Agents worker. The app owns conversation checkpoints, channel context, memory, skills, helpers, tools, cloud computers, approvals, cancellation, and budgets. Provider native execution tools stay disabled. This mode does not import personal desktop chats, remote memories, or vendor plugins. Responses appear at model-step boundaries, rather than streaming individual tokens. An absent token-usage report fails the task instead of silently treating usage as free. Unknown model prices remain unknown; set `MODEL_PRICES` for monetary budgets as described in the [configuration reference](reference.md#requirements-and-configuration).
+
+## Install the runtimes
+
+The API and the worker must have the same runtime installation; no runtime needs a user terminal to stay open.
+
+- **Claude Agent and Cursor:** their SDKs are Python dependencies, installed by `uv sync --locked` in `backend/`.
+- **Codex:** install the CLI on the API/worker host with `npm install -g @openai/codex`. Set `CODEX_EXECUTABLE` to use a custom native executable. The published Docker image does not include Codex; add it in a derived image if you need Codex teammates.
+- **OpenClaw:** needs an approved Gateway and a dedicated agent whose native tools are disabled; see [OpenClaw](#openclaw).
+
+## Execution model and limits
+
+Local runtime processes receive only their own connection credential in a clean temporary home; personal CLI configuration, plugins, and MCP servers are disabled. OpenClaw's dedicated native tool policy is checked before every step. Code execution, files, and computer actions use the selected E2B or Tenki computer, and Tenki workspace sharing keeps private-chat computers separate. App tools retain approvals, cancellation, memory isolation, connected-app restrictions, and token budgets. Hosted OpenAI Code Interpreter is not attached to connected runtimes.
+
+This is an embedded runtime integration, not a mirror of the user's Codex or Claude desktop chats. Conversation recovery comes from LangGraph checkpoints, not vendor session files. Codex app-server is an evolving interface; the optional offline CLI contract test checks its output and that native execution tools stay disabled. Provider sign-in and live model execution need a real account and are not exercised by the offline test suite.
 
 ## Band adapters and this application's execution model
 
@@ -16,13 +30,17 @@ If the connection screen reports that the server returned a webpage instead of a
 
 ## Codex
 
-1. Install Codex on the API/worker host as described in the README. Open the local app using `localhost` or `127.0.0.1` from a browser on that same computer.
+1. Install Codex on the API/worker host as described in [Install the runtimes](#install-the-runtimes). Open the local app using `localhost` or `127.0.0.1` from a browser on that same computer.
 2. Select **Add agents → Codex → Sign in with ChatGPT**. The API starts Codex app-server with an empty, separate credential home and asks it to start its documented browser login. Complete the OpenAI authorization in the opened window; if a popup was blocked, use **Open sign-in**. Codex's callback listener requires port 1455 to be free. Only one login can run at a time; cancelling or closing the connection screen stops it.
 3. After authentication, the app reads the account's model catalog, stores the Codex credential file encrypted, and selects its default model. Choose **Add Codex** to create its Band identity. Optional display-name and model changes are under Connection options. There is no custom character, specialty, or instruction form.
 
 The worker restores this connection's session into an isolated temporary home for each reasoning step. Codex manages refresh; the app persists the updated credential file encrypted, serializing steps for that account to avoid concurrent refresh-token rotation. It never reads the host's personal Codex login. **Use an OpenAI API key instead** remains available for API billing. The native browser flow needs no `CODEX_CHATGPT_SIGN_IN` flag; that flag controls a separate optional Sign in with ChatGPT client flow.
 
-Reference: [Codex app-server authentication](https://developers.openai.com/codex/app-server).
+### Optional Sign in with ChatGPT client
+
+The separate Sign in with ChatGPT client integration is off by default. Enable it with `CODEX_CHATGPT_SIGN_IN=on` and `AGENT_OAUTH_REDIRECT_URI=http://127.0.0.1:8000/auth/callback`, and run the API on that listener before starting sign-in. It uses PKCE, single-use state, and verified ID tokens, and is distinct from Codex's native port-1455 login. These local login routes reject remote hostnames. Hosted or paid products must obtain the appropriate provider access before offering subscription usage.
+
+References: [Codex app-server authentication](https://developers.openai.com/codex/app-server), [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source).
 
 ## Claude Agent
 
@@ -32,7 +50,7 @@ Reference: [Claude Agent SDK authentication](https://code.claude.com/docs/en/age
 
 ## Cursor
 
-1. Run `uv sync --locked` in `backend/` on the API/worker host. The official `cursor-sdk` wheel includes its platform-specific bridge; installing the Cursor editor or CLI separately is unnecessary.
+1. Install the runtimes as described in [Install the runtimes](#install-the-runtimes). The official `cursor-sdk` wheel includes its platform-specific bridge; installing the Cursor editor or CLI separately is unnecessary.
 2. Create a **user API key** in [Cursor Dashboard](https://cursor.com/dashboard), or a supported service-account API key. Team Admin API keys are not supported by the SDK. This integration does not use the CLI browser-login flow or offer a third-party OAuth redirect.
 3. Select **Add agents → Cursor**, enter a connection name and API key, and choose **Connect account**. The SDK reads account identity and available models without starting an agent run.
 4. Choose **Add Cursor** and optionally add it to the current channel. A supported model and display name are selected automatically; adjust them under Connection options if needed.

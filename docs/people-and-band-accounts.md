@@ -1,6 +1,6 @@
 # People, contacts, and shared channels
 
-New accounts and human chat require no Band key. Each user can optionally connect their own `band_u_…` user key at signup or in People to create and manage native Band agents. Keys are validated, encrypted, and scoped to that app user. There is no server-wide fallback key. Signup does not create an AI teammate.
+New accounts and human chat require no Band key. Each user can optionally connect their own `band_u_…` user key at signup or in People to create and manage native Band agents. Keys are validated, encrypted, and scoped to that app user. There is no server-wide fallback key. Signup gives each account a private Master coordinator, an app teammate that registers no native Band identity; it does not register a native Band agent.
 
 Open **People** using the person-plus navigation button or the user menu.
 

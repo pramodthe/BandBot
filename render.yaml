@@ -1,7 +1,10 @@
-# API and worker share one instance so they can use the same database files.
+# Render blueprint. API and worker share one instance so they can use the
+# same database files (deploy/start.sh).
+#
 # Free instances have no persistent disk: the workspace resets when the
 # service sleeps or redeploys. Move to a paid plan and attach a disk at
 # /var/data before relying on accounts, messages, or uploaded files.
+# Each user connects their own Band key in the app; there is no server key.
 services:
   - type: web
     name: band-bots
@@ -13,6 +16,12 @@ services:
     dockerContext: .
     healthCheckPath: /api/health
     envVars:
+      - key: BAND_ENV
+        value: production
+      # Trust X-Forwarded-For from Render's proxy, the only ingress, so
+      # sign-in throttling sees real client addresses.
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"
       - key: WORKER_CONCURRENCY
         value: "1"
       - key: DATABASE_URL
@@ -23,8 +32,6 @@ services:
         value: /var/data/documents
       - key: APP_SECRET
         generateValue: true
-      - key: BAND_USER_API_KEY
-        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: EXA_API_KEY
