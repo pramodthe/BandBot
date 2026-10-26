@@ -1,0 +1,127 @@
+"""Short-lived, membership-checked WebSocket access to private E2B and Tenki desktops."""
+from __future__ import annotations
+
+import asyncio
+
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from itsdangerous import BadSignature, URLSafeTimedSerializer
+from websockets.asyncio.client import connect
+from websockets.exceptions import WebSocketException
+
+from app.computer.ingress import endpoint, headers as ingress_headers
+from app.config import settings
+from app.persistence.models import AgentTask, ChannelMember, DirectMessage, User, db, utcnow
+from app.workspace.permissions import allowed
+
+router = APIRouter()
+VIEW_SECONDS = 15 * 60
+_signer = URLSafeTimedSerializer(settings.app_secret, salt="band-e2b-desktop")
+
+
+def signed_viewer_url(task_id: str, user_id: int, sandbox_id: str) -> str:
+    token = _signer.dumps({"task": task_id, "user": user_id, "sandbox": sandbox_id, "nonce": uuid4().hex})
+    return f"/api/computers/view/{token}/websockify"
+
+
+def resolve_viewer(token: str) -> tuple[str, str, float]:
+    from app.computer.desktop import active_control, computer_key, sandbox_record
+    try:
+        data, issued_at = _signer.loads(token, max_age=VIEW_SECONDS, return_timestamp=True)
+    except BadSignature:
+        raise HTTPException(403, "Desktop link expired or invalid. Reconnect from the computer panel.") from None
+    with db() as session:
+        task = session.get(AgentTask, data.get("task"))
+        user = session.get(User, data.get("user"))
+        if task is None or user is None:
+            raise HTTPException(403, "Desktop access unavailable")
+        from app.computer.access import require_computer_owner
+        require_computer_owner(session, task, user.id)
+        dm = session.get(DirectMessage, task.channel_id)
+        if (dm and dm.user_id != user.id) or not session.get(ChannelMember, (task.channel_id, "human", user.id)):
+            raise HTTPException(403, "Desktop access unavailable")
+        if not allowed(session, user.id, task.channel_id, "computer_control"):
+            raise HTTPException(403, "Desktop access unavailable")
+        record = sandbox_record(computer_key(task))
+        if not record or record.sandbox_id != data.get("sandbox") or record.status != "running":
+            raise HTTPException(409, "Desktop is paused or has changed. Reconnect from the computer panel.")
+        control = active_control(computer_key(task))
+        interactive = control is not None and control.user_id == user.id
+        # A separate VNC server enforces view-only access even for a modified browser client.
+        host, secret = endpoint(computer_key(task), record.sandbox_id, desktop_port(computer_key(task), interactive))
+        return host, secret, max(0, VIEW_SECONDS - (utcnow() - issued_at).total_seconds())
+
+
+def desktop_port(key, interactive):
+    from app.persistence.models import UserDesktop
+    from app.computer.user_desktop import ports
+    with db() as session:
+        screen = session.get(UserDesktop, key)
+    return ports(screen.display)[0 if interactive else 1] if screen else 6080 if interactive else 6081
+
+
+def viewer_route(token):
+    from app.computer.desktop import active_control, computer_key
+    host, secret, remaining = resolve_viewer(token)
+    data = _signer.loads(token, max_age=VIEW_SECONDS)
+    with db() as session:
+        task = session.get(AgentTask, data["task"])
+    key = computer_key(task)
+    control = active_control(key)
+    port = desktop_port(key, control is not None and control.user_id == data["user"])
+    return host, ingress_headers(key, secret, port), remaining, (host, port)
+
+
+@router.websocket("/api/computers/view/{token}/websockify")
+async def desktop_socket(websocket: WebSocket, token: str):
+    try:
+        host, upstream_headers, remaining, route = viewer_route(token)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    # A signed URL is a bearer credential; never forward the user's app token or log either credential.
+    try:
+        async with connect(f"wss://{host}/websockify", additional_headers=upstream_headers,
+                           subprotocols=["binary"], open_timeout=20, max_size=8 * 1024 * 1024) as upstream:
+            await websocket.accept(subprotocol="binary")
+            async def send_upstream():
+                while True:
+                    event = await websocket.receive()
+                    if event["type"] == "websocket.disconnect":
+                        return
+                    try:
+                        if viewer_route(token)[3] != route:
+                            return  # A take-over ended or changed owner; reconnect with the current permissions.
+                    except HTTPException:
+                        return
+                    await upstream.send(event.get("bytes") if event.get("bytes") is not None else event.get("text", ""))
+            async def send_downstream():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+            async def check_access():
+                while True:
+                    await asyncio.sleep(5)
+                    try:
+                        if viewer_route(token)[3] != route:
+                            return
+                    except HTTPException:
+                        return
+            jobs = [asyncio.create_task(send_upstream()), asyncio.create_task(send_downstream()),
+                    asyncio.create_task(check_access())]
+            try:
+                await asyncio.wait(jobs, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for job in jobs:
+                    job.cancel()
+                await asyncio.gather(*jobs, return_exceptions=True)
+    except (OSError, TimeoutError, WebSocketException, WebSocketDisconnect):
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except (RuntimeError, WebSocketDisconnect):
+            pass

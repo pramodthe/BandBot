@@ -1,0 +1,65 @@
+[project]
+name = "band-bots-backend"
+version = "0.1.0"
+description = "A shared workspace for people and persistent AI teammates, powered by Band"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "band-sdk>=5.1.0",
+    "bcrypt>=5.0.0",
+    "claude-agent-sdk>=0.2.159",
+    "cryptography>=50.0.2",
+    "cursor-sdk>=1.0.38",
+    "deepagents>=0.7.26",
+    "e2b>=2.56.0",
+    "fastapi>=0.143.1",
+    "httpx>=0.28.1",
+    "itsdangerous>=2.2.0",
+    "jsonschema>=4.26.0",
+    "langchain>=1.4.6",
+    "langchain-core>=1.6.11",
+    "langchain-mcp-adapters>=0.3.2",
+    "langchain-openai>=1.7.2",
+    "langchain-anthropic>=1.7.6",
+    "langchain-google-genai>=4.4.2",
+    "langgraph>=1.2.15",
+    "langgraph-checkpoint-sqlite>=3.1.2",
+    "openai>=3.35.1",
+    "openpyxl>=3.1.5",
+    "pillow>=12.0.0",
+    "psycopg[binary]>=3.3.6",
+    "pyjwt[crypto]>=2.10.1",
+    "pypdfium2>=5.14.0",
+    "python-docx>=1.2.0",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "sqlmodel>=0.0.48",
+    "tenki[async]==1.4.1",
+    "tzdata>=2026.5",
+    "uvicorn[standard]>=0.54.0",
+    "filelock>=3.20",
+    "websockets>=15.0.1",
+]
+
+[project.urls]
+Repository = "https://github.com/pramodthe/BandBot"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.2",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Pyflakes (unused imports/variables, undefined names) plus bare `except:`.
+# SQLAlchemy column comparisons such as `Model.flag == False` and `Model.value == None`
+# build SQL expressions and are intentional, so E711/E712 stay off.
+select = ["F", "E722"]

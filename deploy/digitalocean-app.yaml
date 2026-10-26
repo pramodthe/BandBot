@@ -1,0 +1,58 @@
+# DigitalOcean App Platform spec. One container runs the API and the worker
+# (deploy/start.sh) so both processes share the same environment.
+#
+# Data: accounts, messages, tasks, and uploaded documents live in the managed
+# PostgreSQL database and survive redeploys. Removing the database component
+# deletes them. App Platform has no persistent disk, so the SQLite checkpoint
+# file (in-flight task state) resets on every redeploy or restart; interrupted
+# tasks must be retried.
+#
+# Secrets: set APP_SECRET (at least 32 random characters; BAND_ENV=production
+# refuses weaker values), OPENAI_API_KEY, EXA_API_KEY, E2B_API_KEY, and
+# COMPOSIO_API_KEY on the app in the dashboard. They are omitted here so this
+# file cannot overwrite them. Each user connects their own Band key in the app.
+name: band-bots
+region: sfo
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    production: false
+services:
+  - name: web
+    git:
+      # Replace with your own fork before creating the app.
+      repo_clone_url: https://github.com/pramodthe/BandBot.git
+      branch: main
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-2gb
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 20
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 9
+    envs:
+      - key: BAND_ENV
+        value: production
+        scope: RUN_TIME
+      # Trust X-Forwarded-For from the platform proxy, the only ingress, so
+      # sign-in throttling sees real client addresses.
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"
+        scope: RUN_TIME
+      - key: WORKER_CONCURRENCY
+        value: "1"
+        scope: RUN_TIME
+      - key: DATABASE_URL
+        value: ${db.DATABASE_URL}
+        scope: RUN_TIME
+      # Must be a local file path, never a database URL.
+      - key: AGENT_CHECKPOINT_PATH
+        value: /var/data/agent_checkpoints.db
+        scope: RUN_TIME
+      - key: DOCUMENTS_PATH
+        value: database
+        scope: RUN_TIME

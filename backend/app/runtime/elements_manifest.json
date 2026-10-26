@@ -1,0 +1,1471 @@
+[
+  {
+    "id": "loading-state",
+    "name": "Loader",
+    "category": "Reasoning",
+    "source": "https://www.assistant-ui.com/elements/loading-state",
+    "registry": "elements-loading-state",
+    "files": [
+      "components/assistant-ui/elements/loading-state.tsx"
+    ]
+  },
+  {
+    "id": "thinking-indicator",
+    "name": "Thinking indicator",
+    "category": "Reasoning",
+    "source": "https://www.assistant-ui.com/elements/thinking-indicator",
+    "registry": "elements-thinking-indicator",
+    "files": [
+      "components/assistant-ui/elements/thinking-indicator.tsx"
+    ]
+  },
+  {
+    "id": "streaming-text",
+    "name": "Streaming text",
+    "category": "Reasoning",
+    "source": "https://www.assistant-ui.com/elements/streaming-text",
+    "registry": "elements-streaming-text",
+    "files": [
+      "components/assistant-ui/elements/streaming-text.tsx"
+    ]
+  },
+  {
+    "id": "typing-indicator",
+    "name": "Typing indicator",
+    "category": "Reasoning",
+    "source": "https://www.assistant-ui.com/elements/typing-indicator",
+    "registry": "elements-typing-indicator",
+    "files": [
+      "components/assistant-ui/elements/typing-indicator.tsx"
+    ]
+  },
+  {
+    "id": "reasoning-effort",
+    "name": "Reasoning effort",
+    "category": "Reasoning",
+    "source": "https://www.assistant-ui.com/elements/reasoning-effort",
+    "registry": "elements-reasoning-effort",
+    "files": [
+      "components/assistant-ui/elements/reasoning-effort.tsx"
+    ]
+  },
+  {
+    "id": "guardrail-notice",
+    "name": "Guardrail notice",
+    "category": "Reasoning",
+    "source": "https://www.assistant-ui.com/elements/guardrail-notice",
+    "registry": "elements-guardrail-notice",
+    "files": [
+      "components/assistant-ui/elements/guardrail-notice.tsx"
+    ]
+  },
+  {
+    "id": "message-pair",
+    "name": "Message pair",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/message-pair",
+    "registry": "elements-message-pair",
+    "files": [
+      "components/assistant-ui/elements/message-pair.tsx"
+    ]
+  },
+  {
+    "id": "message-branches",
+    "name": "Message branches",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/message-branches",
+    "registry": "elements-message-branches",
+    "files": [
+      "components/assistant-ui/elements/message-branches.tsx"
+    ]
+  },
+  {
+    "id": "message-actions",
+    "name": "Message actions",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/message-actions",
+    "registry": "elements-message-actions",
+    "files": [
+      "components/assistant-ui/elements/message-actions.tsx"
+    ]
+  },
+  {
+    "id": "error-state",
+    "name": "Error state",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/error-state",
+    "registry": "elements-error-state",
+    "files": [
+      "components/assistant-ui/elements/error-state.tsx"
+    ]
+  },
+  {
+    "id": "message-queue",
+    "name": "Message queue",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/message-queue",
+    "registry": "elements-message-queue",
+    "files": [
+      "components/assistant-ui/elements/message-queue.tsx"
+    ]
+  },
+  {
+    "id": "edit-message",
+    "name": "Edit a sent message",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/edit-message",
+    "registry": "elements-edit-message",
+    "files": [
+      "components/assistant-ui/elements/edit-message.tsx"
+    ]
+  },
+  {
+    "id": "feedback-dialog",
+    "name": "Feedback dialog",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/feedback-dialog",
+    "registry": "elements-feedback-dialog",
+    "files": [
+      "components/assistant-ui/elements/feedback-dialog.tsx"
+    ]
+  },
+  {
+    "id": "stopped-run",
+    "name": "Stopped run",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/stopped-run",
+    "registry": "elements-stopped-run",
+    "files": [
+      "components/assistant-ui/elements/stopped-run.tsx"
+    ]
+  },
+  {
+    "id": "day-separator",
+    "name": "Timestamps",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/day-separator",
+    "registry": "elements-day-separator",
+    "files": [
+      "components/assistant-ui/elements/day-separator.tsx"
+    ]
+  },
+  {
+    "id": "speaker-identity",
+    "name": "Speaker identity",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/speaker-identity",
+    "registry": "elements-speaker-identity",
+    "files": [
+      "components/assistant-ui/elements/speaker-identity.tsx"
+    ]
+  },
+  {
+    "id": "regenerate-menu",
+    "name": "Regenerate with",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/regenerate-menu",
+    "registry": "elements-regenerate-menu",
+    "files": [
+      "components/assistant-ui/elements/regenerate-menu.tsx"
+    ]
+  },
+  {
+    "id": "confidence-marker",
+    "name": "Confidence",
+    "category": "Messages",
+    "source": "https://www.assistant-ui.com/elements/confidence-marker",
+    "registry": "elements-confidence-marker",
+    "files": [
+      "components/assistant-ui/elements/confidence-marker.tsx"
+    ]
+  },
+  {
+    "id": "tool-call",
+    "name": "Tool call",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/tool-call",
+    "registry": "elements-tool-call",
+    "files": [
+      "components/assistant-ui/elements/tool-call.tsx"
+    ]
+  },
+  {
+    "id": "run-activity",
+    "name": "Run activity",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/run-activity",
+    "registry": "elements-run-activity",
+    "files": [
+      "components/assistant-ui/elements/run-activity.tsx"
+    ]
+  },
+  {
+    "id": "tool-timeline",
+    "name": "Tool timeline",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/tool-timeline",
+    "registry": "elements-tool-timeline",
+    "files": [
+      "components/assistant-ui/elements/tool-timeline.tsx"
+    ]
+  },
+  {
+    "id": "terminal-block",
+    "name": "Terminal block",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/terminal-block",
+    "registry": "elements-terminal-block",
+    "files": [
+      "components/assistant-ui/elements/terminal-block.tsx"
+    ]
+  },
+  {
+    "id": "code-diff",
+    "name": "Code diff",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/code-diff",
+    "registry": "elements-code-diff",
+    "files": [
+      "components/assistant-ui/elements/code-diff.tsx"
+    ]
+  },
+  {
+    "id": "reviewable-diff",
+    "name": "Reviewable diff",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/reviewable-diff",
+    "registry": "elements-reviewable-diff",
+    "files": [
+      "components/assistant-ui/elements/reviewable-diff.tsx"
+    ]
+  },
+  {
+    "id": "file-tree",
+    "name": "File tree",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/file-tree",
+    "registry": "elements-file-tree",
+    "files": [
+      "components/assistant-ui/elements/file-tree.tsx"
+    ]
+  },
+  {
+    "id": "elicitation-form",
+    "name": "Elicitation form",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/elicitation-form",
+    "registry": "elements-elicitation-form",
+    "files": [
+      "components/assistant-ui/elements/elicitation-form.tsx"
+    ]
+  },
+  {
+    "id": "mcp-server-panel",
+    "name": "Server panel",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/mcp-server-panel",
+    "registry": "elements-mcp-server-panel",
+    "files": [
+      "components/assistant-ui/elements/mcp-server-panel.tsx"
+    ]
+  },
+  {
+    "id": "tool-error",
+    "name": "Tool failure",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/tool-error",
+    "registry": "elements-tool-error",
+    "files": [
+      "components/assistant-ui/elements/tool-error.tsx"
+    ]
+  },
+  {
+    "id": "permission-grant",
+    "name": "Permission grant",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/permission-grant",
+    "registry": "elements-permission-grant",
+    "files": [
+      "components/assistant-ui/elements/permission-grant.tsx"
+    ]
+  },
+  {
+    "id": "computer-use",
+    "name": "Computer use",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/computer-use",
+    "registry": "elements-computer-use",
+    "files": [
+      "components/assistant-ui/elements/computer-use.tsx"
+    ]
+  },
+  {
+    "id": "code-runner",
+    "name": "Code runner",
+    "category": "Tool use",
+    "source": "https://www.assistant-ui.com/elements/code-runner",
+    "registry": "elements-code-runner",
+    "files": [
+      "components/assistant-ui/elements/code-runner.tsx"
+    ]
+  },
+  {
+    "id": "web-search",
+    "name": "Web search",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/web-search",
+    "registry": "elements-web-search",
+    "files": [
+      "components/assistant-ui/elements/web-search.tsx"
+    ]
+  },
+  {
+    "id": "inline-citation",
+    "name": "Inline citation",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/inline-citation",
+    "registry": "elements-inline-citation",
+    "files": [
+      "components/assistant-ui/elements/inline-citation.tsx"
+    ]
+  },
+  {
+    "id": "link-preview",
+    "name": "Link preview",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/link-preview",
+    "registry": "elements-link-preview",
+    "files": [
+      "components/assistant-ui/elements/link-preview.tsx"
+    ]
+  },
+  {
+    "id": "image-generation",
+    "name": "Image generation",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/image-generation",
+    "registry": "elements-image-generation",
+    "files": [
+      "components/assistant-ui/elements/image-generation.tsx"
+    ]
+  },
+  {
+    "id": "image-gallery",
+    "name": "Image gallery",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/image-gallery",
+    "registry": "elements-image-gallery",
+    "files": [
+      "components/assistant-ui/elements/image-gallery.tsx"
+    ]
+  },
+  {
+    "id": "retrieval-chunks",
+    "name": "Retrieval chunks",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/retrieval-chunks",
+    "registry": "elements-retrieval-chunks",
+    "files": [
+      "components/assistant-ui/elements/retrieval-chunks.tsx"
+    ]
+  },
+  {
+    "id": "document-reference",
+    "name": "Document reference",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/document-reference",
+    "registry": "elements-document-reference",
+    "files": [
+      "components/assistant-ui/elements/document-reference.tsx"
+    ]
+  },
+  {
+    "id": "memory-chips",
+    "name": "Memory",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/memory-chips",
+    "registry": "elements-memory-chips",
+    "files": [
+      "components/assistant-ui/elements/memory-chips.tsx"
+    ]
+  },
+  {
+    "id": "research-report",
+    "name": "Research report",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/research-report",
+    "registry": "elements-research-report",
+    "files": [
+      "components/assistant-ui/elements/research-report.tsx"
+    ]
+  },
+  {
+    "id": "map-answer",
+    "name": "Map",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/map-answer",
+    "registry": "elements-map-answer",
+    "files": [
+      "components/assistant-ui/elements/map-answer.tsx"
+    ]
+  },
+  {
+    "id": "geo-map",
+    "name": "Geo map",
+    "category": "Knowledge",
+    "source": "https://www.assistant-ui.com/elements/geo-map",
+    "registry": "elements-geo-map",
+    "files": [
+      "components/assistant-ui/elements/geo-map.tsx"
+    ]
+  },
+  {
+    "id": "data-table",
+    "name": "Data table",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/data-table",
+    "registry": "elements-data-table",
+    "files": [
+      "components/assistant-ui/elements/data-table.tsx"
+    ]
+  },
+  {
+    "id": "number-ticker",
+    "name": "Number ticker",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/number-ticker",
+    "registry": "elements-number-ticker",
+    "files": [
+      "components/assistant-ui/elements/number-ticker.tsx"
+    ]
+  },
+  {
+    "id": "chart",
+    "name": "Chart",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/chart",
+    "registry": "elements-chart",
+    "files": [
+      "components/assistant-ui/elements/chart.tsx"
+    ]
+  },
+  {
+    "id": "media-player",
+    "name": "Media player",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/media-player",
+    "registry": "elements-media-player",
+    "files": [
+      "components/assistant-ui/elements/media-player.tsx"
+    ]
+  },
+  {
+    "id": "web-preview",
+    "name": "Web preview",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/web-preview",
+    "registry": "elements-web-preview",
+    "files": [
+      "components/assistant-ui/elements/web-preview.tsx"
+    ]
+  },
+  {
+    "id": "diagram",
+    "name": "Diagram",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/diagram",
+    "registry": "elements-diagram",
+    "files": [
+      "components/assistant-ui/elements/diagram.tsx"
+    ]
+  },
+  {
+    "id": "flow-graph",
+    "name": "Flow graph",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/flow-graph",
+    "registry": "elements-flow-graph",
+    "files": [
+      "components/assistant-ui/elements/flow-graph.tsx"
+    ]
+  },
+  {
+    "id": "activity-graph",
+    "name": "Activity graph",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/activity-graph",
+    "registry": "elements-activity-graph",
+    "files": [
+      "components/assistant-ui/elements/activity-graph.tsx"
+    ]
+  },
+  {
+    "id": "math-block",
+    "name": "Math",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/math-block",
+    "registry": "elements-math-block",
+    "files": [
+      "components/assistant-ui/elements/math-block.tsx"
+    ]
+  },
+  {
+    "id": "spec-sheet",
+    "name": "Spec sheet",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/spec-sheet",
+    "registry": "elements-spec-sheet",
+    "files": [
+      "components/assistant-ui/elements/spec-sheet.tsx"
+    ]
+  },
+  {
+    "id": "comparison-card",
+    "name": "Comparison",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/comparison-card",
+    "registry": "elements-comparison-card",
+    "files": [
+      "components/assistant-ui/elements/comparison-card.tsx"
+    ]
+  },
+  {
+    "id": "timeline",
+    "name": "Timeline",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/timeline",
+    "registry": "elements-timeline",
+    "files": [
+      "components/assistant-ui/elements/timeline.tsx"
+    ]
+  },
+  {
+    "id": "job-progress",
+    "name": "Job progress",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/job-progress",
+    "registry": "elements-job-progress",
+    "files": [
+      "components/assistant-ui/elements/job-progress.tsx"
+    ]
+  },
+  {
+    "id": "score-breakdown",
+    "name": "Score breakdown",
+    "category": "Structured output",
+    "source": "https://www.assistant-ui.com/elements/score-breakdown",
+    "registry": "elements-score-breakdown",
+    "files": [
+      "components/assistant-ui/elements/score-breakdown.tsx"
+    ]
+  },
+  {
+    "id": "agent-plan",
+    "name": "Agent plan",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/agent-plan",
+    "registry": "elements-agent-plan",
+    "files": [
+      "components/assistant-ui/elements/agent-plan.tsx"
+    ]
+  },
+  {
+    "id": "subagent-list",
+    "name": "Subagent list",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/subagent-list",
+    "registry": "elements-subagent-list",
+    "files": [
+      "components/assistant-ui/elements/subagent-list.tsx"
+    ]
+  },
+  {
+    "id": "task-card",
+    "name": "Task card",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/task-card",
+    "registry": "elements-task-card",
+    "files": [
+      "components/assistant-ui/elements/task-card.tsx"
+    ]
+  },
+  {
+    "id": "agent-status",
+    "name": "Agent status",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/agent-status",
+    "registry": "elements-agent-status",
+    "files": [
+      "components/assistant-ui/elements/agent-status.tsx"
+    ]
+  },
+  {
+    "id": "approval-card",
+    "name": "Approval card",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/approval-card",
+    "registry": "elements-approval-card",
+    "files": [
+      "components/assistant-ui/elements/approval-card.tsx"
+    ]
+  },
+  {
+    "id": "option-list",
+    "name": "Option list",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/option-list",
+    "registry": "elements-option-list",
+    "files": [
+      "components/assistant-ui/elements/option-list.tsx"
+    ]
+  },
+  {
+    "id": "question-flow",
+    "name": "Question flow",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/question-flow",
+    "registry": "elements-question-flow",
+    "files": [
+      "components/assistant-ui/elements/question-flow.tsx"
+    ]
+  },
+  {
+    "id": "recommendation-card",
+    "name": "Recommendation card",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/recommendation-card",
+    "registry": "elements-recommendation-card",
+    "files": [
+      "components/assistant-ui/elements/recommendation-card.tsx"
+    ]
+  },
+  {
+    "id": "artifact-card",
+    "name": "Artifact card",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/artifact-card",
+    "registry": "elements-artifact-card",
+    "files": [
+      "components/assistant-ui/elements/artifact-card.tsx"
+    ]
+  },
+  {
+    "id": "todo-list",
+    "name": "Todo list",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/todo-list",
+    "registry": "elements-todo-list",
+    "files": [
+      "components/assistant-ui/elements/todo-list.tsx"
+    ]
+  },
+  {
+    "id": "agent-card",
+    "name": "Agent card",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/agent-card",
+    "registry": "elements-agent-card",
+    "files": [
+      "components/assistant-ui/elements/agent-card.tsx"
+    ]
+  },
+  {
+    "id": "agent-handoff",
+    "name": "Handoff",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/agent-handoff",
+    "registry": "elements-agent-handoff",
+    "files": [
+      "components/assistant-ui/elements/agent-handoff.tsx"
+    ]
+  },
+  {
+    "id": "background-inbox",
+    "name": "Background runs",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/background-inbox",
+    "registry": "elements-background-inbox",
+    "files": [
+      "components/assistant-ui/elements/background-inbox.tsx"
+    ]
+  },
+  {
+    "id": "checkpoint-history",
+    "name": "Checkpoints",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/checkpoint-history",
+    "registry": "elements-checkpoint-history",
+    "files": [
+      "components/assistant-ui/elements/checkpoint-history.tsx"
+    ]
+  },
+  {
+    "id": "schedule-card",
+    "name": "Schedule",
+    "category": "Agents",
+    "source": "https://www.assistant-ui.com/elements/schedule-card",
+    "registry": "elements-schedule-card",
+    "files": [
+      "components/assistant-ui/elements/schedule-card.tsx"
+    ]
+  },
+  {
+    "id": "trace-waterfall",
+    "name": "Trace waterfall",
+    "category": "Observability",
+    "source": "https://www.assistant-ui.com/elements/trace-waterfall",
+    "registry": "elements-trace-waterfall",
+    "files": [
+      "components/assistant-ui/elements/trace-waterfall.tsx"
+    ]
+  },
+  {
+    "id": "cost-meter",
+    "name": "Cost meter",
+    "category": "Observability",
+    "source": "https://www.assistant-ui.com/elements/cost-meter",
+    "registry": "elements-cost-meter",
+    "files": [
+      "components/assistant-ui/elements/cost-meter.tsx"
+    ]
+  },
+  {
+    "id": "quota-banner",
+    "name": "Quota banner",
+    "category": "Observability",
+    "source": "https://www.assistant-ui.com/elements/quota-banner",
+    "registry": "elements-quota-banner",
+    "files": [
+      "components/assistant-ui/elements/quota-banner.tsx"
+    ]
+  },
+  {
+    "id": "composer",
+    "name": "Composer",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/composer",
+    "registry": "elements-composer",
+    "files": [
+      "components/assistant-ui/elements/composer.tsx"
+    ]
+  },
+  {
+    "id": "composer-slash-commands",
+    "name": "Slash commands",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/composer-slash-commands",
+    "registry": "elements-composer",
+    "files": [
+      "components/assistant-ui/elements/composer.tsx"
+    ]
+  },
+  {
+    "id": "composer-mentions",
+    "name": "Mentions",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/composer-mentions",
+    "registry": "elements-composer",
+    "files": [
+      "components/assistant-ui/elements/composer.tsx"
+    ]
+  },
+  {
+    "id": "composer-attachments",
+    "name": "Attachments",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/composer-attachments",
+    "registry": "elements-composer",
+    "files": [
+      "components/assistant-ui/elements/composer.tsx"
+    ]
+  },
+  {
+    "id": "composer-model-picker",
+    "name": "Models",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/composer-model-picker",
+    "registry": "elements-composer",
+    "files": [
+      "components/assistant-ui/elements/composer.tsx"
+    ]
+  },
+  {
+    "id": "composer-voice",
+    "name": "Dictation",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/composer-voice",
+    "registry": "elements-composer",
+    "files": [
+      "components/assistant-ui/elements/composer.tsx"
+    ]
+  },
+  {
+    "id": "composer-context",
+    "name": "Context",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/composer-context",
+    "registry": "elements-composer",
+    "files": [
+      "components/assistant-ui/elements/composer.tsx"
+    ]
+  },
+  {
+    "id": "draft-restore",
+    "name": "Draft restore",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/draft-restore",
+    "registry": "elements-draft-restore",
+    "files": [
+      "components/assistant-ui/elements/draft-restore.tsx"
+    ]
+  },
+  {
+    "id": "context-breakdown",
+    "name": "Context breakdown",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/context-breakdown",
+    "registry": "elements-context-breakdown",
+    "files": [
+      "components/assistant-ui/elements/context-breakdown.tsx"
+    ]
+  },
+  {
+    "id": "prompt-library",
+    "name": "Prompt library",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/prompt-library",
+    "registry": "elements-prompt-library",
+    "files": [
+      "components/assistant-ui/elements/prompt-library.tsx"
+    ]
+  },
+  {
+    "id": "command-palette",
+    "name": "Command palette",
+    "category": "Composer",
+    "source": "https://www.assistant-ui.com/elements/command-palette",
+    "registry": "elements-command-palette",
+    "files": [
+      "components/assistant-ui/elements/command-palette.tsx"
+    ]
+  },
+  {
+    "id": "voice-conversation",
+    "name": "Voice conversation",
+    "category": "Voice",
+    "source": "https://www.assistant-ui.com/elements/voice-conversation",
+    "registry": "elements-voice-conversation",
+    "files": [
+      "components/assistant-ui/elements/voice-conversation.tsx"
+    ]
+  },
+  {
+    "id": "read-aloud",
+    "name": "Read aloud",
+    "category": "Voice",
+    "source": "https://www.assistant-ui.com/elements/read-aloud",
+    "registry": "elements-read-aloud",
+    "files": [
+      "components/assistant-ui/elements/read-aloud.tsx"
+    ]
+  },
+  {
+    "id": "chat-panel",
+    "name": "Chat panel",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/chat-panel",
+    "registry": "elements-chat-panel",
+    "files": [
+      "components/assistant-ui/elements/chat-panel.tsx"
+    ]
+  },
+  {
+    "id": "empty-state",
+    "name": "Empty state",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/empty-state",
+    "registry": "elements-empty-state",
+    "files": [
+      "components/assistant-ui/elements/empty-state.tsx"
+    ]
+  },
+  {
+    "id": "scroll-anchor",
+    "name": "Scroll anchor",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/scroll-anchor",
+    "registry": "elements-scroll-anchor",
+    "files": [
+      "components/assistant-ui/elements/scroll-anchor.tsx"
+    ]
+  },
+  {
+    "id": "canvas-split",
+    "name": "Canvas",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/canvas-split",
+    "registry": "elements-canvas-split",
+    "files": [
+      "components/assistant-ui/elements/canvas-split.tsx"
+    ]
+  },
+  {
+    "id": "connection-state",
+    "name": "Connection state",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/connection-state",
+    "registry": "elements-connection-state",
+    "files": [
+      "components/assistant-ui/elements/connection-state.tsx"
+    ]
+  },
+  {
+    "id": "shared-conversation",
+    "name": "Shared conversation",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/shared-conversation",
+    "registry": "elements-shared-conversation",
+    "files": [
+      "components/assistant-ui/elements/shared-conversation.tsx"
+    ]
+  },
+  {
+    "id": "conversation-search",
+    "name": "Search in conversation",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/conversation-search",
+    "registry": "elements-conversation-search",
+    "files": [
+      "components/assistant-ui/elements/conversation-search.tsx"
+    ]
+  },
+  {
+    "id": "thread-search",
+    "name": "Thread search",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/thread-search",
+    "registry": "elements-thread-search",
+    "files": [
+      "components/assistant-ui/elements/thread-search.tsx"
+    ]
+  },
+  {
+    "id": "launcher-bubble",
+    "name": "Launcher",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/launcher-bubble",
+    "registry": "elements-launcher-bubble",
+    "files": [
+      "components/assistant-ui/elements/launcher-bubble.tsx"
+    ]
+  },
+  {
+    "id": "settings-panel",
+    "name": "Settings",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/settings-panel",
+    "registry": "elements-settings-panel",
+    "files": [
+      "components/assistant-ui/elements/settings-panel.tsx"
+    ]
+  },
+  {
+    "id": "onboarding",
+    "name": "Onboarding",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/onboarding",
+    "registry": "elements-onboarding",
+    "files": [
+      "components/assistant-ui/elements/onboarding.tsx"
+    ]
+  },
+  {
+    "id": "mobile-composer",
+    "name": "Mobile composer",
+    "category": "Thread",
+    "source": "https://www.assistant-ui.com/elements/mobile-composer",
+    "registry": "elements-mobile-composer",
+    "files": [
+      "components/assistant-ui/elements/mobile-composer.tsx"
+    ]
+  },
+  {
+    "id": "thread",
+    "name": "Thread",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/thread",
+    "registry": "thread",
+    "files": [
+      "components/assistant-ui/elements/thread.aui.tsx"
+    ]
+  },
+  {
+    "id": "assistant-modal",
+    "name": "Assistant modal",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/assistant-modal",
+    "registry": "assistant-modal",
+    "files": [
+      "components/assistant-ui/elements/assistant-modal.aui.tsx"
+    ]
+  },
+  {
+    "id": "assistant-sidebar",
+    "name": "Assistant sidebar",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/assistant-sidebar",
+    "registry": "assistant-sidebar",
+    "files": [
+      "components/assistant-ui/elements/assistant-sidebar.aui.tsx"
+    ]
+  },
+  {
+    "id": "thread-list",
+    "name": "Thread list",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/thread-list",
+    "registry": "elements-thread-list",
+    "files": [
+      "components/assistant-ui/elements/thread-list.tsx"
+    ]
+  },
+  {
+    "id": "thread-list-sidebar",
+    "name": "Thread list sidebar",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/thread-list-sidebar",
+    "registry": "threadlist-sidebar",
+    "files": [
+      "components/assistant-ui/elements/threadlist-sidebar.aui.tsx",
+      "components/icons/github.tsx"
+    ]
+  },
+  {
+    "id": "orb",
+    "name": "Orb",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/orb",
+    "registry": "elements-voice",
+    "files": [
+      "components/assistant-ui/elements/voice.tsx"
+    ]
+  },
+  {
+    "id": "reasoning",
+    "name": "Reasoning",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/reasoning",
+    "registry": "elements-reasoning",
+    "files": [
+      "components/assistant-ui/elements/reasoning.tsx",
+      "components/assistant-ui/utils/useIsomorphicLayoutEffect.ts"
+    ]
+  },
+  {
+    "id": "message-timing",
+    "name": "Message timing",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/message-timing",
+    "registry": "elements-message-timing",
+    "files": [
+      "components/assistant-ui/elements/message-timing.tsx"
+    ]
+  },
+  {
+    "id": "conversation-map",
+    "name": "Conversation map",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/conversation-map",
+    "registry": "elements-conversation-map",
+    "files": [
+      "components/assistant-ui/elements/conversation-map.tsx"
+    ]
+  },
+  {
+    "id": "context-display",
+    "name": "Context display",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/context-display",
+    "registry": "elements-context-display",
+    "files": [
+      "components/assistant-ui/elements/context-display.tsx"
+    ]
+  },
+  {
+    "id": "mcp-config",
+    "name": "MCP config dialog",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/mcp-config",
+    "registry": "mcp-config",
+    "files": [
+      "components/assistant-ui/elements/mcp-config.aui.tsx"
+    ]
+  },
+  {
+    "id": "attachment",
+    "name": "Attachment",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/attachment",
+    "registry": "elements-message-attachment",
+    "files": [
+      "components/assistant-ui/elements/message-attachment.tsx"
+    ]
+  },
+  {
+    "id": "follow-up-suggestions",
+    "name": "Follow-up suggestions",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/follow-up-suggestions",
+    "registry": "elements-suggestions",
+    "files": [
+      "components/assistant-ui/elements/suggestions.tsx"
+    ]
+  },
+  {
+    "id": "tool-fallback",
+    "name": "Tool fallback",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/tool-fallback",
+    "registry": "tool-fallback",
+    "files": [
+      "components/assistant-ui/elements/tool-fallback.aui.tsx"
+    ]
+  },
+  {
+    "id": "tool-group",
+    "name": "Tool group",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/tool-group",
+    "registry": "elements-tool-group",
+    "files": [
+      "components/assistant-ui/elements/tool-group.tsx"
+    ]
+  },
+  {
+    "id": "quote",
+    "name": "Quote",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/quote",
+    "registry": "elements-quote-reply",
+    "files": [
+      "components/assistant-ui/elements/quote-reply.tsx"
+    ]
+  },
+  {
+    "id": "sources",
+    "name": "Sources",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/sources",
+    "registry": "elements-sources",
+    "files": [
+      "components/assistant-ui/elements/sources.tsx"
+    ]
+  },
+  {
+    "id": "image",
+    "name": "Image",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/image",
+    "registry": "image",
+    "files": [
+      "components/assistant-ui/elements/image.tsx"
+    ]
+  },
+  {
+    "id": "file",
+    "name": "File",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/file",
+    "registry": "file",
+    "files": [
+      "components/assistant-ui/elements/file.tsx"
+    ]
+  },
+  {
+    "id": "model-selector",
+    "name": "Model selector",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/model-selector",
+    "registry": "elements-model-selector",
+    "files": [
+      "components/assistant-ui/elements/model-selector.tsx"
+    ]
+  },
+  {
+    "id": "composer-trigger-popover",
+    "name": "Composer trigger popover",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/composer-trigger-popover",
+    "registry": "composer-trigger-popover",
+    "files": [
+      "components/assistant-ui/elements/composer-trigger-popover.aui.tsx"
+    ]
+  },
+  {
+    "id": "directive-text",
+    "name": "Directive text",
+    "category": "AUI connected",
+    "source": "https://www.assistant-ui.com/elements/directive-text",
+    "registry": "elements-directive-text",
+    "files": [
+      "components/assistant-ui/elements/directive-text.tsx"
+    ]
+  },
+  {
+    "id": "markdown-text",
+    "name": "Markdown text",
+    "category": "Renderers",
+    "source": "https://www.assistant-ui.com/elements/markdown-text",
+    "registry": "markdown-text",
+    "files": [
+      "components/assistant-ui/elements/markdown-text.tsx"
+    ]
+  },
+  {
+    "id": "syntax-highlighter",
+    "name": "Syntax highlighter",
+    "category": "Renderers",
+    "source": "https://www.assistant-ui.com/elements/syntax-highlighter",
+    "registry": "syntax-highlighter",
+    "files": [
+      "components/assistant-ui/elements/syntax-highlighter.tsx"
+    ]
+  },
+  {
+    "id": "shiki-highlighter",
+    "name": "Shiki highlighter",
+    "category": "Renderers",
+    "source": "https://www.assistant-ui.com/elements/shiki-highlighter",
+    "registry": "elements-shiki-highlighter",
+    "files": [
+      "components/assistant-ui/elements/shiki-highlighter.tsx"
+    ]
+  },
+  {
+    "id": "mermaid-diagram",
+    "name": "Mermaid diagram",
+    "category": "Renderers",
+    "source": "https://www.assistant-ui.com/elements/mermaid-diagram",
+    "registry": "elements-mermaid-diagram",
+    "files": [
+      "components/assistant-ui/elements/mermaid-diagram.tsx"
+    ]
+  },
+  {
+    "id": "generative-ui",
+    "name": "Generative UI",
+    "category": "Renderers",
+    "source": "https://www.assistant-ui.com/elements/generative-ui",
+    "registry": "generative-ui",
+    "files": [
+      "components/assistant-ui/elements/generative-ui.tsx"
+    ]
+  },
+  {
+    "id": "tooltip-icon-button",
+    "name": "Tooltip icon button",
+    "category": "Primitives",
+    "source": "https://www.assistant-ui.com/elements/tooltip-icon-button",
+    "registry": "tooltip-icon-button",
+    "files": [
+      "components/assistant-ui/elements/tooltip-icon-button.tsx"
+    ]
+  },
+  {
+    "id": "logos",
+    "name": "Model logos",
+    "category": "Primitives",
+    "source": "https://www.assistant-ui.com/elements/logos",
+    "registry": "logos",
+    "files": [
+      "components/assistant-ui/elements/logos.tsx"
+    ]
+  },
+  {
+    "id": "heat-graph",
+    "name": "Heat graph",
+    "category": "Primitives",
+    "source": "https://www.assistant-ui.com/elements/heat-graph",
+    "registry": "heat-graph",
+    "files": [
+      "components/assistant-ui/elements/heat-graph.tsx",
+      "components/assistant-ui/utils/useIsomorphicLayoutEffect.ts"
+    ]
+  },
+  {
+    "id": "generative-stays",
+    "name": "Riverside Loft",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-stays",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-booking",
+    "name": "Table reservation",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-booking",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-order-status",
+    "name": "Order tracking",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-order-status",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-flight-tracker",
+    "name": "Flight tracker",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-flight-tracker",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-portfolio",
+    "name": "Portfolio overview",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-portfolio",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-create-event",
+    "name": "Create event",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-create-event",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-view-event",
+    "name": "View event",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-view-event",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-weather-current",
+    "name": "Current weather",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-weather-current",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-ride-status",
+    "name": "Ride status",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-ride-status",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-draft-email",
+    "name": "Draft email",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-draft-email",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-cart",
+    "name": "Shopping cart",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-cart",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-playlist",
+    "name": "Playlist",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-playlist",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-channel-message",
+    "name": "Channel message",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-channel-message",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-receipt",
+    "name": "Purchase receipt",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-receipt",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-chart-area",
+    "name": "Weekly active users",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-chart-area",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-player-card",
+    "name": "Player card",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-player-card",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-event-session",
+    "name": "Conference session",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-event-session",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-notify-confirm",
+    "name": "Confirm dialog",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-notify-confirm",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-chart-line",
+    "name": "Response time",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-chart-line",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-create-task",
+    "name": "Create task",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-create-task",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-software-purchase",
+    "name": "Software purchase",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-software-purchase",
+    "registry": null,
+    "files": []
+  },
+  {
+    "id": "generative-chart-bars",
+    "name": "Support tickets",
+    "category": "Generative",
+    "source": "https://www.assistant-ui.com/elements/generative-chart-bars",
+    "registry": null,
+    "files": []
+  }
+]

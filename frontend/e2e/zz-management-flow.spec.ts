@@ -1,0 +1,38 @@
+import { expect, test } from "@playwright/test";
+import { fillSignup } from "./helpers";
+
+test("local signup then own Band user key creates a native agent and a local worker reply", async ({ page }, info) => {
+  const name = `native-${info.project.name}-${Date.now().toString().slice(-6)}`;
+  const teammate = `Native Writer ${info.project.name}`;
+  await fillSignup(page, { username: name, displayName: "Native agent owner", password: "test-password" });
+  await expect(page.getByLabel("Band user API key", { exact: true })).not.toHaveAttribute("required");
+  await page.screenshot({ path: info.outputPath("local-signup-optional-band.png"), fullPage: true });
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await page.getByRole("button", { name: /^People/ }).click();
+  const management = page.getByRole("region", { name: "Your Band agent management" });
+  await management.getByLabel("Band user API key", { exact: true }).fill(`band_u_${name}`);
+  await management.getByRole("button", { name: "Connect for agent management" }).click();
+  await expect(page.getByRole("status")).toContainText("You can now create agents");
+  await management.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath("people-native-agent-management.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Add agents", exact: true }).click();
+  await page.getByRole("button", { name: /Create agent/ }).click();
+  await expect(page.getByRole("status")).toContainText("Using your own Band user key");
+  await expect(page.getByLabel("Band agent API key", { exact: true })).toHaveCount(0);
+  await page.getByLabel("Name", { exact: true }).fill(teammate);
+  await page.getByRole("status").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath("native-agent-creation.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("button", { name: "Create agent", exact: true }).click();
+  await page.getByRole("button", { name: `Chat with ${teammate}`, exact: true }).click();
+  await page.getByRole("combobox", { name: "Message" }).fill("Write a short introduction.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator('[id^="message-"]').getByText("I can help with that.", { exact: true })).toBeVisible();
+  const boot = await page.evaluate(async () => {
+    const headers = { Authorization: `Bearer ${localStorage.getItem("band-slack-token")}` };
+    return (await fetch("/api/bootstrap", { headers })).json();
+  });
+  expect(boot.band.can_manage_agents).toBe(true);
+  expect(boot.agents.find((agent: { name: string }) => agent.name === teammate).band_auth).toBe("managed");
+  expect(boot.channels.find((channel: { is_dm: boolean }) => channel.is_dm).band_room_id).toBe(null);
+});
