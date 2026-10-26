@@ -10,6 +10,10 @@ import { Input } from "@/components/ui/input";
 import type { Modal } from "@/components/workspace/types";
 import { getAgentActivity } from "@/components/agents/AgentPresence";
 
+const sectionClass = "text-muted-foreground flex h-10 items-center justify-between px-5 text-xs";
+const focusRing = "outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const personRowClass = `hover:bg-muted mx-2 flex min-h-12 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2 text-left ${focusRing}`;
+
 function UnreadBadge({ count }: { count: number }) {
   return count > 0 ? <Badge className="ml-auto rounded-full px-1.5 text-[10px]">{count}</Badge> : null;
 }
@@ -28,45 +32,157 @@ export default function Sidebar({ state, onChannel, onMessage, openModal, search
   const searchInput = useRef<HTMLInputElement>(null);
   useEffect(() => { if (searchRevision > 0) searchInput.current?.focus(); }, [searchRevision]);
   const search = query.trim().toLowerCase();
-  const channels = Object.values(state.channels).filter((channel) => !channel.is_dm && channel.name.toLowerCase().includes(search)).sort((a, b) => a.name.localeCompare(b.name));
-  const agents = Object.values(state.agents).filter((agent) => (agent.owner_id == null || agent.owner_id === state.me.id) && agent.name.toLowerCase().includes(search)).sort((a, b) => Number(b.is_master) - Number(a.is_master) || a.name.localeCompare(b.name));
+  const channels = Object.values(state.channels)
+    .filter((channel) => !channel.is_dm && channel.name.toLowerCase().includes(search))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const agents = Object.values(state.agents)
+    .filter((agent) => (agent.owner_id == null || agent.owner_id === state.me.id) && agent.name.toLowerCase().includes(search))
+    .sort((a, b) => Number(b.is_master) - Number(a.is_master) || a.name.localeCompare(b.name));
   const dms = Object.values(state.channels).filter((channel) => channel.is_dm);
-  const humanDms = dms.map((dm) => ({ dm, person: state.users[dm.dm_user_ids?.find((id) => id !== state.me.id) ?? -1] })).filter(({ person }) => person && person.display_name.toLowerCase().includes(search));
+  const humanDms = dms
+    .map((dm) => ({ dm, person: state.users[dm.dm_user_ids?.find((id) => id !== state.me.id) ?? -1] }))
+    .filter(({ person }) => person && person.display_name.toLowerCase().includes(search));
+  const pending = state.invitations.length + state.contactRequests.length;
 
   return (
-    <aside aria-label="Conversations" className={cn("border-border bg-sidebar flex w-[280px] shrink-0 flex-col border-r narrow:w-[248px] max-sm:min-w-0 max-sm:flex-1", !listOpen && "max-sm:hidden")}>
-      <div className="border-border flex h-20 shrink-0 flex-col justify-center border-b px-5"><span className="text-xl font-semibold tracking-[-0.04em]">Band Bots<span className="text-primary">.</span></span><span className="text-muted-foreground mt-0.5 text-xs">Your team, working together</span></div>
+    <aside
+      aria-label="Conversations"
+      className={cn("border-border bg-sidebar flex w-[280px] shrink-0 flex-col border-r narrow:w-[248px] max-sm:min-w-0 max-sm:flex-1", !listOpen && "max-sm:hidden")}
+    >
+      <div className="border-border flex h-20 shrink-0 flex-col justify-center border-b px-5">
+        <span className="text-xl font-semibold tracking-[-0.04em]">Band Bots<span className="text-primary">.</span></span>
+        <span className="text-muted-foreground mt-0.5 text-xs">Your team, working together</span>
+      </div>
       <header className="flex h-14 shrink-0 items-center justify-between px-5">
         <h1 className="text-sm font-semibold tracking-tight">Conversations</h1>
         <Button variant="ghost" size="icon-sm" aria-label="Create channel" onClick={() => openModal({ kind: "new-channel" })}><PlusIcon /></Button>
       </header>
-      <div className="px-4 pb-3"><Input ref={searchInput} aria-label="Find conversations by name" placeholder="Find conversations" className="h-10 rounded-xl bg-muted/50" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+      <div className="px-4 pb-3">
+        <Input
+          ref={searchInput}
+          aria-label="Find conversations by name"
+          placeholder="Find conversations"
+          className="h-10 rounded-xl bg-muted/50"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-        <div className="text-muted-foreground flex h-10 items-center justify-between px-5 text-xs"><h2>Channels</h2><Button variant="ghost" size="icon-xs" aria-label="New channel in list" onClick={() => openModal({ kind: "new-channel" })}><PlusIcon /></Button></div>
+        <div className={sectionClass}>
+          <h2>Channels</h2>
+          <Button variant="ghost" size="icon-xs" aria-label="New channel in list" onClick={() => openModal({ kind: "new-channel" })}><PlusIcon /></Button>
+        </div>
         {channels.map((channel) => (
-          <button key={channel.id} aria-current={state.activeChannelId === channel.id ? "page" : undefined} className={cn("hover:bg-muted mx-2 flex min-h-11 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring", state.activeChannelId === channel.id && "bg-brand-soft text-brand-soft-foreground hover:bg-brand-soft")} onClick={() => onChannel(channel.id)}>
-            <HashIcon className="size-[18px] opacity-65" strokeWidth={1.5} /><span className="truncate text-sm font-medium">{channel.name}</span><UnreadBadge count={state.unread[channel.id] ?? 0} />
+          <button
+            key={channel.id}
+            aria-current={state.activeChannelId === channel.id ? "page" : undefined}
+            className={cn(
+              `hover:bg-muted mx-2 flex min-h-11 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2.5 text-left ${focusRing}`,
+              state.activeChannelId === channel.id && "bg-brand-soft text-brand-soft-foreground hover:bg-brand-soft",
+            )}
+            onClick={() => onChannel(channel.id)}
+          >
+            <HashIcon className="size-[18px] opacity-65" strokeWidth={1.5} />
+            <span className="truncate text-sm font-medium">{channel.name}</span>
+            <UnreadBadge count={state.unread[channel.id] ?? 0} />
           </button>
         ))}
         {channels.length === 0 ? <p className="text-muted-foreground px-5 py-3 text-sm">No channels found.</p> : null}
-        <div className="text-muted-foreground mt-4 flex h-10 items-center justify-between px-5 text-xs"><h2>People</h2><Button variant="ghost" size="icon-xs" aria-label={state.invitations.length + state.contactRequests.length ? `Add people, ${state.invitations.length + state.contactRequests.length} pending` : "Add people"} onClick={() => openModal({ kind: "people" })}><PlusIcon /></Button></div>
-        {state.contactRequests.map((request) => <button key={request.id} className="hover:bg-muted mx-2 flex min-h-12 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => openModal({ kind: "people" })}><Avatar name={request.name} kind="human" size={32} /><span className="min-w-0"><span className="block truncate text-sm font-medium">{request.name}</span><span className="text-muted-foreground block truncate text-xs">Contact request</span></span></button>)}
-        {state.invitations.map((invitation) => <button key={invitation.id} className="hover:bg-muted mx-2 flex min-h-12 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => openModal({ kind: "people" })}><HashIcon className="text-muted-foreground size-[18px]" strokeWidth={1.5} /><span className="min-w-0"><span className="block truncate text-sm font-medium">#{invitation.channel_name}</span><span className="text-muted-foreground block truncate text-xs">Invitation from {invitation.inviter_name}</span></span></button>)}
-        {humanDms.map(({ dm, person }) => <button key={dm.id} aria-current={state.activeChannelId === dm.id ? "page" : undefined} className={cn("hover:bg-muted mx-2 flex min-h-12 w-[calc(100%-1rem)] items-center gap-3 rounded-xl px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring", state.activeChannelId === dm.id && "bg-accent")} onClick={() => onChannel(dm.id)}><Avatar name={person.display_name} kind="human" size={32} /><span className="truncate text-sm font-medium">{person.display_name}</span><UnreadBadge count={state.unread[dm.id] ?? 0} /></button>)}
-        {!humanDms.length ? <button className="text-muted-foreground px-5 py-2 text-left text-sm hover:underline" onClick={() => openModal({ kind: "people" })}>Connect with a friend</button> : null}
-        <div className="text-muted-foreground mt-5 flex h-10 items-center justify-between px-5 text-xs"><h2>AI teammates</h2><Button variant="ghost" size="sm" className="h-8 px-1.5 text-xs" aria-label="Add agents" onClick={() => openModal({ kind: "new-agent" })}><PlusIcon className="size-3.5" />Add agents</Button></div>
+        <div className={cn(sectionClass, "mt-4")}>
+          <h2>People</h2>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={pending ? `Add people, ${pending} pending` : "Add people"}
+            onClick={() => openModal({ kind: "people" })}
+          >
+            <PlusIcon />
+          </Button>
+        </div>
+        {state.contactRequests.map((request) => (
+          <button key={request.id} className={personRowClass} onClick={() => openModal({ kind: "people" })}>
+            <Avatar name={request.name} kind="human" size={32} />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">{request.name}</span>
+              <span className="text-muted-foreground block truncate text-xs">Contact request</span>
+            </span>
+          </button>
+        ))}
+        {state.invitations.map((invitation) => (
+          <button key={invitation.id} className={personRowClass} onClick={() => openModal({ kind: "people" })}>
+            <HashIcon className="text-muted-foreground size-[18px]" strokeWidth={1.5} />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">#{invitation.channel_name}</span>
+              <span className="text-muted-foreground block truncate text-xs">Invitation from {invitation.inviter_name}</span>
+            </span>
+          </button>
+        ))}
+        {humanDms.map(({ dm, person }) => (
+          <button
+            key={dm.id}
+            aria-current={state.activeChannelId === dm.id ? "page" : undefined}
+            className={cn(personRowClass, state.activeChannelId === dm.id && "bg-accent")}
+            onClick={() => onChannel(dm.id)}
+          >
+            <Avatar name={person.display_name} kind="human" size={32} />
+            <span className="truncate text-sm font-medium">{person.display_name}</span>
+            <UnreadBadge count={state.unread[dm.id] ?? 0} />
+          </button>
+        ))}
+        {!humanDms.length ? (
+          <button className="text-muted-foreground px-5 py-2 text-left text-sm hover:underline" onClick={() => openModal({ kind: "people" })}>
+            Connect with a friend
+          </button>
+        ) : null}
+        <div className={cn(sectionClass, "mt-5")}>
+          <h2>AI teammates</h2>
+          <Button variant="ghost" size="sm" className="h-8 px-1.5 text-xs" aria-label="Add agents" onClick={() => openModal({ kind: "new-agent" })}>
+            <PlusIcon className="size-3.5" />Add agents
+          </Button>
+        </div>
         {agents.map((agent) => {
           const dm = dms.find((channel) => channel.dm_agent_id === agent.id);
           const activity = getAgentActivity(state, agent.id);
           const lastMessage = dm ? state.messages[dm.id]?.filter((message) => message.to_humans).at(-1) : undefined;
+          const summary = opening === agent.id ? "Opening conversation…"
+            : activity?.status === "waiting" ? "Needs attention"
+            : activity?.status === "running" ? activity.progress || "Working…"
+            : lastMessage?.content.replace(/[#*`]/g, "") || agent.specialty || (agent.is_master ? "Team coordination" : agent.role_label);
           return (
-            <div key={agent.id} className={cn("group relative mx-2 my-1 flex items-center rounded-xl hover:bg-muted", dm?.id === state.activeChannelId && "bg-brand-soft hover:bg-brand-soft")}>
-              <button className="flex min-h-16 min-w-0 flex-1 items-center gap-3 rounded-xl py-3 pr-10 pl-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={opening === agent.id} onClick={() => onMessage(agent)} aria-label={`Chat with ${agent.name}`}>
-                <Avatar name={agent.name} kind="agent" role={agent.role} avatar={agent.avatar} runtime={agent.runtime} size={40} working={activity?.status === "running"} />
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5"><span className="truncate text-sm font-medium">{agent.name}</span><span className="text-muted-foreground truncate text-xs">{opening === agent.id ? "Opening conversation…" : activity?.status === "waiting" ? "Needs attention" : activity?.status === "running" ? activity.progress || "Working…" : lastMessage?.content.replace(/[#*`]/g, "") || agent.specialty || (agent.is_master ? "Team coordination" : agent.role_label)}</span></span>
+            <div
+              key={agent.id}
+              className={cn("group relative mx-2 my-1 flex items-center rounded-xl hover:bg-muted", dm?.id === state.activeChannelId && "bg-brand-soft hover:bg-brand-soft")}
+            >
+              <button
+                className={`flex min-h-16 min-w-0 flex-1 items-center gap-3 rounded-xl py-3 pr-10 pl-3 text-left ${focusRing}`}
+                disabled={opening === agent.id}
+                onClick={() => onMessage(agent)}
+                aria-label={`Chat with ${agent.name}`}
+              >
+                <Avatar
+                  name={agent.name}
+                  kind="agent"
+                  role={agent.role}
+                  avatar={agent.avatar}
+                  runtime={agent.runtime}
+                  size={40}
+                  working={activity?.status === "running"}
+                />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-sm font-medium">{agent.name}</span>
+                  <span className="text-muted-foreground truncate text-xs">{summary}</span>
+                </span>
                 <UnreadBadge count={dm ? state.unread[dm.id] ?? 0 : 0} />
               </button>
-              <Button variant="ghost" size="icon-sm" className="absolute right-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100" aria-label={`View ${agent.name} profile`} onClick={() => openModal({ kind: "agent", agentId: agent.id })}><UserRoundIcon /></Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="absolute right-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-sm:opacity-100"
+                aria-label={`View ${agent.name} profile`}
+                onClick={() => openModal({ kind: "agent", agentId: agent.id })}
+              >
+                <UserRoundIcon />
+              </Button>
             </div>
           );
         })}

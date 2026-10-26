@@ -1,13 +1,14 @@
 import { expect, test } from "@playwright/test";
+import { signIn, signup } from "./helpers";
 
 test("admin manages independent local retrieval without an OpenAI key", async ({ page }, info) => {
-  await page.goto("/");
-  if (info.project.name === "desktop") await page.getByRole("button", { name: "New here? Create an account" }).click();
-  await page.getByLabel("Username").fill("provider_settings_admin");
-  if (info.project.name === "desktop") await page.getByLabel("Display name").fill("Provider administrator");
-  await page.getByLabel("Password").fill("secret123");
-  if (info.project.name === "desktop") await page.getByLabel("Band user API key", { exact: true }).fill("band_a_e2e-provider-admin");
-  await page.getByRole("button", { name: info.project.name === "desktop" ? "Create account" : "Sign in", exact: true }).click();
+  // The desktop run creates the workspace's first account (its owner); the compact run reuses it.
+  if (info.project.name === "desktop") {
+    await signup(page, { username: "provider_settings_admin", displayName: "Provider administrator",
+      bandKey: "band_a_e2e-provider-admin" });
+  } else {
+    await signIn(page, "provider_settings_admin");
+  }
   await expect(page.getByRole("button", { name: /^People/ })).toBeVisible();
   const settings = page.getByRole("button", { name: "Providers & APIs", exact: true });
   await expect(settings).toBeVisible();

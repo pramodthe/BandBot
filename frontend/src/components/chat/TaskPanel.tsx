@@ -26,7 +26,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn, formatCost, formatTokens, parseUtc } from "@/lib/utils";
+import { cn, formatCost, formatShortDate, formatTokens, parseUtc } from "@/lib/utils";
 import ActivityLog from "@/components/shared/ActivityLog";
 import { ArtifactCard } from "@/components/assistant-ui/elements/artifact-card";
 import { MemoryChips } from "@/components/assistant-ui/elements/memory-chips";
@@ -48,12 +48,24 @@ const FINISHED_SHOWN = 10;
 
 const isActive = (t: Task) => t.status === "queued" || t.status === "running" || t.status === "waiting";
 
+const SERVICE_NAMES: Record<string, string> = {
+  research: "Web research",
+  llm: "Model",
+  computer: "Computer",
+  retrieval: "Document search",
+  documents: "Document analysis",
+  analysis: "Document analysis",
+  image: "Image generation",
+  images: "Image generation",
+  integrations: "App integration",
+};
+
 function since(iso: string) {
   const seconds = Math.max(0, (Date.now() - parseUtc(iso).getTime()) / 1000);
   if (seconds < 60) return "now";
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-  return parseUtc(iso).toLocaleDateString([], { month: "short", day: "numeric" });
+  return formatShortDate(iso);
 }
 
 const clip = (text: string, max = 80) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -67,11 +79,28 @@ function usageFor(task: Task) {
   return task.usage.cost != null ? `${tokens} (${formatCost(task.usage.cost)})` : tokens;
 }
 
+/** The short status badge for a task row. */
+function statusLabel(task: Task) {
+  switch (task.status) {
+    case "waiting":
+      return task.waiting_for === "input" ? "Needs input" : task.waiting_for === "approval" ? "Needs approval" : "Needs attention";
+    case "running":
+      return task.cancel_requested ? "Stopping" : "Working";
+    case "completed":
+      return "Done";
+    case "queued":
+      return "Queued";
+    case "failed":
+      return "Failed";
+    default:
+      return "Cancelled";
+  }
+}
+
 function verbFor(task: Task) {
   if (task.status === "running" && task.cancel_requested) return "Cancelling…";
   if (task.provider_block) {
-    const service = ({ research: "Web research", llm: "Model", computer: "Computer", retrieval: "Document search",
-      documents: "Document analysis", analysis: "Document analysis", image: "Image generation", images: "Image generation", integrations: "App integration" } as Record<string, string>)[task.provider_block.service] || "Service";
+    const service = SERVICE_NAMES[task.provider_block.service] || "Service";
     return `${service} ${task.provider_block.code === "not_configured" ? "not configured" : "needs connection"}`;
   }
   if (task.status === "failed") return "Failed";
@@ -205,7 +234,10 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
     setBusy(id);
     try {
       const replacement = await api<Task>("POST", `/api/tasks/${id}/restart-with-providers`);
-      setTasks((rows) => rows.some((t) => t.id === replacement.id) ? rows.map((t) => t.id === replacement.id ? replacement : t) : [...rows, replacement]); setError("");
+      setTasks((rows) => rows.some((t) => t.id === replacement.id)
+        ? rows.map((t) => t.id === replacement.id ? replacement : t)
+        : [...rows, replacement]);
+      setError("");
     } catch (err) { setError((err as Error).message); }
     finally { setBusy(null); }
   };
@@ -214,7 +246,8 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
     try {
       const original = await api<TaskDetail>("GET", `/api/tasks/${id}`);
       setTasks((rows) => rows.some((t) => t.id === id) ? rows : [...rows, original]);
-      setResults((rows) => ({ ...rows, [id]: original })); setDetailId(id);
+      setResults((rows) => ({ ...rows, [id]: original }));
+      setDetailId(id);
     } catch (err) { setError((err as Error).message); }
   };
 
@@ -292,12 +325,34 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
       chip: [agentName(task.agent_id), since(task.updated_at), usageFor(task)].filter(Boolean).join(" · "),
       action: (
         <div className="flex flex-wrap items-center justify-end gap-1">
-          {task.status === "waiting" && requestFor(task) ? <Button variant="outline" size="sm" className="text-xs" onClick={() => reviewRequest(task)}>Review request</Button> : null}
-          {task.status === "completed" ? <Button variant="ghost" size="sm" className="text-xs" onClick={() => showDetail(task)}>View result</Button> : null}
-          {task.status === "failed" ? <Button variant="ghost" size="sm" className="text-xs" disabled={busy === task.id} onClick={() => void control(task.id, "retry")}>Retry</Button> : null}
-          {task.status === "running" || task.status === "queued" ? <Button variant="ghost" size="sm" className="text-xs" disabled={busy === task.id || task.cancel_requested} onClick={() => void control(task.id, "cancel")}>{task.cancel_requested ? "Stopping…" : "Stop"}</Button> : null}
-          {task.provider_block && isAdmin(state) && <Button variant="ghost" size="sm" onClick={() => window.dispatchEvent(new Event("open-provider-settings"))}>Reconnect</Button>}
-          {task.provider_block && <Button variant="ghost" size="sm" disabled={busy === task.id} onClick={() => void restartWithProviders(task.id)}>New task with current providers</Button>}
+          {task.status === "waiting" && requestFor(task) ? (
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => reviewRequest(task)}>Review request</Button>
+          ) : null}
+          {task.status === "completed" ? (
+            <Button variant="ghost" size="sm" className="text-xs" onClick={() => showDetail(task)}>View result</Button>
+          ) : null}
+          {task.status === "failed" ? (
+            <Button variant="ghost" size="sm" className="text-xs" disabled={busy === task.id} onClick={() => void control(task.id, "retry")}>Retry</Button>
+          ) : null}
+          {task.status === "running" || task.status === "queued" ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs"
+              disabled={busy === task.id || task.cancel_requested}
+              onClick={() => void control(task.id, "cancel")}
+            >
+              {task.cancel_requested ? "Stopping…" : "Stop"}
+            </Button>
+          ) : null}
+          {task.provider_block && isAdmin(state) && (
+            <Button variant="ghost" size="sm" onClick={() => window.dispatchEvent(new Event("open-provider-settings"))}>Reconnect</Button>
+          )}
+          {task.provider_block && (
+            <Button variant="ghost" size="sm" disabled={busy === task.id} onClick={() => void restartWithProviders(task.id)}>
+              New task with current providers
+            </Button>
+          )}
           <RowMenu label={`${agentName(task.agent_id)}: ${verb}`}>
             {task.restarted_from && <DropdownMenuItem onSelect={() => void openOriginal(task.restarted_from!)}>View original task</DropdownMenuItem>}
             {task.status === "completed" && <DropdownMenuItem onSelect={() => showDetail(task)}>View result</DropdownMenuItem>}
@@ -346,9 +401,24 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
   };
 
   return (
-    <section aria-label="Agent tasks" className={cn("mx-6 mb-3 flex max-h-[36vh] min-h-0 shrink-0 flex-col overflow-y-auto rounded-2xl border border-border bg-sidebar text-[13px] max-sm:mx-4", waiting > 0 && "border-warning-foreground/35")}>
-      <button type="button" aria-expanded={expanded} aria-controls={`task-history-${channelId}`} onClick={() => setExpanded((value) => !value)} className="focus-visible:ring-ring flex w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset">
-        <span className="flex items-center gap-2 font-semibold"><span className={cn("size-1.5 rounded-full bg-muted-foreground/50", active > 0 && "bg-primary", waiting > 0 && "bg-warning-foreground")} />Team activity</span>
+    <section
+      aria-label="Agent tasks"
+      className={cn(
+        "mx-6 mb-3 flex max-h-[36vh] min-h-0 shrink-0 flex-col overflow-y-auto rounded-2xl border border-border bg-sidebar text-[13px] max-sm:mx-4",
+        waiting > 0 && "border-warning-foreground/35",
+      )}
+    >
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={`task-history-${channelId}`}
+        onClick={() => setExpanded((value) => !value)}
+        className="focus-visible:ring-ring flex w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset"
+      >
+        <span className="flex items-center gap-2 font-semibold">
+          <span className={cn("size-1.5 rounded-full bg-muted-foreground/50", active > 0 && "bg-primary", waiting > 0 && "bg-warning-foreground")} />
+          Team activity
+        </span>
         <span aria-live="polite" className={cn("text-muted-foreground text-xs", waiting > 0 && "text-warning-foreground")}>{summary}</span>
         <ChevronDownIcon className={cn("text-muted-foreground ml-auto size-4 transition-transform motion-reduce:transition-none", expanded && "rotate-180")} />
       </button>
@@ -357,18 +427,48 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
           const step = taskStep(task);
           const agent = state.agents[task.agent_id];
           const Icon = step.icon;
-          const label = task.status === "waiting" ? task.waiting_for === "input" ? "Needs input" : task.waiting_for === "approval" ? "Needs approval" : "Needs attention" : task.status === "running" ? task.cancel_requested ? "Stopping" : "Working" : task.status === "completed" ? "Done" : task.status === "queued" ? "Queued" : task.status === "failed" ? "Failed" : "Cancelled";
-          return <div key={task.id} className="border-border bg-background flex flex-wrap items-center gap-2.5 rounded-xl border px-3 py-2.5">
-            <Avatar name={agentName(task.agent_id)} kind="agent" role={agent?.role} avatar={agent?.avatar} runtime={agent?.runtime} size={30} working={task.status === "running"} />
-            <div className="min-w-0 flex-1 basis-32">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium">{agentName(task.agent_id)}</span><span className={cn("text-muted-foreground inline-flex items-center gap-1 text-[11px]", task.status === "waiting" && "text-warning-foreground", task.status === "completed" && "text-brand-soft-foreground", task.status === "failed" && "text-destructive")}><Icon className={cn("size-3", task.status === "running" && "motion-safe:animate-spin")} />{label}</span></div>
-              <p className="text-muted-foreground mt-0.5 truncate text-xs" title={task.provider_block ? step.verb : task.progress}>{task.provider_block ? step.verb : task.progress || "Task received"}</p>
-              {expanded && <p className="text-muted-foreground mt-1 text-[11px]">{[since(task.updated_at), usageFor(task)].filter(Boolean).join(" · ")}</p>}
+          return (
+            <div key={task.id} className="border-border bg-background flex flex-wrap items-center gap-2.5 rounded-xl border px-3 py-2.5">
+              <Avatar
+                name={agentName(task.agent_id)}
+                kind="agent"
+                role={agent?.role}
+                avatar={agent?.avatar}
+                runtime={agent?.runtime}
+                size={30}
+                working={task.status === "running"}
+              />
+              <div className="min-w-0 flex-1 basis-32">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-medium">{agentName(task.agent_id)}</span>
+                  <span
+                    className={cn(
+                      "text-muted-foreground inline-flex items-center gap-1 text-[11px]",
+                      task.status === "waiting" && "text-warning-foreground",
+                      task.status === "completed" && "text-brand-soft-foreground",
+                      task.status === "failed" && "text-destructive",
+                    )}
+                  >
+                    <Icon className={cn("size-3", task.status === "running" && "motion-safe:animate-spin")} />
+                    {statusLabel(task)}
+                  </span>
+                </div>
+                <p className="text-muted-foreground mt-0.5 truncate text-xs" title={task.provider_block ? step.verb : task.progress}>
+                  {task.provider_block ? step.verb : task.progress || "Task received"}
+                </p>
+                {expanded && (
+                  <p className="text-muted-foreground mt-1 text-[11px]">{[since(task.updated_at), usageFor(task)].filter(Boolean).join(" · ")}</p>
+                )}
+              </div>
+              <div className="ml-auto">{step.action}</div>
             </div>
-            <div className="ml-auto">{step.action}</div>
-          </div>;
+          );
         })}
-        {!expanded && current.length > shownTasks.length && <Button variant="link" size="inline" className="self-start px-2 py-1 text-xs" onClick={() => setExpanded(true)}>Show {current.length - shownTasks.length} more active {current.length - shownTasks.length === 1 ? "task" : "tasks"}</Button>}
+        {!expanded && current.length > shownTasks.length && (
+          <Button variant="link" size="inline" className="self-start px-2 py-1 text-xs" onClick={() => setExpanded(true)}>
+            Show {current.length - shownTasks.length} more active {current.length - shownTasks.length === 1 ? "task" : "tasks"}
+          </Button>
+        )}
       </div>}
       {error && <p role="alert" className="text-destructive px-4 pb-3">{error}</p>}
       <div id={`task-history-${channelId}`} hidden={!expanded}>
@@ -376,9 +476,20 @@ export default function TaskPanel({ channelId, state, dispatch, openComputer }: 
         <div className="flex flex-col gap-2 px-3 pb-3">
           {schedules.map((schedule) => {
             const step = scheduleStep(schedule);
-            return <div key={schedule.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-3"><CalendarClockIcon className="text-muted-foreground size-4" /><div className="min-w-0 flex-1 basis-32"><p className="break-words">{step.verb}</p><p className="text-muted-foreground mt-1 text-xs">{step.chip}</p></div>{step.action}</div>;
+            return (
+              <div key={schedule.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-border p-3">
+                <CalendarClockIcon className="text-muted-foreground size-4" />
+                <div className="min-w-0 flex-1 basis-32">
+                  <p className="break-words">{step.verb}</p>
+                  <p className="text-muted-foreground mt-1 text-xs">{step.chip}</p>
+                </div>
+                {step.action}
+              </div>
+            );
           })}
-          {tasks.length === 0 && schedules.length === 0 && <p className="text-muted-foreground px-1 pb-2">Mention a teammate in chat to start. Their progress and results will appear here.</p>}
+          {tasks.length === 0 && schedules.length === 0 && (
+            <p className="text-muted-foreground px-1 pb-2">Mention a teammate in chat to start. Their progress and results will appear here.</p>
+          )}
           {activity ? (
             <Box
               title={activity.taskId

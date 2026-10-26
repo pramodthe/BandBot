@@ -24,7 +24,6 @@ export interface State {
   channels: Record<number, Channel>;
   agents: Record<number, Agent>;
   messages: Record<number, Message[]>;
-  typing: Record<number, number[]>;
   activity: Record<number, Record<string, TaskActivity>>;
   drafts: Record<number, Record<string, Draft>>;
   unread: Record<number, number>;
@@ -90,7 +89,6 @@ export function initialState(boot: Bootstrap): State {
     channels: byId(boot.channels),
     agents: byId(boot.agents),
     messages: {},
-    typing: {},
     activity: {},
     drafts: {},
     unread: {},
@@ -136,7 +134,6 @@ function dropChannel(state: State, channelId: number): State {
     messages: omitRecord(state.messages, channelId),
     drafts: omitRecord(state.drafts, channelId),
     activity: omitRecord(state.activity, channelId),
-    typing: omitRecord(state.typing, channelId),
     unread: omitRecord(state.unread, channelId),
     readThrough: omitRecord(state.readThrough, channelId),
     outgoing: omitRecord(state.outgoing, channelId),
@@ -151,7 +148,6 @@ function keepChannels(state: State, ids: Set<number>): State {
     messages: keep(state.messages),
     drafts: keep(state.drafts),
     activity: keep(state.activity),
-    typing: keep(state.typing),
     unread: keep(state.unread),
     readThrough: keep(state.readThrough),
     outgoing: keep(state.outgoing),
@@ -271,14 +267,6 @@ function applyEventBody(state: State, event: ServerEvent): State {
       if (!agent) return state;
       return { ...state, agents: { ...state.agents, [agent.id]: { ...agent, status: event.status } } };
     }
-    case "typing": {
-      if (!state.channels[event.channel_id]) return state;
-      const current = (state.typing[event.channel_id] ?? []).filter((id) => id !== event.agent_id);
-      return {
-        ...state,
-        typing: { ...state.typing, [event.channel_id]: event.active ? [...current, event.agent_id] : current },
-      };
-    }
     case "band_status":
       return { ...state, band: event.band };
     case "task_activity": {
@@ -368,7 +356,6 @@ function eventChannel(event: ServerEvent): number | null {
     case "document_removed":
     case "draft":
     case "draft_append":
-    case "typing":
     case "channel_removed":
       return event.channel_id;
     case "channel":

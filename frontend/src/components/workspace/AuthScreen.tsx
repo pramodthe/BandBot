@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ArrowRightIcon, CheckIcon, LoaderCircleIcon, MessageCircleIcon, MonitorIcon, UsersIcon } from "lucide-react";
 import { api, ApiError } from "@/api";
 import Brand from "@/components/shared/Brand";
@@ -8,9 +8,46 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import SignupBandConnection from "./SignupBandConnection";
 
+type Mode = "login" | "signup" | "recover" | "reset";
+
+const TITLES: Record<Mode, string> = {
+  login: "Welcome back.",
+  signup: "Create your account.",
+  recover: "Recover your account.",
+  reset: "Choose a new password.",
+};
+
+const INTROS: Record<Mode, string> = {
+  login: "Pick up the conversation. Keep the work moving.",
+  signup: "Create your workspace login. Connect Band now or later to create and manage your agents.",
+  recover: "Use your verified recovery email and one-time code to get back to your workspace.",
+  reset: "Use your verified recovery email and one-time code to get back to your workspace.",
+};
+
+const SUBMIT_LABELS: Record<Mode, string> = {
+  login: "Sign in",
+  signup: "Create account",
+  recover: "Send reset code",
+  reset: "Update password",
+};
+
+const StepConnector = () => <div className="border-border my-2 ml-[18px] h-5 border-l border-dashed" />;
+
+function Step({ title, detail, children }: { title: string; detail: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-3">
+      {children}
+      <div>
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-muted-foreground text-xs">{detail}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => void }) {
   const id = useId();
-  const [mode, setMode] = useState<"login" | "signup" | "recover" | "reset">("login");
+  const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -51,8 +88,9 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         setMode("login");
         return;
       }
-      const body =
-        mode === "signup" ? { username, display_name: displayName || username, password, band_api_key: bandKey.trim() || undefined } : { username, password };
+      const body = mode === "signup"
+        ? { username, display_name: displayName || username, password, band_api_key: bandKey.trim() || undefined }
+        : { username, password };
       const result = await api<{ token: string }>("POST", `/api/auth/${mode}`, body);
       setBandKey("");
       onAuthed(result.token);
@@ -71,81 +109,137 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (token: string) => 
         <Brand />
         <div className="mx-auto w-full max-w-lg py-12">
           <p className="text-brand-soft-foreground mb-5 text-xs font-semibold uppercase tracking-[0.18em]">Good company. Great work.</p>
-          <h1 className="text-5xl leading-[1.12] font-medium tracking-[-0.045em] xl:text-6xl">Big ideas.<br />A team to make<br />them happen<span className="text-primary">.</span></h1>
-          <p className="text-muted-foreground mt-6 max-w-sm text-base leading-relaxed">People and AI teammates, sharing context and getting work done together.</p>
+          <h1 className="text-5xl leading-[1.12] font-medium tracking-[-0.045em] xl:text-6xl">
+            Big ideas.<br />A team to make<br />them happen<span className="text-primary">.</span>
+          </h1>
+          <p className="text-muted-foreground mt-6 max-w-sm text-base leading-relaxed">
+            People and AI teammates, sharing context and getting work done together.
+          </p>
           <div className="mt-10 rounded-2xl border border-border bg-background p-5 shadow-xs">
-            <div className="mb-5 flex items-center gap-2 text-xs font-medium"><span className="size-1.5 rounded-full bg-primary" />One conversation. A whole team.</div>
-            <div className="flex items-center gap-3">
+            <div className="mb-5 flex items-center gap-2 text-xs font-medium">
+              <span className="size-1.5 rounded-full bg-primary" />One conversation. A whole team.
+            </div>
+            <Step title="You set the direction" detail="Share a goal in your channel.">
               <Avatar name="You" kind="human" size={36} />
-              <div><p className="text-sm font-medium">You set the direction</p><p className="text-muted-foreground text-xs">Share a goal in your channel.</p></div>
-            </div>
-            <div className="border-border my-2 ml-[18px] h-5 border-l border-dashed" />
-            <div className="flex items-center gap-3">
-              <div className="flex -space-x-1"><Avatar name="Coordinator" kind="agent" role="master" size={36} /><Avatar name="Researcher" kind="agent" role="researcher" size={36} /><Avatar name="Builder" kind="agent" role="coder" size={36} /></div>
-              <div><p className="text-sm font-medium">Your teammates take it forward</p><p className="text-muted-foreground text-xs">Research, build, and collaborate.</p></div>
-            </div>
-            <div className="border-border my-2 ml-[18px] h-5 border-l border-dashed" />
-            <div className="flex items-center gap-3"><span className="bg-brand-soft text-brand-soft-foreground flex size-9 items-center justify-center rounded-xl"><CheckIcon className="size-4" /></span><div><p className="text-sm font-medium">Useful work, ready to review</p><p className="text-muted-foreground text-xs">Follow progress and step in along the way.</p></div></div>
+            </Step>
+            <StepConnector />
+            <Step title="Your teammates take it forward" detail="Research, build, and collaborate.">
+              <div className="flex -space-x-1">
+                <Avatar name="Coordinator" kind="agent" role="master" size={36} />
+                <Avatar name="Researcher" kind="agent" role="researcher" size={36} />
+                <Avatar name="Builder" kind="agent" role="coder" size={36} />
+              </div>
+            </Step>
+            <StepConnector />
+            <Step title="Useful work, ready to review" detail="Follow progress and step in along the way.">
+              <span className="bg-brand-soft text-brand-soft-foreground flex size-9 items-center justify-center rounded-xl"><CheckIcon className="size-4" /></span>
+            </Step>
           </div>
         </div>
-        <div className="text-muted-foreground flex flex-wrap gap-x-6 gap-y-3 text-xs"><span className="flex items-center gap-2"><MessageCircleIcon className="size-3.5" />Shared conversations</span><span className="flex items-center gap-2"><UsersIcon className="size-3.5" />Persistent teammates</span><span className="flex items-center gap-2"><MonitorIcon className="size-3.5" />Agent computers</span></div>
+        <div className="text-muted-foreground flex flex-wrap gap-x-6 gap-y-3 text-xs">
+          <span className="flex items-center gap-2"><MessageCircleIcon className="size-3.5" />Shared conversations</span>
+          <span className="flex items-center gap-2"><UsersIcon className="size-3.5" />Persistent teammates</span>
+          <span className="flex items-center gap-2"><MonitorIcon className="size-3.5" />Agent computers</span>
+        </div>
       </section>
       <main className="flex flex-col px-6 py-8 sm:px-12">
         <Brand className="mb-10 lg:hidden" />
-      <form
-        className={`m-auto flex w-full flex-col gap-4 py-8 ${mode === "signup" ? "max-w-[420px]" : "max-w-[360px]"}`}
-        onSubmit={submit}
-      >
-        <p className="text-primary text-xs font-semibold uppercase tracking-[0.16em]">Your shared workspace</p>
-        <h2 className="text-3xl font-semibold tracking-tight">{mode === "login" ? "Welcome back." : mode === "signup" ? "Create your account." : mode === "recover" ? "Recover your account." : "Choose a new password."}</h2>
-        <p className="text-muted-foreground mb-2 text-sm leading-relaxed">{mode === "login" ? "Pick up the conversation. Keep the work moving." : mode === "signup" ? "Create your workspace login. Connect Band now or later to create and manage your agents." : "Use your verified recovery email and one-time code to get back to your workspace."}</p>
-        {mode !== "reset" && (
-        <Field id={`${id}-username`} label="Username">
-          <Input id={`${id}-username`} className="h-11 rounded-xl" autoComplete="username" placeholder="Your username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus required disabled={busy} maxLength={32} />
-        </Field>
-        )}
-        {mode === "signup" && (
-          <Field id={`${id}-display`} label="Display name">
-            <Input
-              id={`${id}-display`}
-              className="h-11 rounded-xl"
-              autoComplete="name"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="e.g. Alice Chen"
+        <form
+          className={`m-auto flex w-full flex-col gap-4 py-8 ${mode === "signup" ? "max-w-[420px]" : "max-w-[360px]"}`}
+          onSubmit={submit}
+        >
+          <p className="text-primary text-xs font-semibold uppercase tracking-[0.16em]">Your shared workspace</p>
+          <h2 className="text-3xl font-semibold tracking-tight">{TITLES[mode]}</h2>
+          <p className="text-muted-foreground mb-2 text-sm leading-relaxed">{INTROS[mode]}</p>
+          {mode !== "reset" && (
+            <Field id={`${id}-username`} label="Username">
+              <Input
+                id={`${id}-username`}
+                className="h-11 rounded-xl"
+                autoComplete="username"
+                placeholder="Your username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoFocus
+                required
+                disabled={busy}
+                maxLength={32}
+              />
+            </Field>
+          )}
+          {mode === "signup" && (
+            <Field id={`${id}-display`} label="Display name">
+              <Input
+                id={`${id}-display`}
+                className="h-11 rounded-xl"
+                autoComplete="name"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="e.g. Alice Chen"
+                disabled={busy}
+              />
+            </Field>
+          )}
+          {mode === "reset" && (
+            <Field id={`${id}-code`} label="Reset code">
+              <Input id={`${id}-code`} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" required />
+            </Field>
+          )}
+          {mode !== "recover" && (
+            <Field id={`${id}-password`} label={mode === "reset" ? "New password" : "Password"}>
+              <Input
+                id={`${id}-password`}
+                className="h-11 rounded-xl"
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={6}
+                maxLength={128}
+                disabled={busy}
+              />
+            </Field>
+          )}
+          {mode === "signup" && (
+            <SignupBandConnection
+              inputRef={bandInput}
+              value={bandKey}
+              onChange={(value) => { setBandKey(value); setBandError(""); }}
               disabled={busy}
+              error={bandError}
             />
-          </Field>
-        )}
-        {mode === "reset" && (
-          <Field id={`${id}-code`} label="Reset code">
-            <Input id={`${id}-code`} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" required />
-          </Field>
-        )}
-        {mode !== "recover" && (
-          <Field id={`${id}-password`} label={mode === "reset" ? "New password" : "Password"}>
-            <Input id={`${id}-password`} className="h-11 rounded-xl" autoComplete={mode === "login" ? "current-password" : "new-password"} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} maxLength={128} disabled={busy} />
-          </Field>
-        )}
-        {mode === "signup" && <SignupBandConnection inputRef={bandInput} value={bandKey} onChange={(value) => { setBandKey(value); setBandError(""); }} disabled={busy} error={bandError} />}
-        {notice && <div className="text-sm" role="status">{notice}</div>}
-        {error && <div className="text-destructive text-[13.5px]" role="alert">{error}</div>}
-        <Button className="mt-2 h-11 rounded-xl" disabled={busy}>{busy
-          ? mode === "signup" && bandKey.trim() ? "Checking your Band key…" : "Please wait…"
-          : mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : mode === "recover" ? "Send reset code" : "Update password"}
-          {busy ? <LoaderCircleIcon className="animate-spin" /> : <ArrowRightIcon />}
-        </Button>
-        {busy && mode === "signup" && !!bandKey.trim() && <p role="status" className="text-muted-foreground text-center text-xs">Verifying your optional Band connection.</p>}
-        {mode === "login" && (
-          <Button type="button" variant="link" size="inline" disabled={busy} onClick={() => { setMode("recover"); setError(""); setNotice(""); }}>
-            Forgot password?
+          )}
+          {notice && <div className="text-sm" role="status">{notice}</div>}
+          {error && <div className="text-destructive text-[13.5px]" role="alert">{error}</div>}
+          <Button className="mt-2 h-11 rounded-xl" disabled={busy}>
+            {busy ? mode === "signup" && bandKey.trim() ? "Checking your Band key…" : "Please wait…" : SUBMIT_LABELS[mode]}
+            {busy ? <LoaderCircleIcon className="animate-spin" /> : <ArrowRightIcon />}
           </Button>
-        )}
-        <Button type="button" variant="link" size="inline" disabled={busy} onClick={() => { setMode(mode === "signup" ? "login" : mode === "login" ? "signup" : "login"); setBandKey(""); setBandError(""); setError(""); }}>
-          {mode === "login" ? "New here? Create an account" : "Already have an account? Sign in"}
-        </Button>
-      </form>
-      <p className="text-muted-foreground mt-8 text-center text-xs">A little more together. A lot more done.</p>
+          {busy && mode === "signup" && !!bandKey.trim() && (
+            <p role="status" className="text-muted-foreground text-center text-xs">Verifying your optional Band connection.</p>
+          )}
+          {mode === "login" && (
+            <Button type="button" variant="link" size="inline" disabled={busy} onClick={() => { setMode("recover"); setError(""); setNotice(""); }}>
+              Forgot password?
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="link"
+            size="inline"
+            disabled={busy}
+            onClick={() => {
+              setMode(mode === "login" ? "signup" : "login");
+              setBandKey("");
+              setBandError("");
+              setError("");
+            }}
+          >
+            {mode === "login" ? "New here? Create an account" : "Already have an account? Sign in"}
+          </Button>
+        </form>
+        <p className="text-muted-foreground mt-8 text-center text-xs">A little more together. A lot more done.</p>
       </main>
     </div>
   );

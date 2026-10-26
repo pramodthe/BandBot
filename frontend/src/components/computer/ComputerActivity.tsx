@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, HistoryIcon, MonitorIcon } from "lucide-react";
 import type { Agent, ChannelComputer } from "@/types";
-import { cn, parseUtc } from "@/lib/utils";
+import { cn, formatClock } from "@/lib/utils";
 import Avatar from "@/components/shared/Avatar";
 import { ComputerUse } from "@/components/assistant-ui/elements/computer-use";
 import { Button } from "@/components/ui/button";
@@ -48,7 +48,7 @@ export default function ComputerActivity({ agent, activity, openComputer }: {
         {computer?.network_warning && <p role="alert" className="mt-2 max-w-md rounded-lg border border-border bg-muted p-3 text-xs">{computer.network_warning}</p>}
         <div className="mt-1 flex max-w-md flex-wrap items-center justify-between gap-x-2 text-xs">
           <span className="text-muted-foreground">{computer?.observed_at
-            ? `Observed ${parseUtc(computer.observed_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`
+            ? `Observed ${formatClock(computer.observed_at, { seconds: true })}`
             : "Computer observations"}</span>
           <div className="flex flex-wrap items-center gap-3"><RegisterAppPreview taskId={activity.task_id} />
           <Button variant="link" size="inline" onClick={() => openComputer(agent.id, activity.task_id)}>

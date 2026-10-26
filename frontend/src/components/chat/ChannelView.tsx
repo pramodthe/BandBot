@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Disp
 import { ArrowLeftIcon, LayoutDashboardIcon, MonitorIcon, PanelRightIcon, UsersIcon } from "lucide-react";
 import { policyBlock, type State, type Action } from "@/store";
 import type { Agent, Channel, ChannelComputer, Draft, Message } from "@/types";
-import { cn } from "@/lib/utils";
+import { cn, formatClock, parseUtc } from "@/lib/utils";
 import Avatar from "@/components/shared/Avatar";
 import Composer from "./Composer";
 import TaskStarters from "./TaskStarters";
@@ -23,19 +23,14 @@ import ChannelViews from "@/components/generated/ChannelViews";
 import ApprovalRequest from "./ApprovalRequest";
 import WorkspaceEmpty from "@/components/shared/WorkspaceEmpty";
 import { AgentHandoff } from "@/components/assistant-ui/elements/agent-handoff";
-import { AgentStatus } from "@/components/assistant-ui/elements/agent-status";
 import type { Modal, OpenComputer } from "@/components/workspace/types";
 
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
 const titleClass = "truncate text-base font-semibold";
 const topicClass = "text-muted-foreground truncate text-[13px]";
 
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function formatDay(iso: string) {
-  const d = new Date(iso);
+  const d = parseUtc(iso);
   const today = new Date();
   if (d.toDateString() === today.toDateString()) return "Today";
   return d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
@@ -68,8 +63,18 @@ function MessageContent({ message, settled, state }: { message: Message; settled
       )}
       <RichText text={message.content} />
       {(message.artifacts?.length ?? 0) > 0 && <MessageArtifacts artifacts={message.artifacts!} liveApps={liveApps} />}
-      {(message.attachments?.length ?? 0) > 0 && <div className="my-2 flex flex-wrap gap-2">{message.attachments!.map((doc) => <AttachmentCard key={doc.id} document={doc} />)}</div>}
-      {components.length > 0 && <MessageComponents components={components} channelId={message.channel_id} canRespond={state.channels[message.channel_id]?.human_ids.includes(state.me.id) ?? false} />}
+      {(message.attachments?.length ?? 0) > 0 && (
+        <div className="my-2 flex flex-wrap gap-2">
+          {message.attachments!.map((doc) => <AttachmentCard key={doc.id} document={doc} />)}
+        </div>
+      )}
+      {components.length > 0 && (
+        <MessageComponents
+          components={components}
+          channelId={message.channel_id}
+          canRespond={state.channels[message.channel_id]?.human_ids.includes(state.me.id) ?? false}
+        />
+      )}
       {links.length > 1 && <SourcesPill links={links} />}
     </>
   );
@@ -129,14 +134,27 @@ function MessageRow({
   const mine = message.author_type === "human" && message.author_id === state.me.id;
 
   return (
-    <div id={`message-${message.id}`} tabIndex={-1} className={cn(rowClass, "rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset", compact && "py-1", mine && "flex-row-reverse")}>
+    <div
+      id={`message-${message.id}`}
+      tabIndex={-1}
+      className={cn(rowClass, "rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset", compact && "py-1", mine && "flex-row-reverse")}
+    >
       <div className="w-9 shrink-0">
         {compact ? (
           <span className="text-muted-foreground invisible block pt-[3px] text-right text-[11px] group-hover:visible">
-            {formatTime(message.created_at)}
+            {formatClock(message.created_at)}
           </span>
+        ) : agent ? (
+          <button
+            type="button"
+            className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`View ${agent.name} profile`}
+            onClick={() => openModal({ kind: "agent", agentId: agent.id })}
+          >
+            <Avatar name={message.author_name} kind={message.author_type} role={agent.role} avatar={agent.avatar} runtime={agent.runtime} />
+          </button>
         ) : (
-          agent ? <button type="button" className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`View ${agent.name} profile`} onClick={() => openModal({ kind: "agent", agentId: agent.id })}><Avatar name={message.author_name} kind={message.author_type} role={agent.role} avatar={agent.avatar} runtime={agent.runtime} /></button> : <Avatar name={message.author_name} kind={message.author_type} />
+          <Avatar name={message.author_name} kind={message.author_type} />
         )}
       </div>
       <div
@@ -153,7 +171,7 @@ function MessageRow({
             name={message.author_name}
             agent={agent}
             tag={agent ? agent.role_label : message.author_type === "external" ? "via Band" : null}
-            time={formatTime(message.created_at)}
+            time={formatClock(message.created_at)}
             openModal={openModal}
             mine={mine}
           />
@@ -220,11 +238,6 @@ export default function ChannelView({
   const hiddenCount = (messages?.length ?? 0) - visible.length;
   const drafts = Object.values(state.drafts[channel.id] ?? {}).filter((d) => state.agents[d.agent_id]);
   const draftLength = drafts.reduce((total, d) => total + d.content.length, 0);
-  const working: { key: string; state: "working" | "waiting"; label: string }[] = [
-    ...(state.typing[channel.id] ?? [])
-      .filter((id) => state.agents[id] && !Object.values(state.activity[channel.id] ?? {}).some((task) => task.agent_id === id && task.status !== "done"))
-      .map((id) => ({ key: `typing-${id}`, state: "working" as const, label: `${state.agents[id].name} is working…` })),
-  ];
   // A hand-off is settled once its teammate has posted after it.
   const settledHandoffs = new Set<number>();
   const laterAuthors = new Set<string>();
@@ -233,12 +246,18 @@ export default function ChannelView({
     laterAuthors.add(m.author_name);
   }
 
-  useEffect(() => { try { localStorage.setItem("show-chatter", showChatter ? "1" : "0"); } catch { /* The current session still respects the selection. */ } }, [showChatter]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("show-chatter", showChatter ? "1" : "0");
+    } catch {
+      // The current session still respects the selection.
+    }
+  }, [showChatter]);
 
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [visible.length, working.length, draftLength, imageProgress]);
+  }, [visible.length, draftLength, imageProgress]);
 
   const onScroll = () => {
     const el = scroller.current;
@@ -265,7 +284,7 @@ export default function ChannelView({
       prev.author_type === m.author_type &&
       prev.author_name === m.author_name &&
       isChatter(prev) === isChatter(m) &&
-      new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() < GROUP_WINDOW_MS;
+      parseUtc(m.created_at).getTime() - parseUtc(prev.created_at).getTime() < GROUP_WINDOW_MS;
     rows.push(
       <MessageRow key={m.id} message={m} state={state} compact={compact} settled={settledHandoffs.has(m.id)} openModal={openModal} />,
     );
@@ -288,9 +307,16 @@ export default function ChannelView({
   return (
     <section className="flex min-w-0 flex-1 flex-col">
       <header className="border-border flex min-h-20 flex-wrap items-center gap-x-3 gap-y-2 border-b px-6 py-4 max-sm:px-4">
-        <Button variant="ghost" size="icon-sm" className="hidden max-sm:inline-flex" aria-label="Back to conversations" onClick={onBack}><ArrowLeftIcon /></Button>
+        <Button variant="ghost" size="icon-sm" className="hidden max-sm:inline-flex" aria-label="Back to conversations" onClick={onBack}>
+          <ArrowLeftIcon />
+        </Button>
         {dmAgent ? (
-          <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`View ${dmAgent.name} profile`} onClick={() => openModal({ kind: "agent", agentId: dmAgent.id })}>
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`View ${dmAgent.name} profile`}
+            onClick={() => openModal({ kind: "agent", agentId: dmAgent.id })}
+          >
             <Avatar name={dmAgent.name} kind="agent" role={dmAgent.role} avatar={dmAgent.avatar} runtime={dmAgent.runtime} />
             <div className="min-w-0">
               <div className={titleClass}>{dmAgent.name}</div>
@@ -302,7 +328,11 @@ export default function ChannelView({
         ) : (
           <div className="min-w-0 flex-1">
             <div className={titleClass}>{dmPerson ? dmPerson.display_name : `# ${channel.name}`}</div>
-            {dmPerson ? <div className={topicClass}>Private conversation</div> : <div className={topicClass}>{channel.topic || `${humanCount} ${humanCount === 1 ? "person" : "people"} · ${agentCount} AI ${agentCount === 1 ? "teammate" : "teammates"}`}</div>}
+            <div className={topicClass}>
+              {dmPerson
+                ? "Private conversation"
+                : channel.topic || `${humanCount} ${humanCount === 1 ? "person" : "people"} · ${agentCount} AI ${agentCount === 1 ? "teammate" : "teammates"}`}
+            </div>
           </div>
         )}
         <div className="ml-auto flex min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2 max-sm:w-full">
@@ -345,18 +375,46 @@ export default function ChannelView({
         </div>
       </header>
       <ChannelViews key={`views-${channel.id}`} channelId={channel.id} open={viewsOpen} onClose={() => setViewsOpen(false)} />
-      {documentsOpen && <DocumentsPanel key={`documents-${channel.id}`} channelId={channel.id} state={state} onClose={() => setDocumentsOpen(false)} />}
+      {documentsOpen && (
+        <DocumentsPanel key={`documents-${channel.id}`} channelId={channel.id} state={state} onClose={() => setDocumentsOpen(false)} />
+      )}
 
-      <div className={cn("min-h-0 flex-1 overflow-y-auto pt-3 pb-1", messages?.length === 0 && pendingImages.length === 0 && "flex flex-col")} ref={scroller} onScroll={onScroll}>
+      <div
+        className={cn("min-h-0 flex-1 overflow-y-auto pt-3 pb-1", messages?.length === 0 && pendingImages.length === 0 && "flex flex-col")}
+        ref={scroller}
+        onScroll={onScroll}
+      >
         {!messages && <div className="text-muted-foreground p-6 text-center">Loading messages…</div>}
         {messages && messages.length === 0 && pendingImages.length === 0 && (
           <WorkspaceEmpty
             title={dmPerson ? `Chat with ${dmPerson.display_name}` : dmAgent ? `A little help from ${dmAgent.name}` : `Welcome to #${channel.name}`}
-            description={dmPerson ? "Your private conversation. Send a message to get started." : dmAgent ? `Share a goal with ${dmAgent.name}. Work through it together, right here.` : starterAgent ? `Share an idea, make a plan, or hand off a task. Mention @${starterAgent.name} to bring your AI teammates into the conversation.` : "A shared space for your people and ideas. Add an AI teammate when you’re ready to put them to work."}
-            icon={!dmPerson ? <div className="mb-2 flex items-center gap-2">{starterAgent ? <Avatar name={starterAgent.name} kind="agent" role={starterAgent.role} avatar={starterAgent.avatar} runtime={starterAgent.runtime} size={64} /> : <BrandMark className="size-14" />}</div> : undefined}
+            description={dmPerson
+              ? "Your private conversation. Send a message to get started."
+              : dmAgent
+                ? `Share a goal with ${dmAgent.name}. Work through it together, right here.`
+                : starterAgent
+                  ? `Share an idea, make a plan, or hand off a task. Mention @${starterAgent.name} to bring your AI teammates into the conversation.`
+                  : "A shared space for your people and ideas. Add an AI teammate when you’re ready to put them to work."}
+            icon={!dmPerson ? (
+              <div className="mb-2 flex items-center gap-2">
+                {starterAgent ? (
+                  <Avatar name={starterAgent.name} kind="agent" role={starterAgent.role} avatar={starterAgent.avatar} runtime={starterAgent.runtime} size={64} />
+                ) : (
+                  <BrandMark className="size-14" />
+                )}
+              </div>
+            ) : undefined}
           >
-            {!dmPerson && starterAgent && <TaskStarters agentName={starterAgent.name} isDm={channel.is_dm} onPick={(text) => setSuggestion((current) => ({ text, revision: (current?.revision ?? 0) + 1 }))} />}
-            {!dmPerson && !starterAgent && <Button variant="outline" className="rounded-xl" onClick={() => openModal({ kind: "new-agent" })}><UsersIcon />Add a teammate</Button>}
+            {!dmPerson && starterAgent && (
+              <TaskStarters
+                agentName={starterAgent.name}
+                isDm={channel.is_dm}
+                onPick={(text) => setSuggestion((current) => ({ text, revision: (current?.revision ?? 0) + 1 }))}
+              />
+            )}
+            {!dmPerson && !starterAgent && (
+              <Button variant="outline" className="rounded-xl" onClick={() => openModal({ kind: "new-agent" })}><UsersIcon />Add a teammate</Button>
+            )}
           </WorkspaceEmpty>
         )}
         <MentionNames names={mentionNames}>
@@ -365,14 +423,31 @@ export default function ChannelView({
             <div key={item.clientId} className={cn(rowClass, "flex-row-reverse")}>
               <div className="w-9 shrink-0"><Avatar name={state.me.display_name} kind="human" /></div>
               <div className="bg-self-message ml-auto max-w-[85%] rounded-2xl px-4 py-3 text-white">
-                <AuthorLine name={state.me.display_name} agent={null} tag={null} time={item.status === "pending" ? "Sending…" : "Not sent"} mine openModal={openModal} />
-                {item.content ? <p className="whitespace-pre-wrap">{item.content}</p> : <p className="text-white/80">{item.attachmentIds.length} attachment{item.attachmentIds.length === 1 ? "" : "s"}</p>}
+                <AuthorLine
+                  name={state.me.display_name}
+                  agent={null}
+                  tag={null}
+                  time={item.status === "pending" ? "Sending…" : "Not sent"}
+                  mine
+                  openModal={openModal}
+                />
+                {item.content ? (
+                  <p className="whitespace-pre-wrap">{item.content}</p>
+                ) : (
+                  <p className="text-white/80">{item.attachmentIds.length} attachment{item.attachmentIds.length === 1 ? "" : "s"}</p>
+                )}
                 {item.status === "pending" && <p className="mt-1 text-xs text-white/75" role="status">Sending…</p>}
                 {item.status === "failed" && (
                   <div className="mt-2">
                     <p className="text-xs text-white/90" role="alert">{item.error || "Couldn't send"}</p>
                     {item.retryable && (
-                      <Button variant="outline" size="sm" className="mt-2 border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white" aria-label="Retry sending" onClick={() => void deliverMessage(dispatch, channel.id, item.content, item.attachmentIds, item.clientId)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+                        aria-label="Retry sending"
+                        onClick={() => void deliverMessage(dispatch, channel.id, item.content, item.attachmentIds, item.clientId)}
+                      >
                         Retry
                       </Button>
                     )}
@@ -385,11 +460,16 @@ export default function ChannelView({
             <DraftRow key={d.task_id} draft={d} state={state} openModal={openModal} />
           ))}
         </MentionNames>
-        {pendingImages.map((activity) => state.agents[activity.agent_id] && <ImageGenerationActivity
-          key={activity.id} activity={activity} agent={state.agents[activity.agent_id]} />)}
+        {pendingImages.map((activity) => state.agents[activity.agent_id] && (
+          <ImageGenerationActivity key={activity.id} activity={activity} agent={state.agents[activity.agent_id]} />
+        ))}
         {!computerOpen && activeComputers.map((activity) => state.agents[activity.agent_id] && (
-          <ComputerActivity key={`${channel.id}-${activity.task_id}`} agent={state.agents[activity.agent_id]}
-            activity={activity} openComputer={openComputer} />
+          <ComputerActivity
+            key={`${channel.id}-${activity.task_id}`}
+            agent={state.agents[activity.agent_id]}
+            activity={activity}
+            openComputer={openComputer}
+          />
         ))}
         {hiddenCount > 0 && (
           <Button variant="link" size="inline" className="mx-5 my-2 text-[13px]" onClick={() => setShowChatter(true)}>
@@ -398,22 +478,14 @@ export default function ChannelView({
         )}
       </div>
 
-      {!dmPerson && <TaskPanel key={`tasks-${channel.id}`} channelId={channel.id} state={state} dispatch={dispatch} openComputer={openComputer} />}
-
-      <div className={cn("relative flex shrink-0 items-center gap-1.5 overflow-x-auto px-5 [scrollbar-width:none]", working.length > 0 && "h-8")} aria-live="polite">
-        {working.map((item) => (
-          <AgentStatus
-            key={item.key}
-            className="shrink-0 py-1 ps-2.5 pe-3 [&>span:last-child]:animate-none"
-            state={item.state}
-            label={item.label}
-            trailing={null}
-          />
-        ))}
-      </div>
+      {!dmPerson && (
+        <TaskPanel key={`tasks-${channel.id}`} channelId={channel.id} state={state} dispatch={dispatch} openComputer={openComputer} />
+      )}
 
       {state.serviceStatus?.worker === "unavailable" && (
-        <p role="status" className="text-muted-foreground px-5 pb-2 text-sm">Worker unavailable. Messages to agents are saved and will run when the worker is back.</p>
+        <p role="status" className="text-muted-foreground px-5 pb-2 text-sm">
+          Worker unavailable. Messages to agents are saved and will run when the worker is back.
+        </p>
       )}
       {state.serviceStatus?.providers.filter((provider) => provider.state === "sign_in_required").map((provider) => (
         <div key={provider.agent_id} role="status" className="mx-5 mb-2 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-sm">

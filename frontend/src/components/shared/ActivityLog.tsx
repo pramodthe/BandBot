@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "@/api";
 import type { AuditEvent } from "@/types";
-import { cn, parseUtc } from "@/lib/utils";
+import { cn, formatClock, formatShortDate, parseUtc } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const PAGE = 200;
@@ -80,11 +80,8 @@ function describe(event: AuditEvent): string {
 }
 
 function when(iso: string) {
-  const at = parseUtc(iso);
-  const clock = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return at.toDateString() === new Date().toDateString()
-    ? clock
-    : `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`;
+  const clock = formatClock(iso);
+  return parseUtc(iso).toDateString() === new Date().toDateString() ? clock : `${formatShortDate(iso)} ${clock}`;
 }
 
 /** What people and agents did in a channel (or one task), oldest first. */

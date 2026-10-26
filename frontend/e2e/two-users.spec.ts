@@ -1,13 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
+import { signup as createAccount } from "./helpers";
 
 async function signup(page: Page, username: string, displayName: string) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "New here? Create an account" }).click();
-  await page.getByLabel("Username").fill(username);
-  await page.getByLabel("Display name").fill(displayName);
-  await page.getByLabel("Password").fill("secret123");
-  await page.getByLabel("Band user API key", { exact: true }).fill(`band_a_e2e-${username}`);
-  await page.getByRole("button", { name: "Create account" }).click();
+  await createAccount(page, { username, displayName, bandKey: `band_a_e2e-${username}` });
   await expect(page.getByRole("button", { name: /^People/ })).toBeVisible();
 }
 

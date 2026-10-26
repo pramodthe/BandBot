@@ -1,13 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { fillSignup } from "./helpers";
 
 test("local signup then own Band user key creates a native agent and a local worker reply", async ({ page }, info) => {
   const name = `native-${info.project.name}-${Date.now().toString().slice(-6)}`;
   const teammate = `Native Writer ${info.project.name}`;
-  await page.goto("/");
-  await page.getByRole("button", { name: "New here? Create an account" }).click();
-  await page.getByLabel("Username", { exact: true }).fill(name);
-  await page.getByLabel("Display name").fill("Native agent owner");
-  await page.getByLabel("Password", { exact: true }).fill("test-password");
+  await fillSignup(page, { username: name, displayName: "Native agent owner", password: "test-password" });
   await expect(page.getByLabel("Band user API key", { exact: true })).not.toHaveAttribute("required");
   await page.screenshot({ path: info.outputPath("local-signup-optional-band.png"), fullPage: true });
   await page.getByRole("button", { name: "Create account", exact: true }).click();

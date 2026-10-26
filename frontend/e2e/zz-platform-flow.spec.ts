@@ -1,16 +1,12 @@
 import { expect, test } from "@playwright/test";
+import { signup } from "./helpers";
 
 test("saved signup key powers a teammate, a Band room and the worker result", async ({ page }, info) => {
   const suffix = `${info.project.name}-${Date.now().toString().slice(-6)}`;
   const name = `flow-${suffix}`;
   const teammate = `Writer ${info.project.name}`;
-  await page.goto("/");
-  await page.getByRole("button", { name: "New here? Create an account" }).click();
-  await page.getByLabel("Username", { exact: true }).fill(name);
-  await page.getByLabel("Display name").fill("Platform flow");
-  await page.getByLabel("Password", { exact: true }).fill("test-password");
-  await page.getByLabel("Band user API key", { exact: true }).fill(`band_a_e2e-${name}`);
-  await page.getByRole("button", { name: "Create account", exact: true }).click();
+  await signup(page, { username: name, displayName: "Platform flow", password: "test-password",
+    bandKey: `band_a_e2e-${name}` });
   await page.getByRole("button", { name: "Add agents", exact: true }).click();
   await page.getByRole("button", { name: /Create agent/ }).click();
   await expect(page.getByLabel("Band agent API key", { exact: true })).toHaveCount(0);

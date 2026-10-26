@@ -57,7 +57,7 @@ export default function Workspace({
 }) {
   const [modal, setModal] = useState<Modal>(null);
   useEffect(() => {
-    const open = () => { if (isAdmin(state)) setModal({ kind: "openai" }); };
+    const open = () => { if (isAdmin(state)) setModal({ kind: "providers" }); };
     window.addEventListener("open-provider-settings", open);
     return () => window.removeEventListener("open-provider-settings", open);
   }, [state.workspaceRoles, state.me.id]);
@@ -216,7 +216,7 @@ export default function Workspace({
         dispatch({ type: "event", event: { type: "channel", channel: next } });
         setModal(null); selectChannel(next.id);
       }} />}
-      {modal?.kind === "openai" && <ProvidersModal agents={Object.values(state.agents)} onClose={() => setModal(null)} />}
+      {modal?.kind === "providers" && <ProvidersModal agents={Object.values(state.agents)} onClose={() => setModal(null)} />}
     </div>
   );
 }

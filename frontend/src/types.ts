@@ -167,6 +167,79 @@ export interface ServiceStatus {
   providers: ServiceProvider[];
 }
 
+/** One service's pinned connection revision and model, or `disabled`. */
+export interface ServiceBinding {
+  connection_id?: string;
+  revision?: number;
+  provider?: string;
+  model?: string;
+  disabled?: boolean;
+  hosted_code?: boolean;
+}
+
+export type ServiceBindings = Record<string, ServiceBinding>;
+
+export interface ServiceSelection {
+  version: number;
+  bindings: ServiceBindings;
+}
+
+export interface ProviderVerification {
+  passed?: boolean;
+  legacy?: boolean;
+  models?: Record<string, { tools?: boolean; vision?: boolean }>;
+  image_model?: string;
+  pause_resume?: boolean;
+}
+
+export interface ProviderRevision {
+  revision: number;
+  config: Record<string, unknown>;
+  verification: ProviderVerification;
+  has_secret: boolean;
+}
+
+export interface ProviderConnection {
+  id: string;
+  provider: string;
+  label: string;
+  status: string;
+  current_revision: number;
+  revisions: ProviderRevision[];
+  dependencies: Record<string, number | string[]>;
+}
+
+export interface ProviderManifest {
+  id: string;
+  label: string;
+  services: string[];
+  fields: string[];
+  capabilities: string[];
+  secret_required: boolean;
+}
+
+export interface ProviderOperation {
+  id: string;
+  status: string;
+  result: { error?: string; cleanup?: string; probe_name?: string };
+  connection_id?: string;
+}
+
+export interface ProviderSettings extends ServiceSelection {
+  connections: ProviderConnection[];
+  history: ServiceSelection[];
+  computer_overrides: number;
+  changes: { id: string; status: string; error: string }[];
+  operations: ProviderOperation[];
+}
+
+export interface ServiceChangeImpact {
+  changed_services: string[];
+  preserved_tasks: number;
+  documents_to_reindex: number;
+  note: string;
+}
+
 export interface ChannelInvitation {
   id: string;
   channel_name: string;
@@ -579,7 +652,6 @@ export type ServerEvent = (
   | { type: "agent"; agent: Agent }
   | { type: "agent_deleted"; agent_id: number }
   | { type: "agent_status"; agent_id: number; status: AgentStatus }
-  | { type: "typing"; channel_id: number; agent_id: number; active: boolean }
   | { type: "band_status"; band: BandStatus }
   | { type: "channel_removed"; channel_id: number }
   | { type: "task_activity"; task: TaskActivity }

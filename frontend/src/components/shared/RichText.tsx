@@ -22,7 +22,7 @@ function inlinePattern(names: string[]): RegExp {
   return new RegExp(`(${DOCUMENT_LINK_PATTERN}|\`[^\`\\n]+\`|\\*\\*[^*\\n]+\\*\\*|${URL_PATTERN}|${mention})`, "gi");
 }
 
-export const mentionClass = "bg-mention-bg text-mention rounded-[3px] px-0.5 font-semibold";
+const mentionClass = "bg-mention-bg text-mention rounded-[3px] px-0.5 font-semibold";
 
 const PatternContext = createContext<RegExp>(inlinePattern([]));
 

@@ -13,6 +13,7 @@ export function artifactDocument(content: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}"><base href="about:srcdoc"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${content}</body></html>`;
 }
 
+// Not saveBlob from @/api: this module stays import-free so the offline tests can load it directly.
 export function downloadArtifact(artifact: Artifact): void {
   const url = URL.createObjectURL(new Blob([artifact.content], { type: isHtmlArtifact(artifact.path) ? "text/html;charset=utf-8" : "text/plain;charset=utf-8" }));
   const link = document.createElement("a");

@@ -2,6 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  // Specs share one API, worker and database and run one at a time in filename order, so
+  // accounts persist between them. providers.spec.ts creates the first account (the workspace
+  // owner); the zz- prefix runs the full Band management flows after the others.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,

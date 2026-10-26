@@ -8,8 +8,7 @@ import ModalShell from "@/components/shared/ModalShell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-
-const fileSize = (size: number) => size < 1024 ? `${size} B` : `${Math.ceil(size / 1024)} KB`;
+import { formatBytes } from "@/lib/utils";
 
 export function DocumentPreview({ documentId, onClose }: { documentId: string; onClose: () => void }) {
   const [doc, setDoc] = useState<WorkspaceDocument | null>(null);
@@ -40,7 +39,12 @@ export function DocumentPreview({ documentId, onClose }: { documentId: string; o
     {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
     {!doc && !error && <p role="status">Loading document…</p>}
     {doc && <div className="flex min-w-0 flex-col gap-4">
-      <div className="flex items-center justify-between gap-3"><Badge variant="secondary">{doc.status}</Badge><Button variant="outline" onClick={() => downloadDocument(doc.id, doc.name).catch((e: Error) => setError(e.message))}><DownloadIcon data-icon="inline-start" />Download original</Button></div>
+      <div className="flex items-center justify-between gap-3">
+        <Badge variant="secondary">{doc.status}</Badge>
+        <Button variant="outline" onClick={() => downloadDocument(doc.id, doc.name).catch((e: Error) => setError(e.message))}>
+          <DownloadIcon data-icon="inline-start" />Download original
+        </Button>
+      </div>
       {doc.error && <p className="text-destructive text-sm">{doc.error}</p>}
       {isImage ? image ? <img src={image} alt={doc.name} className="max-h-[65vh] w-full rounded-lg object-contain" /> : !error && <p role="status">Loading image…</p> : <>
         <pre className="max-h-[55vh] overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-sans text-sm">{doc.preview || "The text preview will appear after processing. You can download the original now."}</pre>
@@ -52,7 +56,12 @@ export function DocumentPreview({ documentId, onClose }: { documentId: string; o
 
 export function DocumentLink({ documentId, children }: { documentId: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
-  return <><button type="button" className="text-mention cursor-pointer text-left underline-offset-2 hover:underline" onClick={() => setOpen(true)}>{children}</button>{open && <DocumentPreview documentId={documentId} onClose={() => setOpen(false)} />}</>;
+  return <>
+    <button type="button" className="text-mention cursor-pointer text-left underline-offset-2 hover:underline" onClick={() => setOpen(true)}>
+      {children}
+    </button>
+    {open && <DocumentPreview documentId={documentId} onClose={() => setOpen(false)} />}
+  </>;
 }
 
 export function AttachmentCard({ document }: { document: WorkspaceDocument }) {
@@ -68,7 +77,11 @@ export function AttachmentCard({ document }: { document: WorkspaceDocument }) {
   }, [doc]);
   return <div className="flex max-w-xs items-center gap-2 rounded-lg border bg-background p-3 text-sm">
     <FileTextIcon className="size-5 shrink-0 text-muted-foreground" />
-    <div className="min-w-0"><DocumentLink documentId={doc.id}>{doc.name}</DocumentLink><p className="text-muted-foreground text-xs">{doc.status === "staged" ? "Ready to send" : doc.status} · {fileSize(doc.size)}</p>{doc.error && <p className="text-destructive text-xs">{doc.error}</p>}</div>
+    <div className="min-w-0">
+      <DocumentLink documentId={doc.id}>{doc.name}</DocumentLink>
+      <p className="text-muted-foreground text-xs">{doc.status === "staged" ? "Ready to send" : doc.status} · {formatBytes(doc.size)}</p>
+      {doc.error && <p className="text-destructive text-xs">{doc.error}</p>}
+    </div>
   </div>;
 }
 
@@ -110,7 +123,17 @@ export default function DocumentsPanel({ channelId, state, onClose }: { channelI
         <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
           {rows?.map((doc) => <div key={doc.id} className="flex items-center gap-3 rounded-lg border p-3">
             <FileTextIcon className="size-5 shrink-0 text-muted-foreground" />
-            <div className="min-w-0 flex-1"><button type="button" className="block max-w-full cursor-pointer truncate text-left text-sm font-medium hover:underline" onClick={() => setPreview(doc.id)}>{doc.name}</button><span className="text-xs text-muted-foreground">{fileSize(doc.size)}</span>{doc.error && <p className="text-xs text-destructive">{doc.error}</p>}</div>
+            <div className="min-w-0 flex-1">
+              <button
+                type="button"
+                className="block max-w-full cursor-pointer truncate text-left text-sm font-medium hover:underline"
+                onClick={() => setPreview(doc.id)}
+              >
+                {doc.name}
+              </button>
+              <span className="text-xs text-muted-foreground">{formatBytes(doc.size)}</span>
+              {doc.error && <p className="text-xs text-destructive">{doc.error}</p>}
+            </div>
             <Badge variant="secondary">{doc.status}</Badge>
             <Button size="icon-sm" variant="ghost" aria-label={`Download ${doc.name}`} onClick={() => downloadDocument(doc.id, doc.name).catch((e: Error) => setError(e.message))}><DownloadIcon /></Button>
             {(doc.uploaded_by === state.me.id || isAdmin(state)) && <>

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { FolderIcon, MonitorIcon, XIcon } from "lucide-react";
-import { api, ApiError, getToken } from "@/api";
+import { api, request, saveBlob } from "@/api";
 import type { Agent, FileEntry, LiveView } from "@/types";
-import { cn, parseUtc } from "@/lib/utils";
+import { cn, formatBytes, formatClock } from "@/lib/utils";
 import Avatar from "@/components/shared/Avatar";
 import ActivityLog from "@/components/shared/ActivityLog";
 import { ComputerUse } from "@/components/assistant-ui/elements/computer-use";
@@ -13,25 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type Tab = "screen" | "live" | "files" | "activity";
-
-const time = (iso: string) => parseUtc(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-const clock = (iso: string) => parseUtc(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
-
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-async function raw(method: string, path: string, body?: Blob): Promise<Response> {
-  const token = getToken();
-  const response = await fetch(path, { method, body, headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new ApiError(typeof data.detail === "string" ? data.detail : "Request failed", response.status);
-  }
-  return response;
-}
 
 const note = "text-muted-foreground text-xs";
 const emptyBox = "flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border bg-background px-4 py-9 text-center";
@@ -91,17 +72,12 @@ export default function ComputerPanel({ taskId, computerKey, agent, working, liv
   }), [base]);
 
   const download = (entry: FileEntry) => run(`download-${entry.path}`, async () => {
-    const response = await raw("GET", `${base}/files/download?path=${encodeURIComponent(entry.path)}`);
-    const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = entry.name;
-    link.click();
-    URL.revokeObjectURL(url);
+    const response = await request("GET", `${base}/files/download?path=${encodeURIComponent(entry.path)}`);
+    saveBlob(await response.blob(), entry.name);
   });
 
   const upload = (file: File) => run("upload", async () => {
-    await raw("POST", `${base}/files?name=${encodeURIComponent(file.name)}`, file);
+    await request("POST", `${base}/files?name=${encodeURIComponent(file.name)}`, { body: file });
     await browse(path);
   });
 
@@ -127,7 +103,7 @@ export default function ComputerPanel({ taskId, computerKey, agent, working, liv
       {!control?.mine && <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked || unavailable} onClick={() => void openLive(true)}>Take over</Button>}
       {control && <Button variant="chip" size="chip" disabled={!!busy || !!liveBlocked} onClick={() => void handBack()}>Hand back</Button>}
     </div>
-    {control && <p className={note}>{control.mine ? "You control" : `${control.user_name} controls`} this computer until {time(control.until)}.</p>}
+    {control && <p className={note}>{control.mine ? "You control" : `${control.user_name} controls`} this computer until {formatClock(control.until)}.</p>}
   </>;
 
   return (
@@ -179,7 +155,7 @@ export default function ComputerPanel({ taskId, computerKey, agent, working, liv
           {computer?.error && <p className="text-destructive text-xs">{computer.error}</p>}
           {control && (
             <p className="rounded-md border border-[#d9a400] bg-[#ffc400]/12 px-2.5 py-1.5">
-              {control.mine ? "You control" : `${control.user_name} controls`} this computer until {time(control.until)}.
+              {control.mine ? "You control" : `${control.user_name} controls`} this computer until {formatClock(control.until)}.
               {computer?.shared ? "All agents wait for clicks, typing, and commands." : "The agent waits for its clicks, typing, and commands."}
             </p>
           )}
@@ -191,7 +167,7 @@ export default function ComputerPanel({ taskId, computerKey, agent, working, liv
               </ComputerUse>
               <p className={note}>
                 {working ? "Updates as the agent works" : "Last screen the agent saw"}
-                {computer.observed_at && ` · ${clock(computer.observed_at)}`}
+                {computer.observed_at && ` · ${formatClock(computer.observed_at, { seconds: true })}`}
               </p>
             </> : (
               <div className={emptyBox}>
@@ -206,7 +182,7 @@ export default function ComputerPanel({ taskId, computerKey, agent, working, liv
           <TabsContent value="live" className="flex flex-col gap-2">
             {live ? <>
               <ComputerLiveView url={live.url} viewOnly={viewOnly} name={name} controls={liveControls} />
-              <p className={note}>Link valid until {time(live.expires_at)}.
+              <p className={note}>Link valid until {formatClock(live.expires_at)}.
                 {viewOnly ? " View only: take over to use the mouse and keyboard." : ""}</p>
             </> : (
               <div className={emptyBox}>
@@ -245,7 +221,7 @@ export default function ComputerPanel({ taskId, computerKey, agent, working, liv
                     ) : (
                       <span className="min-w-0 truncate">{entry.name}</span>
                     )}
-                    {!entry.is_dir && <span className="text-muted-foreground shrink-0">{formatSize(entry.size)}</span>}
+                    {!entry.is_dir && <span className="text-muted-foreground shrink-0">{formatBytes(entry.size)}</span>}
                     {!entry.is_dir && (
                       <Button variant="chip" size="chip" className="ms-auto" disabled={!!busy} onClick={() => void download(entry)}>
                         Download
