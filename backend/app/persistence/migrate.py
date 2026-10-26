@@ -13,7 +13,7 @@ from alembic.config import Config
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-from app.config import BACKEND_DIR, settings, sqlalchemy_url
+from app.config import BACKEND_DIR, settings, sqlalchemy_url, state_dir
 from app.persistence.models import engine
 
 BASELINE = "0001_baseline"
@@ -32,10 +32,11 @@ def upgrade_database(bind: Engine | None = None) -> None:
     from filelock import FileLock
     import hashlib
     identity = target.url.render_as_string(hide_password=False)
-    root = Path(target.url.database).resolve().parent if target.url.drivername.startswith("sqlite") else Path(settings.checkpoint_path).resolve().parent
+    root = state_dir(target.url)
     root.mkdir(parents=True, exist_ok=True)
     with FileLock(str(root / ("schema-" + hashlib.sha256(identity.encode()).hexdigest()[:16] + ".lock")), timeout=120):
         _upgrade_locked(target)
+
 
 def _upgrade_locked(target):
     cfg = alembic_config()

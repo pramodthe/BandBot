@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
-from datetime import timedelta, timezone
+from datetime import timedelta
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -14,15 +14,11 @@ from sqlmodel import select
 
 from app.computer.ingress import endpoint
 from app.config import settings
-from app.persistence.models import (AgentProfile, AgentTask, AppPreview, AppPreviewLease, ChannelMember,
+from app.persistence.models import (as_utc, AgentProfile, AgentTask, AppPreview, AppPreviewLease, ChannelMember,
                                     DirectMessage, MessageComponent, User, db, utcnow)
 from app.workspace.permissions import allowed
 
 LEASE_SECONDS = 900
-
-
-def aware(value):
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def validate_port(port: int) -> int:
@@ -177,7 +173,7 @@ def resolve(token: str):
     from app.computer.desktop import sandbox_record
     with db() as session:
         lease = session.exec(select(AppPreviewLease).where(AppPreviewLease.token_hash == hashlib.sha256(token.encode()).hexdigest())).first()
-        if not lease or aware(lease.until) <= utcnow():
+        if not lease or as_utc(lease.until) <= utcnow():
             raise HTTPException(410, "Preview session expired. Reconnect from chat.")
         preview = session.get(AppPreview, lease.preview_id)
         user = session.get(User, lease.user_id)

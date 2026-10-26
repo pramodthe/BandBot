@@ -1,4 +1,5 @@
 """Attempt-local bindings; permissions are deliberately never cached here."""
+import logging
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from app.providers.bindings import bindings_for, workspace_bindings
@@ -18,6 +19,7 @@ def current_computer():
     return _computer.get()
 
 _resources = ContextVar("provider_resources", default=None)
+logger = logging.getLogger(__name__)
 
 def selection(service: str, task=None):
     if task is not None:
@@ -48,6 +50,14 @@ def track(client):
         resources.append(client)
     return client
 
+async def _close_all(clients):
+    """Close tracked provider clients newest first; one failure never blocks the rest."""
+    for client in reversed(clients):
+        try:
+            await client.aclose()
+        except Exception as exc:
+            logger.debug("Provider client close failed (%s)", type(exc).__name__)
+
 @asynccontextmanager
 async def task_services(task, computer=None):
     token = _bindings.set(bindings_for(task))
@@ -58,11 +68,7 @@ async def task_services(task, computer=None):
     try:
         yield
     finally:
-        for client in reversed(clients):
-            try:
-                await client.aclose()
-            except Exception:
-                pass
+        await _close_all(clients)
         _resources.reset(resources)
         _bindings.reset(token)
         _computer.reset(computer_token)
@@ -73,11 +79,12 @@ async def document_services(document_id):
     from app.providers.bindings import document_bindings
     token = _bindings.set(document_bindings(document_id))
     task_token = _task_id.set("document:" + document_id)
-    clients = []; resource_token = _resources.set(clients)
+    clients = []
+    resource_token = _resources.set(clients)
     try:
         yield
     finally:
-        for client in reversed(clients):
-            try: await client.aclose()
-            except Exception: pass
-        _resources.reset(resource_token); _task_id.reset(task_token); _bindings.reset(token)
+        await _close_all(clients)
+        _resources.reset(resource_token)
+        _task_id.reset(task_token)
+        _bindings.reset(token)

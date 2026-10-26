@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from band.client.rest import AsyncRestClient, aclose_rest_client
 
 from app.auth import encrypt_secret, decrypt_secret
-from app.band.listener import BandIdentity, fetch_identity
+from app.band.platform import BandIdentity, fetch_identity
 from app.config import settings
 from app.persistence.models import UserBandConnection, db, utcnow
 

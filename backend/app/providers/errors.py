@@ -1,5 +1,5 @@
 """Bounded, public recovery reasons; never expose raw SDK errors."""
-from app.providers.contracts import ProviderError
+from app.providers.contracts import ProviderError, failure_code
 from app.providers.bindings import bindings_for
 from app.providers.models import ProviderBlock
 from app.persistence.models import db
@@ -13,7 +13,7 @@ def classify(error, task):
     if not computer_error and not module.startswith(("openai", "anthropic", "google", "httpx", "httpcore")):
         return None
     status = getattr(error, "status_code", None) or getattr(error, "code", None)
-    code = "authentication" if status in (401, 403) or computer_error and "Authentication" in type(error).__name__ else "quota_or_rate_limit" if status == 429 else "unavailable"
+    code = failure_code(status, authentication_error=computer_error and "Authentication" in type(error).__name__)
     service = "computer" if computer_error else "llm"
     binding = bindings_for(task).get(service, {})
     return ProviderError(service, code, connection_id=binding.get("connection_id", ""))

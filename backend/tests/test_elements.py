@@ -9,7 +9,7 @@ from app.main import app
 from app.runtime.elements import ELEMENTS, EXAMPLES
 from app.runtime.tools.generative import generative_tools
 from app.runtime.ui import CATALOG, normalize_ui, validate_ui
-from test_tasks import job  # noqa: F401
+
 
 
 def test_complete_collection_has_local_source_and_all_generative_examples():

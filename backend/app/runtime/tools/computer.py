@@ -8,7 +8,7 @@ from langchain_core.tools import InjectedToolCallId, tool
 from pydantic import Field
 
 from app.computer import ComputerUnavailable, TaskComputer
-from app.providers.contracts import ProviderError
+from app.providers.contracts import ProviderError, failure_code
 from app.persistence.models import AgentTask
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ def computer_tools(task: AgentTask, computer: TaskComputer):
             if type(exc).__module__.startswith(("e2b", "tenki", "httpx", "httpcore")):
                 from app.providers.context import selection
                 status = getattr(exc, "status_code", None)
-                code = "authentication" if status in {401, 403} or "Authentication" in type(exc).__name__ else "quota_or_rate_limit" if status == 429 else "unavailable"
+                code = failure_code(status, authentication_error="Authentication" in type(exc).__name__)
                 raise ProviderError("computer", code, connection_id=selection("computer", task).get("connection_id", "")) from None
             # SDK errors may contain full request headers. Expose only the type.
             logger.warning("Computer tool failed for task %s: %s", task.id, type(exc).__name__)

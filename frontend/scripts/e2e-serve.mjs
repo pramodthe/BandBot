@@ -37,7 +37,7 @@ import uvicorn
 from fastapi import WebSocket
 from app.main import app
 from app.band import connections
-from app.band.listener import BandIdentity
+from app.band.platform import BandIdentity
 import sys
 sys.path.insert(0, "tests")
 from fake_band_platform import OfflineBandNetwork
@@ -71,7 +71,6 @@ start("uv", ["run", "python", "-c", apiServer], backend);
 start("uv", ["run", "python", "-c", `
 import sys, asyncio
 sys.path.insert(0, "tests")
-from app.persistence.models import init_db
 from fake_band_platform import OfflineBandNetwork
 import app.band.connections as connections
 connections.AsyncRestClient = OfflineBandNetwork().client

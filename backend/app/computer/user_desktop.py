@@ -1,13 +1,12 @@
 """A user-owned host with independently addressed agent desktop sessions."""
 import hashlib
-from datetime import timezone
 
 from e2b import NotFoundException
 from sqlmodel import select
 
 from app.computer.identity import user_keys, workspace_id
 from app.computer.providers import ComputerMissing
-from app.persistence.models import (AgentProfile, AgentTask, ComputerViewLease,
+from app.persistence.models import (as_utc, AgentProfile, AgentTask, ComputerViewLease,
                                     TaskComputerBinding, UserDesktop, db, utcnow)
 
 
@@ -36,7 +35,9 @@ def reserve_desktop(computer, host, user_id):
             raise ComputerUnavailable("This user's computer has reached its desktop limit")
         row = UserDesktop(key=computer.key, host_key=host, user_id=user_id,
                           agent_identity=computer.owner, display=display)
-        session.add(row); session.commit(); session.refresh(row)
+        session.add(row)
+        session.commit()
+        session.refresh(row)
         return row
 
 
@@ -55,7 +56,7 @@ def host_in_use(host, *, excluding=None, force_key=None):
                    AgentTask.id != (excluding or ""))).first()
         watched_keys = [key for key in keys if key != force_key]
         leases = session.exec(select(ComputerViewLease).where(ComputerViewLease.key.in_(watched_keys))).all()
-    return bool(running or any((lease.until.replace(tzinfo=timezone.utc) if not lease.until.tzinfo else lease.until) > utcnow()
+    return bool(running or any(as_utc(lease.until) > utcnow()
                               for lease in leases) or any(active_control(key) or has_active_view(key) for key in watched_keys))
 
 
@@ -67,7 +68,7 @@ async def ensure(computer, *, desktop, create):
         profile = session.get(AgentProfile, computer.task.agent_id)
         keys = user_keys(session, computer.owner, computer.config)
         if (not profile or not keys or computer.key != keys[1]
-                or computer.task.created_at.replace(tzinfo=timezone.utc) < profile.created_at.replace(tzinfo=timezone.utc)):
+                or as_utc(computer.task.created_at) < as_utc(profile.created_at)):
             raise ComputerUnavailable("This task's private computer ownership is no longer valid")
         if create and not task_may_use_private_computer(session, computer.task, keys[2]):
             raise ComputerUnavailable("Only a request from this agent's owner can use their private computer. Ask the owner to start the task.")

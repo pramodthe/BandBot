@@ -16,6 +16,11 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_utc(value: datetime) -> datetime:
+    """Treat a naive stored timestamp as UTC; SQLite returns naive datetimes."""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     username: str = Field(index=True, unique=True)
@@ -782,8 +787,7 @@ class ConnectionHealth(SQLModel, table=True):
     detail: str = ""
 
 
-from app.providers.models import (ProviderConnection, ProviderRevision, ServiceSelection, TaskServiceBinding,
-                                  DocumentServiceBinding, ProviderBlock, ProviderOperation, DocumentProviderIndex, ServiceChange, ProviderUsage, ServiceSelectionHistory)
+import app.providers.models  # noqa: F401  (register provider tables)
 
 
 _sqlite = settings.database_url.startswith("sqlite")
@@ -805,12 +809,21 @@ if _sqlite:
         cursor.close()
 
 
+def insert_ignore(session, model, index_elements: list[str], **values) -> None:
+    """Insert a row unless one with the same key exists, even if another process inserts it first."""
+    dialect = session.get_bind().dialect.name
+    insert = {"sqlite": sqlite_insert, "postgresql": postgres_insert}.get(dialect)
+    if insert is None:
+        raise RuntimeError(f"Unsupported database dialect: {dialect}")
+    session.connection().execute(insert(model).values(**values).on_conflict_do_nothing(index_elements=index_elements))
+
+
 def bind_computer(session, task: AgentTask, *, legacy: bool = False) -> None:
     if session.get(TaskComputerBinding, task.id):
         return
     profile = session.get(AgentProfile, task.agent_id)
     owner = profile.band_agent_id if profile else f"deleted-agent-{task.agent_id}"
-    if profile and task.created_at.replace(tzinfo=timezone.utc) < profile.created_at.replace(tzinfo=timezone.utc):
+    if profile and as_utc(task.created_at) < as_utc(profile.created_at):
         owner = f"retired-task-{task.id}"
     key = f"agent-{owner}-channel-{task.channel_id}"
     scope = session.get(ComputerScope, key)
@@ -818,15 +831,8 @@ def bind_computer(session, task: AgentTask, *, legacy: bool = False) -> None:
         provider = "e2b" if legacy else settings.computer_provider
         if provider not in {"e2b", "tenki"}:
             raise ValueError("COMPUTER_PROVIDER must be e2b or tenki")
-        dialect = session.get_bind().dialect.name
-        if dialect in {"sqlite", "postgresql"}:
-            insert = sqlite_insert if dialect == "sqlite" else postgres_insert
-            session.connection().execute(insert(ComputerScope).values(key=key, provider=provider)
-                .on_conflict_do_nothing(index_elements=["key"]))
-            scope = session.get(ComputerScope, key)
-        else:
-            scope = ComputerScope(key=key, provider=provider)
-            session.add(scope)
+        insert_ignore(session, ComputerScope, ["key"], key=key, provider=provider)
+        scope = session.get(ComputerScope, key)
     provider = "e2b" if legacy else scope.provider
     from app.providers.computers import identity_config
     managed = identity_config(session, task, settings) if not legacy else None
@@ -836,13 +842,10 @@ def bind_computer(session, task: AgentTask, *, legacy: bool = False) -> None:
     from app.computer.identity import selected_key
     computer_key = f"{provider}-{key}" if legacy else selected_key(session, owner, task.channel_id, provider, computer_config)
     values = {"task_id": task.id, "provider": provider, "computer_key": computer_key}
-    dialect = session.get_bind().dialect.name
-    if legacy and dialect in {"sqlite", "postgresql"}:
-        insert = sqlite_insert if dialect == "sqlite" else postgres_insert
+    if legacy:
         # API and worker may backfill the same legacy task during startup.
         # Keep the first immutable binding if another process inserted it.
-        session.connection().execute(insert(TaskComputerBinding).values(**values)
-            .on_conflict_do_nothing(index_elements=["task_id"]))
+        insert_ignore(session, TaskComputerBinding, ["task_id"], **values)
     else:
         session.add(TaskComputerBinding(**values))
 
@@ -904,8 +907,8 @@ def dm_owner(channel_id: int) -> int | None:
         return dm.user_id if dm else None
 
 
-import app.providers.document_hooks  # register atomic document bindings
-import app.persistence.principals  # register immutable task principals
+import app.providers.document_hooks  # noqa: F401  (register atomic document bindings)
+import app.persistence.principals  # noqa: F401  (register immutable task principals)
 
 
 def get_session():

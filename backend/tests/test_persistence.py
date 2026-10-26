@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.config import postgres_conninfo, sqlalchemy_url
+from app.config import sqlalchemy_url
 from app import documents
 from app.persistence.models import Document, db, engine, init_db
 
@@ -18,7 +18,6 @@ def test_sqlite_writers_wait_instead_of_failing_immediately():
 def test_postgres_urls_keep_their_query_and_driver():
     raw = "postgres://user:secret@db.example:25060/band?sslmode=require"
     assert sqlalchemy_url(raw) == "postgresql+psycopg://user:secret@db.example:25060/band?sslmode=require"
-    assert postgres_conninfo(sqlalchemy_url(raw)) == "postgresql://user:secret@db.example:25060/band?sslmode=require"
     assert sqlalchemy_url("sqlite:///band.db") == "sqlite:///band.db"
 
 

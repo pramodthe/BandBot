@@ -1,6 +1,15 @@
 """Shared service contracts and safe errors independent of any SDK."""
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
+
+# Provider HTTP statuses that prove a request was refused, so it is safe to try again.
+CONFIRMED_REJECTIONS = frozenset({400, 401, 403, 404, 422, 429})
+
+def failure_code(status, *, authentication_error: bool = False) -> str:
+    """Map a provider HTTP status, or an SDK authentication error, to a public recovery code."""
+    if status in (401, 403) or authentication_error:
+        return "authentication"
+    return "quota_or_rate_limit" if status == 429 else "unavailable"
 
 class ProviderError(RuntimeError):
     def __init__(self, service: str, code: str = "unavailable", *, connection_id: str = "", detail: str = ""):
@@ -16,23 +25,3 @@ class ResolvedConnection:
     config: dict[str, Any]
     secret: dict[str, Any] = field(repr=False)
     verification: dict[str, Any] = field(default_factory=dict)
-
-class ModelAdapter(Protocol):
-    def build(self, connection: ResolvedConnection, model: str): ...
-    async def verify(self, connection: ResolvedConnection, models: list[str]) -> dict: ...
-
-class ResearchAdapter(Protocol):
-    async def search(self, connection: ResolvedConnection, query: str) -> dict: ...
-    async def fetch(self, connection: ResolvedConnection, url: str) -> dict: ...
-
-class ComputerAdapter(Protocol):
-    async def get(self, reference: str, *, request_timeout: int = 30): ...
-    async def create(self, options, *, timeout: int = 60): ...
-    async def close(self): ...
-
-class RetrievalAdapter(Protocol):
-    async def search(self, task, query: str) -> dict: ...
-    async def index(self, document, binding: dict) -> None: ...
-
-class ImageAdapter(Protocol):
-    async def generate(self, connection: ResolvedConnection, model: str, prompt: str, **options) -> tuple[bytes, dict]: ...

@@ -60,7 +60,6 @@ def migrate_profiles() -> None:
     _, _, default = configuration()
     with db() as session:
         for profile in session.exec(select(AgentProfile).where(AgentProfile.model.like("claude-%"))).all():
-            from app.providers.models import ServiceSelection
             from app.providers.bindings import selected
             selection = selected(session, profile.id).get("llm", {})
             if selection and selection.get("provider") != "openai":

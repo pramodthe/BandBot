@@ -29,6 +29,12 @@ def build_model(connection, model: str):
             profile={"max_input_tokens": connection.config["context_window"], "tool_calling": True, "image_inputs": True})
     raise ProviderError("llm", "unsupported_provider", connection_id=connection.id)
 
+def legacy_openai_model(api_key: str, model: str):
+    """The OpenAI model for tasks pinned before Providers & APIs; unlike bindings, it keeps two SDK retries."""
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(model=model, api_key=api_key, use_responses_api=True, output_version="responses/v1", store=False,
+                      max_tokens=12000, include=["reasoning.encrypted_content"], timeout=90, max_retries=2)
+
 def for_binding(binding: dict, service="llm"):
     if binding.get("unresolved"):
         raise ProviderError(service, "legacy_checkpoint", detail="This saved task needs an explicit provider mapping or a new task. Its progress has been preserved.")
@@ -65,8 +71,8 @@ async def verify_models(connection, models: list[str]):
                 raise ValueError("Image/tool check failed")
             followup = await bound.ainvoke([first, response,
                 ToolMessage(content="The color was verified. Return the word VERIFIED.", tool_call_id=calls[0]["id"])])
-            from app.providers.document_analysis import answer_text
-            if ("VERIFIED" not in answer_text(followup).upper() or followup.tool_calls or
+            from app.providers.document_analysis import response_text
+            if ("VERIFIED" not in response_text(followup).upper() or followup.tool_calls or
                     any(not getattr(r, "usage_metadata", None) or r.usage_metadata.get("input_tokens", 0) <= 0 for r in (response, followup))):
                 raise ValueError("Tool continuation or usage reporting failed")
             verified[name] = {"tools": True, "vision": True, "usage": True}

@@ -1,4 +1,4 @@
-from sqlalchemy import event, inspect
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 from app.persistence.models import Document, TaskDocument
 from app.providers.models import DocumentServiceBinding

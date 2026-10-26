@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from app.config import settings
-from app.persistence.models import AgentProfile, AgentTask, Schedule, db, utcnow
+from app.persistence.models import AgentProfile, AgentTask, Schedule, as_utc, db, utcnow
 from app.tasks.queue import channel_context, enqueue
 from app.workspace.audit import record_agent
 
@@ -26,14 +26,9 @@ class ScheduleError(ValueError):
     """A message safe to return to the agent."""
 
 
-def _aware(value: datetime) -> datetime:
-    # SQLite returns naive datetimes; schedule times are always stored in UTC.
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-
-
 def next_run(schedule: Schedule, after: datetime) -> datetime | None:
     """The first run strictly after `after`, in UTC, or None once a one-off has passed."""
-    after = _aware(after)
+    after = as_utc(after)
     if schedule.cadence == "interval":
         return after + timedelta(minutes=schedule.interval_minutes)
     zone = ZoneInfo(schedule.timezone)
@@ -64,8 +59,8 @@ def describe(schedule: Schedule) -> str:
 def serialize_schedule(schedule: Schedule) -> dict:
     return {"id": schedule.id, "channel_id": schedule.channel_id, "agent_id": schedule.agent_id,
             "prompt": schedule.prompt, "when": describe(schedule), "created_by": schedule.created_by,
-            "next_run_at": _aware(schedule.next_run_at).isoformat() if schedule.next_run_at else None,
-            "last_run_at": _aware(schedule.last_run_at).isoformat() if schedule.last_run_at else None}
+            "next_run_at": as_utc(schedule.next_run_at).isoformat() if schedule.next_run_at else None,
+            "last_run_at": as_utc(schedule.last_run_at).isoformat() if schedule.last_run_at else None}
 
 
 def create_schedule(task: AgentTask, *, request: str, cadence: str, time_of_day: str = "", weekday: str = "",
@@ -154,7 +149,7 @@ def fire_due(now: datetime | None = None) -> int:
         due = session.exec(select(Schedule).where(Schedule.enabled == True,  # noqa: E712
                                                   Schedule.next_run_at <= now)).all()
     for schedule in due:
-        run_at = _aware(schedule.next_run_at)
+        run_at = as_utc(schedule.next_run_at)
         with db() as session:
             agent = session.get(AgentProfile, schedule.agent_id)
             context = channel_context(session, schedule.channel_id) if agent else ""
@@ -163,7 +158,7 @@ def fire_due(now: datetime | None = None) -> int:
                     source_id=f"schedule-{schedule.id}-{run_at.isoformat()}", context=context,
                     prompt=f"Scheduled request ({describe(schedule)}), set up earlier in this channel:\n{schedule.prompt}",
                     reply_to=schedule.reply_to)
-        following = next_run(schedule, max(_aware(now), run_at)) if agent else None
+        following = next_run(schedule, max(as_utc(now), run_at)) if agent else None
         with db() as session:
             stored = session.get(Schedule, schedule.id)
             stored.last_run_at = now

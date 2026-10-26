@@ -102,7 +102,8 @@ def _wrap(server: str, tool: BaseTool, approval: bool, agent_id: int | None = No
         if task_id:
             with db() as session:
                 task = session.get(AgentTask, task_id)
-                if not task: raise ValueError("Task is no longer available")
+                if not task:
+                    raise ValueError("Task is no longer available")
                 agent_authorize(session, task)
         if server != "composio":
             current = load_servers().get(server)
@@ -142,7 +143,8 @@ async def integration_tools(agent_name: str, servers: dict[str, dict] | None = N
         return []
     try:
         use_composio = own and composio_configured()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Composio discovery failed (%s)", type(exc).__name__)
         use_composio = False
         # Discovery failure must not block reasoning or unrelated services.
         servers = {name: value for name, value in servers.items() if name != "composio"}

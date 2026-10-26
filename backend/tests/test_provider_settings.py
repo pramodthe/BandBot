@@ -7,51 +7,14 @@ import pytest
 import httpx
 from sqlmodel import select
 
-from app.auth import decrypt_secret
-from app.persistence.models import AgentProfile, AgentTask, Channel, TaskModel, db, init_db
+from app.persistence.models import TaskModel, db
 from app.providers.models import ProviderConnection, ProviderRevision, ServiceSelection, TaskServiceBinding
 from app.providers.management import (create_connection, rotate, apply_selection, ConfigurationConflict)
 from app.providers.connections import resolve, public_connection
 from app.providers.bootstrap import bootstrap
 from app.providers.endpoint import GuardedTransport, validate_base
+from helpers import connection, make_task
 
-def connection(session, provider="openai", model="test-model"):
-    row = create_connection(session, provider=provider, label="Offline " + uuid4().hex,
-        key="offline-secret", config={"models": [model]}, user_id=1)
-    revision = session.get(ProviderRevision, (row.id, 1))
-    revision.verification = {"passed": True, "models": {model: {"tools": True, "vision": True, "usage": True}}}
-    session.add(revision)
-    session.flush()
-    return {"connection_id": row.id, "revision": 1, "provider": provider, "model": model}
-
-@pytest.fixture
-def provider_scope():
-    init_db()
-    with db() as session:
-        settings = session.get(ServiceSelection, "workspace")
-        original = deepcopy(settings.bindings)
-        agent = AgentProfile(name="Provider test", band_agent_id=uuid4().hex, band_api_key_enc="offline", model="test-model")
-        channel = Channel(name=uuid4().hex)
-        session.add_all([agent, channel]); session.commit()
-    yield agent, channel
-    with db() as session:
-        settings = session.get(ServiceSelection, "workspace")
-        settings.bindings = original; session.add(settings)
-        from app.persistence.models import Document
-        from app import documents
-        for document in session.exec(select(Document).where(Document.channel_id == channel.id)).all():
-            document.status = "deleted"
-            document.units = []
-            documents.path_for(document).unlink(missing_ok=True)
-            session.add(document)
-        session.commit()
-
-def job(session, scope):
-    agent, channel = scope
-    task = AgentTask(id=uuid4().hex, source_key=uuid4().hex, agent_id=agent.id,
-                     channel_id=channel.id, room_id="offline", prompt="Test immutable configuration")
-    session.add(task); session.flush()
-    return task
 
 def test_tasks_snapshot_connections_models_and_auxiliary_services_atomically(provider_scope):
     with db() as session:
@@ -59,20 +22,22 @@ def test_tasks_snapshot_connections_models_and_auxiliary_services_atomically(pro
         selection = session.get(ServiceSelection, "workspace")
         apply_selection(session, scope="workspace", expected_version=selection.version,
                         bindings={"llm": first, "document_analysis": first})
-        task = job(session, provider_scope); session.commit()
+        task = make_task(session, provider_scope)
+        session.commit()
         binding = deepcopy(session.get(TaskServiceBinding, task.id).bindings)
         assert binding["llm"] == first
         second = connection(session, "anthropic", "claude-offline")
         session.refresh(selection)
         apply_selection(session, scope="workspace", expected_version=selection.version, bindings={"llm": second})
-        later = job(session, provider_scope); session.commit()
+        later = make_task(session, provider_scope)
+        session.commit()
         assert session.get(TaskServiceBinding, task.id).bindings == binding
         assert session.get(TaskServiceBinding, later.id).bindings["llm"] == second
         assert session.get(TaskModel, later.id).provider == "anthropic"
 
 def test_rollback_does_not_leave_snapshots_or_scope_selections(provider_scope):
     with db() as session:
-        task = job(session, provider_scope)
+        task = make_task(session, provider_scope)
         assert session.get(TaskServiceBinding, task.id)
         session.rollback()
     with db() as session:
@@ -126,7 +91,8 @@ def test_bootstrap_is_idempotent_and_does_not_reapply_environment(provider_scope
     with db() as session:
         row = session.get(ServiceSelection, "workspace")
         before = (row.version, deepcopy(row.bindings))
-    bootstrap(); bootstrap()
+    bootstrap()
+    bootstrap()
     with db() as session:
         row = session.get(ServiceSelection, "workspace")
         assert (row.version, row.bindings) == before
@@ -135,7 +101,8 @@ def test_bootstrap_is_idempotent_and_does_not_reapply_environment(provider_scope
 def test_unapproved_endpoint_is_rejected(url, monkeypatch):
     import app.providers.endpoint as endpoint
     monkeypatch.setattr(endpoint, "settings", SimpleNamespace(provider_endpoint_allowlist=""))
-    with pytest.raises(ValueError): validate_base(url)
+    with pytest.raises(ValueError):
+        validate_base(url)
 
 def test_endpoint_dns_is_checked_and_pinned_before_secrets_are_sent(monkeypatch):
     import app.providers.endpoint as endpoint
@@ -164,11 +131,13 @@ def test_unset_services_cannot_fall_back_to_new_environment_credentials(provider
     with db() as session:
         current = session.get(ServiceSelection, "workspace")
         current.bindings = {**current.bindings, "llm": {"disabled": True}, "computer": {"disabled": True}, "research": {"disabled": True}}
-        session.add(current); session.commit()
+        session.add(current)
+        session.commit()
     monkeypatch.setattr(imports, "settings", replace(imports.settings, openai_api_key="later-unverified-key", e2b_api_key="later-computer-key"))
     imports.bootstrap()
     with db() as session:
-        task = job(session, provider_scope); session.commit()
+        task = make_task(session, provider_scope)
+        session.commit()
         assert session.get(TaskServiceBinding, task.id).bindings["llm"] == {"disabled": True}
         assert session.get(TaskServiceBinding, task.id).bindings["computer"] == {"disabled": True}
         assert not session.get(ProviderConnection, "imported-openai")
@@ -177,7 +146,8 @@ def test_cleared_computer_override_keeps_monotonic_revision_and_rejects_stale_ad
     with db() as session:
         row = create_connection(session, provider="e2b", label="Override computer", key="offline", config={}, user_id=1)
         revision = session.get(ProviderRevision, (row.id, 1))
-        revision.verification = {"passed": True, "pause_resume": True}; session.add(revision)
+        revision.verification = {"passed": True, "pause_resume": True}
+        session.add(revision)
         binding = {"connection_id": row.id, "revision": 1, "provider": "e2b"}
         scope = f"computer:{provider_scope[0].band_agent_id}:{provider_scope[1].id}"
         apply_selection(session, scope=scope, expected_version=0, bindings={"computer": binding})
@@ -200,7 +170,7 @@ def test_recoverable_checkpoints_retain_connections_after_defaults_change(provid
         binding = connection(session)
         workspace = session.get(ServiceSelection, "workspace")
         apply_selection(session, scope="workspace", expected_version=workspace.version, bindings={"llm": binding})
-        task = job(session, provider_scope)
+        task = make_task(session, provider_scope)
         task.status = status
         session.add(task)
         session.flush()

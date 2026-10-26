@@ -1,94 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
-import app.workspace.service as service_module
-from app.band.listener import BandIdentity
 from app.auth import encrypt_secret
-from app.band.platform import AgentPlatformOrg, Owner
-from app.persistence.models import (AgentPersona, AgentProfile, AgentTask, AuditEvent, Budget, Channel, ChannelMember, ChannelPolicy,
-                                    DirectMessage, Message, TaskCacheUsage, TaskUsage, User, WorkspaceRole, db, init_db)
-from app.config import settings
+from app.persistence.models import (AgentProfile, AgentTask, ChannelMember, DirectMessage, Message, db)
 from app.workspace.service import AppService
-from app.persistence.models import UserBandAccount, PrivateConversation, HumanDirectMessage, BandAgentOwner, ChannelInvitation
-from app.persistence.models import MessageComponent, ComponentResponse, TaskInput, AgentRuntime, AgentConnection, AgentOAuthAttempt
-from app.persistence.models import AppContact, AppContactRequest, BandRoomAccount, BandAgentLink, UserBandConnection, BandPlatformRoom, PlatformTeammate
-from app.persistence.models import AgentPluginAccess, LocalTeammate, OutsideAgent, TeammateRequest, UserDesktop, TaskPrincipal, ComputerPublishApproval
-from app.persistence.models import (AuthSession, ClientMessage, ConnectionHealth, ContactBlock, PasswordReset,
-                                    RecoveryAddress, WorkerHeartbeat)
-
-
-class FakeOrg(AgentPlatformOrg):
-    """Offline Agent API transport for tests that inspect native room membership."""
-    def __init__(self, *, user_id=1, identity="user-owner"):
-        super().__init__("band_a_" + identity, user_id=user_id, identity=identity)
-        self.owner = Owner(id=identity, name="Pat Owner", handle="pat")
-        self._rest = object()
-        self.rooms = []
-        self.participants = {}
-
-    async def connect(self):
-        pass
-
-    async def close(self):
-        self._rest = None
-
-    async def create_room(self, title):
-        room_id = f"room-{len(self.rooms) + 1}"
-        self.rooms.append(title)
-        self.participants[room_id] = {self.identity}
-        return room_id
-
-    async def add_participant(self, room_id, band_id):
-        self.participants.setdefault(room_id, set()).add(band_id)
-
-    async def _members(self, room_id):
-        return self.participants.get(room_id, set())
-
-    async def send(self, room_id, content, mentions):
-        return f"band-{len(content)}"
-
-
-@pytest.fixture
-def svc(monkeypatch) -> Iterator[AppService]:
-    init_db()
-
-    def clear_database() -> None:
-        with db() as session:
-            from app.providers.models import ServiceSelection, ServiceSelectionHistory
-            for model in (ServiceSelectionHistory, ServiceSelection):
-                for row in session.exec(select(model).where(model.scope != "workspace")).all():
-                    session.delete(row)
-            for model in (UserDesktop, TaskPrincipal, ComputerPublishApproval, AgentPluginAccess, TeammateRequest, ClientMessage, AuthSession, RecoveryAddress, PasswordReset, ContactBlock, ConnectionHealth,
-                          WorkerHeartbeat, AppContact, AppContactRequest, BandRoomAccount, BandAgentLink, UserBandConnection, BandPlatformRoom, PlatformTeammate, LocalTeammate,
-                          ComponentResponse, TaskInput, MessageComponent, AgentRuntime, AgentOAuthAttempt, AgentConnection,
-                          ChannelInvitation, HumanDirectMessage, PrivateConversation, BandAgentOwner, UserBandAccount, OutsideAgent,
-                          AgentTask, DirectMessage, Message, ChannelMember, AgentPersona, AgentProfile,
-                          ChannelPolicy, WorkspaceRole, Channel, User, AuditEvent,
-                          TaskCacheUsage, TaskUsage, Budget):
-                for row in session.exec(select(model)).all():
-                    session.delete(row)
-            session.commit()
-
-    clear_database()
-
-    async def identity(api_key: str) -> BandIdentity:
-        name = api_key.removeprefix("key-")
-        return BandIdentity(id=f"agent-{name}", name=name.title(), handle=f"pat/{name}")
-
-    monkeypatch.setattr(service_module, "fetch_identity", identity)
-    service = AppService()
-    try:
-        yield service
-    finally:
-        clear_database()
+from app.persistence.models import UserBandAccount
+from app.persistence.models import UserBandConnection, BandPlatformRoom, PlatformTeammate
+from helpers import make_alice
 
 
 def _messages(channel_id: int) -> list[Message]:
@@ -96,18 +19,9 @@ def _messages(channel_id: int) -> list[Message]:
         return session.exec(select(Message).where(Message.channel_id == channel_id).order_by(Message.id)).all()
 
 
-def _user() -> User:
-    with db() as session:
-        user = User(username="alice", display_name="Alice", password_hash="x")
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-        return user
-
-
 def test_channels_and_teammates_use_the_saved_agent_api_connection(svc):
     async def scenario():
-        user = _user()
+        user = make_alice()
         with db() as session:
             session.add(UserBandConnection(user_id=user.id, band_agent_id="alice", secret_enc=encrypt_secret("band_a_alice")))
             session.commit()
@@ -124,7 +38,7 @@ def test_channels_and_teammates_use_the_saved_agent_api_connection(svc):
 
 def test_unreadable_management_credentials_fail_without_a_fallback(svc):
     from app.workspace.service import ServiceError
-    user = _user()
+    user = make_alice()
     with db() as session:
         session.add(UserBandAccount(user_id=user.id, band_user_id="alice", secret_enc="cannot-decrypt"))
         session.commit()
@@ -177,7 +91,7 @@ def test_failed_model_selection_removes_the_new_agent(svc: AppService, monkeypat
 
 def test_direct_messages_are_private_and_answer_without_a_mention(svc):
     async def scenario():
-        user = _user()
+        user = make_alice()
         with db() as session:
             session.add(UserBandConnection(user_id=user.id, band_agent_id="alice", secret_enc=encrypt_secret("band_a_alice")))
             session.commit()

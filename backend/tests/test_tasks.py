@@ -3,60 +3,17 @@ import asyncio
 from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from pydantic import Field
 from sqlmodel import select
 from app.runtime.tools import tools_for
 from app.auth import encrypt_secret, issue_token
 from app.runtime.harness import build_harness
 from app.main import app
-from app.persistence.models import AgentProfile, AgentTask, Channel, ChannelMember, DirectMessage, Message, User, db, init_db
+from app.persistence.models import AgentProfile, AgentTask, ChannelMember, DirectMessage, Message, User, db
 from app.tasks import enqueue, recover_tasks, update_task
 from app.tasks.worker import complete, execute, process
-
-
-class ScriptedModel(BaseChatModel):
-    """Run the actual Deep Agents graph and tools without provider credentials."""
-    responses: list
-    index: int = 0
-
-    @property
-    def _llm_type(self):
-        return "offline-scripted"
-
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        response = self.responses[self.index]
-        self.index += 1
-        if isinstance(response, Exception):
-            raise response
-        return ChatResult(generations=[ChatGeneration(message=response)])
-
-
-@pytest.fixture
-def job():
-    init_db()
-    key = uuid4().hex
-    with db() as session:
-        agent = AgentProfile(name=f"Agent-{key[:8]}", role="master", is_master=True,
-                             band_agent_id=key, band_api_key_enc=encrypt_secret("offline"))
-        channel = Channel(name=key, band_room_id=key)
-        user = User(username=key, display_name="Tester", password_hash="unused")
-        session.add_all([agent, channel, user])
-        session.commit()
-        session.refresh(agent)
-        session.refresh(channel)
-        session.refresh(user)
-        session.add(ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id))
-        session.commit()
-    task = enqueue(agent_id=agent.id, channel_id=channel.id, room_id=key,
-                   source_id=key, prompt="Create a draft and verify it")
-    return task, agent, user
+from helpers import RecordingModel, ScriptedModel, approval_call, isolate_queue, run_attempt, teammate
 
 
 def test_checkpoint_survives_failure_and_new_worker(tmp_path, job):
@@ -325,17 +282,6 @@ def test_local_mention_carries_recent_channel_context(job):
     asyncio.run(scenario())
 
 
-def teammate(name_prefix="Writer"):
-    key = uuid4().hex[:8]
-    with db() as session:
-        agent = AgentProfile(name=f"{name_prefix}-{key}", role="writer", band_agent_id=f"band-{key}",
-                             band_api_key_enc=encrypt_secret("offline"))
-        session.add(agent)
-        session.commit()
-        session.refresh(agent)
-    return agent
-
-
 def run_scripted(task, saver, responses):
     model = ScriptedModel(responses=responses)
     return execute(task, saver, factory=lambda t, p, c, **kw: build_harness(t, p, c, model=model, **kw))
@@ -477,16 +423,6 @@ def test_handoffs_and_task_activity_reach_websocket(job):
             assert event["task"]["status"] == "done"
 
 
-def isolate_queue(keep: set[str]) -> None:
-    """The suite shares one database; park other tests' leftover queued jobs."""
-    with db() as session:
-        for leftover in session.exec(select(AgentTask).where(AgentTask.status == "queued")).all():
-            if leftover.id not in keep:
-                leftover.status = "cancelled"
-                session.add(leftover)
-        session.commit()
-
-
 def test_next_task_keeps_each_agent_in_order_per_channel(job):
     from datetime import datetime, timezone
     from app.tasks import next_task
@@ -581,33 +517,6 @@ def test_report_back_mentions_teammates_still_working(job):
     with db() as session:
         answer = session.exec(select(Message).where(Message.band_message_id == f"task:{final.id}")).one()
     assert answer.to_humans
-
-
-class RecordingModel(ScriptedModel):
-    """Also records each prompt, to prove a resumed graph sees the human decision."""
-    seen: list = Field(default_factory=list)
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        self.seen.append(list(messages))
-        return super()._generate(messages, stop, run_manager, **kwargs)
-
-
-def run_attempt(tmp_path, task, model):
-    """One worker attempt with a fresh checkpoint connection, as after a restart."""
-    async def scenario():
-        async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "approvals.db")) as saver:
-            await saver.setup()
-            update_task(task.id, status="running")
-            await process(task, saver, executor=lambda t, s: execute(
-                t, s, factory=lambda t2, p, c, **kw: build_harness(t2, p, c, model=model, **kw)))
-    asyncio.run(scenario())
-    with db() as session:
-        return session.get(AgentTask, task.id)
-
-
-def approval_call(call_id="approve-1"):
-    return AIMessage(content="", tool_calls=[{"name": "request_approval", "id": call_id, "args": {
-        "action": "Submit the signup form on example.com", "details": "Email: test@example.com"}}])
 
 
 def tool_results(model):

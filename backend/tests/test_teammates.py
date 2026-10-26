@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -28,9 +28,8 @@ from app.tasks.queue import MAX_HANDOFFS
 from app.tasks.teammates import create_teammate, outside_reply
 from app.tasks.worker import execute
 from app.workspace.service import AppService, ServiceError
-from test_service import FakeOrg, svc  # noqa: F401  (svc is a fixture)
-from test_tasks import ScriptedModel
-
+from helpers import FakeOrg
+from helpers import ScriptedModel
 PEERS = [
     SimpleNamespace(id="peer-tom", handle="pat/tom", name="Tom", description="Claude Code on Pat's laptop",
                     online=True, is_external=False),
@@ -56,11 +55,13 @@ def team(svc: AppService):  # noqa: F811
         session.commit()
     with db() as session:
         user = User(username="alice", display_name="Alice", password_hash="x")
-        session.add(user); session.flush()
+        session.add(user)
+        session.flush()
         connection = UserBandConnection(user_id=user.id, band_agent_id="user-owner", secret_enc=encrypt_secret("band_a_user-owner"))
         channel = Channel(name="crew", band_room_id="room-crew")
         master = AgentProfile(name="Master", role="master", is_master=True, band_agent_id="agent-master", band_api_key_enc="", created_by=user.id)
-        session.add_all([connection, channel, master]); session.flush()
+        session.add_all([connection, channel, master])
+        session.flush()
         session.add_all([BandPlatformRoom(channel_id=channel.id, user_id=user.id, band_agent_id="user-owner"),
                          PlatformTeammate(agent_id=master.id, user_id=user.id, band_agent_id="user-owner"),
                          BandAgentOwner(agent_id=master.id, user_id=user.id, band_user_id="user-owner"),
@@ -365,7 +366,8 @@ def test_band_invites_require_the_connection_owner(team):
     svc, _, _, channel, owner = team
     with db() as session:
         other = User(username="other", display_name="Other", password_hash="x")
-        session.add(other); session.commit()
+        session.add(other)
+        session.commit()
     with pytest.raises(ServiceError) as denied:
         asyncio.run(svc.invite_outside_agent(other, channel.id, "peer-tom"))
     assert denied.value.status == 403

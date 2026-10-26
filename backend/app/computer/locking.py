@@ -2,16 +2,14 @@
 import asyncio
 import hashlib
 import sys
-from pathlib import Path
 
-from app.config import settings
+from app.config import state_dir
 from app.persistence.models import engine
 
 
 class ComputerLock:
     def __init__(self, key: str, *, timeout: float = 240):
-        database = engine.url.database if engine.url.drivername.startswith("sqlite") else None
-        root = Path(database or settings.checkpoint_path).resolve().parent / "computer-locks"
+        root = state_dir(engine.url) / "computer-locks"
         self.path = root / (hashlib.sha256(key.encode()).hexdigest() + ".lock")
         self.timeout = timeout
         self.local = asyncio.Lock()

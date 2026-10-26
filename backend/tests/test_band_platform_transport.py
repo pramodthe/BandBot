@@ -1,6 +1,5 @@
 import asyncio
 from types import SimpleNamespace as Obj
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,13 +8,10 @@ from sqlmodel import select
 import app.api.http as http
 import app.api.people as people
 import app.workspace.service as service_module
-from app.auth import decrypt_secret
-from app.persistence.models import (AgentProfile, AgentTask, BandPlatformRoom, Channel, ChannelMember, Message,
+from app.persistence.models import (AgentProfile, AgentTask, BandPlatformRoom, Message,
                                      PlatformTeammate, UserBandConnection, db)
 from app.tasks.queue import next_task, update_task
 from app.tasks.worker import process, deliver
-from test_service import svc
-
 
 @pytest.fixture
 def platform_app(svc, monkeypatch, offline_band_platform):
@@ -59,11 +55,13 @@ def test_saved_key_drives_signup_room_teammate_worker_delivery_and_inbound(platf
     task = next_task()
     async def executor(task, saver): return 'A completed draft.'
     asyncio.run(process(task, None, executor=executor))
-    with db() as session: finished = session.get(AgentTask, task.id)
+    with db() as session:
+        finished = session.get(AgentTask, task.id)
     assert finished.status == 'completed'
     asyncio.run(deliver(finished))
     asyncio.run(deliver(finished))  # A replay cannot send the Band result twice.
-    with db() as session: assert session.get(AgentTask, task.id).delivery_status == 'sent'
+    with db() as session:
+        assert session.get(AgentTask, task.id).delivery_status == 'sent'
     events = [c for c in network.calls if c[0] == 'event' and 'A completed draft.' in c[3].content]
     assert len(events) == 1 and events[0][1] == key
     history = client.get(f"/api/channels/{channel['id']}/messages", headers=headers)
@@ -75,7 +73,8 @@ def test_saved_key_drives_signup_room_teammate_worker_delivery_and_inbound(platf
     peers = client.get(f"/api/channels/{channel['id']}/peers", headers=headers)
     assert peers.status_code == 200 and peers.json()[0]['band_id'] == peer.id
     from app.persistence.models import User
-    with db() as session: user = session.get(User, owner)
+    with db() as session:
+        user = session.get(User, owner)
     asyncio.run(svc.invite_outside_agent(user, channel['id'], peer.id))
     listener = svc._platform_listeners[owner]
     incoming = Obj(id='native-reply', sender_id=peer.id, sender_name='Reviewer', content='@Writer improve the draft.')
@@ -88,7 +87,8 @@ def test_saved_key_drives_signup_room_teammate_worker_delivery_and_inbound(platf
         assert len(inbound) == 1 and inbound[0].reply_to == peer.id
     native_task = next_task()
     asyncio.run(process(native_task, None, executor=executor))
-    with db() as session: ready = session.get(AgentTask, native_task.id)
+    with db() as session:
+        ready = session.get(AgentTask, native_task.id)
     asyncio.run(deliver(ready))
     replies = [c for c in network.calls if c[0] == 'message' and 'A completed draft.' in c[3].content]
     assert len(replies) == 1 and replies[0][1] == key and replies[0][3].mentions[0].id == peer.id
@@ -130,11 +130,11 @@ def test_delete_teammate_preserves_platform_connection_and_band_identity(platfor
 
 def test_key_rotation_replaces_live_transport_and_worker_uses_current_key(platform_app, monkeypatch):
     import app.band.connections as connections
-    from app.band.listener import BandIdentity
+    from app.band.platform import BandIdentity
     client, ((owner, headers, old_key), _), svc, network = platform_app
     channel = client.post('/api/channels', headers=headers, json={'name': 'Rotate'}).json()
     old_listener = svc._platform_listeners[owner]
-    created = client.post('/api/agents', headers=headers, json={'name': 'Rotated Writer', 'channel_id': channel['id']}).json()
+    client.post('/api/agents', headers=headers, json={'name': 'Rotated Writer', 'channel_id': channel['id']}).json()
     client.post(f"/api/channels/{channel['id']}/messages", headers=headers, json={'content': '@Rotated Writer write.'})
     task = next_task()
     new_key = 'band_a_rotated-alpha'
@@ -146,7 +146,8 @@ def test_key_rotation_replaces_live_transport_and_worker_uses_current_key(platfo
     assert old_listener.closed and svc._platform_listeners[owner] is not old_listener
     from app.tasks.worker import complete
     complete(task, 'Result after key rotation.')
-    with db() as session: ready = session.get(AgentTask, task.id)
+    with db() as session:
+        ready = session.get(AgentTask, task.id)
     asyncio.run(deliver(ready))
     events = [call for call in network.calls if call[0] == 'event' and 'Result after key rotation.' in call[3].content]
     assert len(events) == 1 and events[0][1] == new_key

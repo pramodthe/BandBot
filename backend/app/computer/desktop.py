@@ -8,14 +8,14 @@ import json
 import logging
 import re
 import shlex
-from datetime import timedelta, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 from e2b import NotFoundException, RateLimitException, SandboxException
 
 from app.computer.e2b import DesktopOptions, E2BDesktopClient
-from app.computer.providers import ComputerMissing, ComputerProviderError, configured, key_for, provider_for
-from app.computer.providers import running_on
+from app.computer.providers import (TRANSFER_LIMIT, ComputerMissing, ComputerProviderError, configured, key_for,
+                                    provider_for, running_on)
 from app.computer.identity import is_shared, is_user_desktop, shared_key, user_keys
 from app.computer.locking import ComputerLock
 
@@ -23,7 +23,7 @@ from sqlmodel import select
 
 from app.config import settings
 from app.computer.display import display_state, record_step, update_display
-from app.persistence.models import (AgentProfile, AgentTask, ChannelMember, ComputerControl, ComputerControlContext,
+from app.persistence.models import (as_utc, AgentProfile, AgentTask, ChannelMember, ComputerControl, ComputerControlContext,
                                     ComputerViewLease, DirectMessage, PrivateConversation, TaskSandbox, db, utcnow)
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,6 @@ class ComputerUnavailable(RuntimeError):
 
 
 VNC_PORT = 6080  # E2B desktop noVNC service, accessible only through the app proxy
-TRANSFER_LIMIT = 25 * 1024 * 1024
 CONTROL_MINUTES = 15
 
 
@@ -43,7 +42,7 @@ def active_control(key: str) -> ComputerControl | None:
         control = session.get(ComputerControl, key)
     if control is None:
         return None
-    until = control.until if control.until.tzinfo else control.until.replace(tzinfo=timezone.utc)
+    until = as_utc(control.until)
     return control if until > utcnow() else None
 
 
@@ -78,7 +77,7 @@ def expire_controls() -> list[ComputerControl]:
     """Remove take-overs whose time ran out and return them, so each end is announced once."""
     with db() as session:
         expired = [control for control in session.exec(select(ComputerControl)).all()
-                   if (control.until if control.until.tzinfo else control.until.replace(tzinfo=timezone.utc)) <= utcnow()]
+                   if as_utc(control.until) <= utcnow()]
         for control in expired:
             session.delete(control)
         session.commit()
@@ -208,7 +207,7 @@ class TaskComputer:
         from app.computer.identity import isolated_key
         expected = isolated_key(self.owner, self.task.channel_id, self.provider, self.config)
         if (not profile or self.owner != profile.band_agent_id
-                or self.task.created_at.replace(tzinfo=timezone.utc) < profile.created_at.replace(tzinfo=timezone.utc)
+                or as_utc(self.task.created_at) < as_utc(profile.created_at)
                 or (not shared_access if self.shared else self.key != expected)):
             raise ComputerUnavailable("This task belongs to a removed or replaced agent. Start a new task.")
         self.config = config_for_task(self.task, defaults=settings)
@@ -564,7 +563,7 @@ print(json.dumps({{"exit_code": p.returncode, "timed_out": timed_out,
             await self.detach()
         with db() as session:
             lease = session.get(ComputerViewLease, self.key)
-            until = (lease.until if lease.until.tzinfo else lease.until.replace(tzinfo=timezone.utc)) if lease else None
+            until = as_utc(lease.until) if lease else None
             watching = until is not None and until > utcnow()
             if lease and (force or not watching):
                 session.delete(lease)

@@ -19,14 +19,13 @@ from app.tasks.teammates import _request, create_teammate
 from app.tasks.worker import execute
 from app.workspace.masters import ensure_user_master
 from app.workspace.service import AppService
-from test_service import svc  # noqa: F401
-from test_tasks import ScriptedModel
 
-
+from helpers import ScriptedModel
 def _account(label: str):
     with db() as session:
         user = User(username=label, display_name=label, password_hash="unused")
-        session.add(user); session.flush()
+        session.add(user)
+        session.flush()
         master, created = ensure_user_master(session, user)
         assert created
         session.commit()
@@ -73,7 +72,8 @@ def test_signup_provisions_private_master_without_band_or_model(svc, monkeypatch
 def test_bootstrap_repairs_existing_account_once(svc):  # noqa: F811
     with db() as session:
         user = User(username="existing", display_name="Existing", password_hash="unused")
-        session.add(user); session.commit()
+        session.add(user)
+        session.commit()
         uid = user.id
     auth = {"Authorization": "Bearer " + issue_token(uid)}
     with TestClient(app) as client:
@@ -88,7 +88,8 @@ def test_bootstrap_repairs_existing_account_once(svc):  # noqa: F811
 def test_master_creation_rolls_back_with_signup_transaction(svc):  # noqa: F811
     with db() as session:
         user = User(username="rollback", display_name="Rollback", password_hash="unused")
-        session.add(user); session.flush()
+        session.add(user)
+        session.flush()
         ensure_user_master(session, user)
         session.rollback()
     with db() as session:
@@ -99,11 +100,14 @@ def test_master_creation_rolls_back_with_signup_transaction(svc):  # noqa: F811
 def test_existing_owned_master_keeps_its_identity(svc):  # noqa: F811
     with db() as session:
         user = User(username="legacy-owner", display_name="Legacy", password_hash="unused")
-        session.add(user); session.flush()
+        session.add(user)
+        session.flush()
         old = AgentProfile(name="Original Master", is_master=True, band_agent_id="native-master",
                            band_api_key_enc="preserved", created_by=user.id)
-        session.add(old); session.flush()
-        session.add(BandAgentOwner(agent_id=old.id, user_id=user.id, band_user_id="owner")); session.commit()
+        session.add(old)
+        session.flush()
+        session.add(BandAgentOwner(agent_id=old.id, user_id=user.id, band_user_id="owner"))
+        session.commit()
         master, created = ensure_user_master(session, user)
         assert not created and master.id == old.id and master.band_api_key_enc == "preserved"
         assert len(session.exec(select(AgentProfile)).all()) == 1
@@ -150,12 +154,14 @@ def test_master_cannot_create_for_a_group_request_or_another_owner(svc):  # noqa
     second, _ = _account("bob")
     with db() as session:
         group = Channel(name="group")
-        session.add(group); session.commit()
+        session.add(group)
+        session.commit()
         channel_id = group.id
     task = enqueue(agent_id=master.id, channel_id=channel_id, room_id="", source_id="group", prompt="Create Scout")
     assert "private conversation" in _request(task, name="Scout", role="researcher", instructions="", call_id="x")["error"]
     with db() as session:
-        session.add(DirectMessage(channel_id=channel_id, user_id=second.id, agent_id=master.id)); session.commit()
+        session.add(DirectMessage(channel_id=channel_id, user_id=second.id, agent_id=master.id))
+        session.commit()
     assert "private conversation" in _request(task, name="Scout", role="researcher", instructions="", call_id="y")["error"]
     with db() as session:
         assert not session.exec(select(TeammateRequest)).all()

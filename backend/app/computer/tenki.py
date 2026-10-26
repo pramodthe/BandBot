@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
-import io
 import json
 import posixpath
 import secrets
@@ -14,22 +12,18 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from PIL import Image
 from tenki import AsyncClient
 from tenki_sandbox.errors import SessionNotFoundError
-from sqlmodel import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from app.auth import encrypt_secret
+from app.auth import decrypt_secret, encrypt_secret
 from app.config import settings
-from app.computer.e2b import DesktopSession
-from app.computer.providers import ComputerMissing, ComputerProviderError
+from app.computer.e2b import DesktopSession, jpeg_base64
+from app.computer.providers import TRANSFER_LIMIT, ComputerMissing, ComputerProviderError
 from app.computer.identity import key_from_labels
 from app.computer.tenki_home import home_script
-from app.persistence.models import ComputerDisk, ComputerEndpoint, ComputerGateway, db, utcnow
+from app.persistence.models import ComputerDisk, ComputerEndpoint, ComputerGateway, db, insert_ignore, utcnow
 
 WORKSPACE = "/home/tenki/workspace"
-LIMIT = 25 * 1024 * 1024
 
 
 async def checked_sdk(operation):
@@ -71,7 +65,8 @@ class TenkiDesktopClient:
             row = session.get(ComputerDisk, key)
             if row is None:
                 row = ComputerDisk(key=key, name=name)
-                session.add(row); session.commit()
+                session.add(row)
+                session.commit()
             if row.name != name or row.state == "retired":
                 raise ComputerProviderError("Durable disk ownership is unavailable")
             volume_id, state = row.volume_id, row.state
@@ -89,15 +84,18 @@ class TenkiDesktopClient:
             volume = matches[0]
         else:
             with db() as session:
-                row = session.get(ComputerDisk, key); row.state = "creating"
-                session.add(row); session.commit()
+                row = session.get(ComputerDisk, key)
+                row.state = "creating"
+                session.add(row)
+                session.commit()
             # Persist intent first. A timeout must never allocate another disk blindly.
             volume = await checked_sdk(self.sdk.volumes.create(name=name,
                 size_bytes=self.config.tenki_disk_gib * 1024 ** 3))
         with db() as session:
             row = session.get(ComputerDisk, key)
             row.volume_id, row.state = volume.id, "ready"
-            session.add(row); session.commit()
+            session.add(row)
+            session.commit()
         return await checked_sdk(self.sdk.volumes.wait_ready(volume.id, timeout=120))
 
     async def create(self, options, *, timeout=60):
@@ -242,20 +240,12 @@ class TenkiDesktopSession(DesktopSession):
     def select_desktop(self, desktop):
         self.display_number, self.key = desktop.display, desktop.key
 
-    async def display_info(self, **kwargs):
-        output = await self.checked(f"DISPLAY=:{self.display_number} xdotool getdisplaygeometry")
-        width, height = map(int, output.split())
-        return SimpleNamespace(displays=[SimpleNamespace(width=width, height=height, is_active=True)])
-
-    async def xdo(self, *args):
-        await self.checked(f"DISPLAY=:{self.display_number} xdotool " + shlex.join([str(arg) for arg in args]))
-
     def path(self, path):
         return posixpath.normpath(path if path.startswith("/") else WORKSPACE + "/" + path)
 
     async def write_file(self, content, path, **kwargs):
         data = content.encode() if isinstance(content, str) else content
-        if len(data) > LIMIT:
+        if len(data) > TRANSFER_LIMIT:
             raise ComputerProviderError("File exceeds transfer limit")
         path = self.path(path)
         temporary = "/home/tenki/.band-write-" + uuid4().hex
@@ -272,14 +262,14 @@ class TenkiDesktopSession(DesktopSession):
     async def read_file(self, path, timeout=120):
         path = self.path(path)
         temporary = "/home/tenki/.band-read-" + uuid4().hex
-        # Stream at most LIMIT+1 guest bytes, even if the source grows after stat.
-        script = f"import shutil; f=open({path!r},'rb'); o=open({temporary!r},'wb'); o.write(f.read({LIMIT+1})); o.close(); f.close()"
+        # Stream at most TRANSFER_LIMIT+1 guest bytes, even if the source grows after stat.
+        script = f"f=open({path!r},'rb'); o=open({temporary!r},'wb'); o.write(f.read({TRANSFER_LIMIT + 1})); o.close(); f.close()"
         await self.checked("python3 -c " + shlex.quote(script), timeout=timeout)
         content = bytearray()
         try:
             async for chunk in self.sdk.fs.read_stream(temporary):
                 content.extend(chunk)
-                if len(content) > LIMIT:
+                if len(content) > TRANSFER_LIMIT:
                     raise ComputerProviderError("Download exceeds limit")
             return bytes(content)
         finally:
@@ -308,11 +298,7 @@ print(json.dumps(out))'''
         path = f"/tmp/band-observation-{self.display_number}.png"
         await self.checked(f"DISPLAY=:{self.display_number} scrot --overwrite --pointer " + path)
         data = await self.read_file(path)
-        def encode():
-            with Image.open(io.BytesIO(data)) as screen:
-                target = io.BytesIO(); screen.convert("RGB").save(target, format="JPEG", quality=75)
-                return base64.b64encode(target.getvalue()).decode()
-        return SimpleNamespace(screenshot=await asyncio.to_thread(encode))
+        return SimpleNamespace(screenshot=await asyncio.to_thread(jpeg_base64, data))
 
     async def prepare_app_connection(self, *, seconds: int, port=6080):
         await self.keepalive(seconds)
@@ -323,22 +309,18 @@ print(json.dumps(out))'''
             gateway = session.get(ComputerGateway, gateway_key)
             if not gateway or gateway.sandbox_id != self.id:
                 secret = secrets.token_hex(32)
-                if session.get_bind().dialect.name == "sqlite":
-                    statement = sqlite_insert(ComputerGateway).values(key=gateway_key, sandbox_id=self.id,
-                        secret_enc=encrypt_secret(secret)).on_conflict_do_nothing(index_elements=["key"])
-                    session.connection().execute(statement); session.commit()
-                    gateway = session.get(ComputerGateway, gateway_key)
-                    if gateway.sandbox_id != self.id:
-                        gateway.sandbox_id, gateway.secret_enc = self.id, encrypt_secret(secret)
-                        session.add(gateway); session.commit()
-                    else:
-                        from app.auth import decrypt_secret
-                        secret = decrypt_secret(gateway.secret_enc)
+                # Another process may create the gateway first; keep its secret for the same VM.
+                insert_ignore(session, ComputerGateway, ["key"], key=gateway_key, sandbox_id=self.id,
+                              secret_enc=encrypt_secret(secret))
+                session.commit()
+                gateway = session.get(ComputerGateway, gateway_key)
+                if gateway.sandbox_id != self.id:
+                    gateway.sandbox_id, gateway.secret_enc = self.id, encrypt_secret(secret)
+                    session.add(gateway)
+                    session.commit()
                 else:
-                    gateway = ComputerGateway(key=gateway_key, sandbox_id=self.id, secret_enc=encrypt_secret(secret))
-                    session.merge(gateway); session.commit()
+                    secret = decrypt_secret(gateway.secret_enc)
             else:
-                from app.auth import decrypt_secret
                 secret = decrypt_secret(gateway.secret_enc)
         # Merge port grants in a guest lock so concurrent preview renewals do not revoke one another.
         payload = "/home/tenki/.band-gateway-" + uuid4().hex

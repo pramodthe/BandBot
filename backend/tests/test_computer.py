@@ -4,105 +4,26 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from e2b import NotFoundException, RateLimitException, SandboxException
+from e2b import RateLimitException, SandboxException
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from sqlmodel import select
 
-import app.computer.desktop as computer_module
 from app.runtime.tools import tools_for
-from app.auth import encrypt_secret, issue_token
+from app.auth import issue_token
 from app.computer import ComputerUnavailable, TaskComputer, sandbox_record, save_sandbox
 from app.runtime.harness import build_harness
 from app.main import app
-from app.persistence.models import AgentProfile, AgentTask, Channel, ChannelMember, User, db, init_db
+from app.persistence.models import AgentTask, Channel, ChannelMember, User, db
 from app.tasks import enqueue
 from app.tasks.worker import execute
 from app.workspace.audit import record_agent
-from test_tasks import ScriptedModel
-
-
-@pytest.fixture
-def desktop_job(monkeypatch):
-    init_db()
-    from app.providers.models import ServiceSelection
-    with db() as session:
-        selection = session.get(ServiceSelection, "workspace")
-        previous_computer = selection.bindings.get("computer", {"disabled": True})
-        selection.bindings = {**selection.bindings, "computer": {"legacy": True}}
-        session.add(selection); session.commit()
-    def forbid_live_e2b(*args, **kwargs):
-        raise AssertionError("Offline tests must not initialize a live E2B client")
-    monkeypatch.setattr(computer_module.E2BDesktopClient, "__init__", forbid_live_e2b)
-    unique = uuid4().hex
-    with db() as session:
-        agent = AgentProfile(name=f"Desktop-{unique[:8]}", band_agent_id=unique, role="master", is_master=True,
-                             band_api_key_enc=encrypt_secret("offline"))
-        channel = Channel(name=unique)
-        user = User(username=unique, display_name="Desktop Tester", password_hash="unused")
-        session.add_all([agent, channel, user])
-        session.commit()
-        for row in (agent, channel, user):
-            session.refresh(row)
-        session.add(ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id))
-        session.commit()
-    task = enqueue(agent_id=agent.id, channel_id=channel.id, room_id=unique, source_id=unique,
-                   prompt="Use the computer to verify the page")
-    monkeypatch.setattr(computer_module, "settings", replace(computer_module.settings, e2b_api_key="offline-test"))
-    client = SimpleNamespace()
-    screen = base64.b64encode(b"offline-test-image").decode()
-    sandbox = SimpleNamespace(id=f"sandbox-{unique}", state="started", labels={},
-        computer_use=SimpleNamespace(
-            start=AsyncMock(),
-            display=SimpleNamespace(get_info=AsyncMock(return_value=SimpleNamespace(displays=[
-                SimpleNamespace(width=1280, height=800, is_active=True)]))),
-            screenshot=SimpleNamespace(take_compressed=AsyncMock(return_value=SimpleNamespace(screenshot=screen))),
-            mouse=SimpleNamespace(click=AsyncMock(), move=AsyncMock(), drag=AsyncMock(), scroll=AsyncMock()),
-            keyboard=SimpleNamespace(type=AsyncMock(), press=AsyncMock())),
-        fs=SimpleNamespace(
-            upload_file=AsyncMock(), create_folder=AsyncMock(),
-            list_files=AsyncMock(return_value=[
-                SimpleNamespace(name="notes.txt", path="/home/user/notes.txt", is_dir=False, size=12,
-                                modified_at="2026-10-16T10:00:00Z"),
-                SimpleNamespace(name="Downloads", path="/home/user/Downloads", is_dir=True, size=0,
-                                modified_at=None)]),
-            get_file_info=AsyncMock(side_effect=lambda path, **kwargs: SimpleNamespace(
-                is_dir=False, size=12, path=f"/home/user/{path}" if not path.startswith("/") else path)),
-            # Like the real SDK, download_file accepts positional arguments only.
-            download_file=AsyncMock(side_effect=lambda *args: b"hello notes")),
-        get_work_dir=AsyncMock(return_value="/home/user"),
-        create_signed_preview_url=AsyncMock(return_value=SimpleNamespace(
-            url="https://6080-signedtoken.proxy.example/vnc.html", token="signedtoken")),
-        process=SimpleNamespace(exec=AsyncMock(return_value=SimpleNamespace(exit_code=0,
-                               result=json.dumps({"exit_code": 0, "stdout": "2\n", "stderr": ""})))),
-        start=AsyncMock(), stop=AsyncMock())
-    client.allocated = False
-    async def get(name, **kwargs):
-        if not client.allocated:
-            raise NotFoundException("not found")
-        return sandbox
-    async def create(params, **kwargs):
-        sandbox.labels = params.labels
-        client.allocated = True
-        return sandbox
-    client.get = AsyncMock(side_effect=get)
-    client.create = AsyncMock(side_effect=create)
-    client.close = AsyncMock()
-    controller = TaskComputer(task, client_factory=lambda: client)
-    yield task, agent, user, controller, client, sandbox
-    with db() as session:
-        selection = session.get(ServiceSelection, "workspace")
-        selection.bindings = {**selection.bindings, "computer": previous_computer}
-        session.add(selection); session.commit()
-
-
+from helpers import ScriptedModel
 def frame_id(blocks):
     return json.loads(blocks[0]["text"])["screen_id"]
 
@@ -555,7 +476,6 @@ def test_quota_failures_explain_storage_limits(desktop_job):
             with pytest.raises(RateLimitException):  # Rate limits are not storage problems.
                 await retry.screenshot()
     asyncio.run(scenario())
-
 
 
 def test_live_view_signs_novnc_link_without_creating_a_computer(desktop_job):

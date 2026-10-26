@@ -17,13 +17,13 @@ import app.api.app_previews as api
 import app.computer.app_proxy as proxy
 from app.auth import encrypt_secret, issue_token
 from app.computer import TaskComputer, sandbox_record, save_sandbox, take_control
-from app.computer.app_previews import create_lease, has_active_view, publish, validate_path, validate_port
+from app.computer.app_previews import has_active_view, publish, validate_path, validate_port
 from app.main import app
-from app.persistence.models import (AgentTask, AppPreview, AppPreviewLease, ChannelMember, ChannelPolicy,
+from app.persistence.models import (AgentTask, AppPreviewLease, ChannelMember, ChannelPolicy,
                                     ComputerConnection, DirectMessage, MessageComponent, User, db, utcnow)
 from app.tasks.worker import complete
 from app.tasks import update_task
-from test_computer import desktop_job  # noqa: F401
+
 
 
 @pytest.fixture
@@ -105,7 +105,8 @@ def test_sessions_are_private_expiring_and_owner_scoped(preview_job):
         with db() as session:
             row = session.get(AppPreviewLease, first["id"])
             row.until = utcnow() - timedelta(seconds=1)
-            session.add(row); session.commit()
+            session.add(row)
+            session.commit()
         assert client.get(first["url"]).status_code == 410
         assert client.post(f"/api/app-preview-sessions/{first['id']}/renew", headers=job.headers).status_code == 410
         assert client.get("http://invalid.localhost:8000/api/channels").status_code == 404
@@ -115,7 +116,8 @@ def test_sessions_are_private_expiring_and_owner_scoped(preview_job):
 def make_user():
     with db() as session:
         user = User(username=uuid4().hex, display_name="Another viewer", password_hash="unused")
-        session.add(user); session.commit()
+        session.add(user)
+        session.commit()
         return user
 
 
@@ -129,11 +131,13 @@ def test_membership_policy_dm_and_takeover_revocation(preview_job):
         assert client.get(route, headers=headers).status_code == 403
         with db() as session:
             session.add(ChannelMember(channel_id=job.task.channel_id, member_type="human", member_id=other.id))
-            session.add(ChannelPolicy(channel_id=job.task.channel_id, computer_control="admins")); session.commit()
+            session.add(ChannelPolicy(channel_id=job.task.channel_id, computer_control="admins"))
+            session.commit()
         assert client.get(route, headers=headers).status_code == 403
         assert client.get(lease["url"]).status_code == 403
         with db() as session:
-            session.delete(session.get(ChannelPolicy, job.task.channel_id)); session.commit()
+            session.delete(session.get(ChannelPolicy, job.task.channel_id))
+            session.commit()
         assert client.get(route, headers=headers).status_code == 200
         take_control(job.computer.key, user_id=other.id, user_name=other.display_name)
         assert client.get(route, headers=job.headers).status_code == 409
@@ -141,10 +145,12 @@ def test_membership_policy_dm_and_takeover_revocation(preview_job):
         from app.computer import release_control
         release_control(job.computer.key, user_name=other.display_name)
         with db() as session:
-            session.add(DirectMessage(channel_id=job.task.channel_id, user_id=job.user.id, agent_id=job.agent.id)); session.commit()
+            session.add(DirectMessage(channel_id=job.task.channel_id, user_id=job.user.id, agent_id=job.agent.id))
+            session.commit()
         assert client.get(route, headers=headers).status_code == 404
         with db() as session:
-            session.delete(session.get(ChannelMember, (job.task.channel_id, "human", job.user.id))); session.commit()
+            session.delete(session.get(ChannelMember, (job.task.channel_id, "human", job.user.id)))
+            session.commit()
         assert client.get(lease["url"]).status_code == 403
 
 
@@ -243,13 +249,18 @@ def test_websocket_echo_subprotocol_and_revoked_lease(preview_job, monkeypatch):
         origin = lease["url"].split("/dashboard")[0]
         with client.websocket_connect(origin.replace("http:", "ws:") + "/hmr?token=app", subprotocols=["app-dev"], headers={"origin": origin}) as socket:
             assert socket.accepted_subprotocol == "app-dev"
-            socket.send_text("hot update"); assert socket.receive_text() == "hot update"
-            socket.send_bytes(b"\x00binary"); assert socket.receive_bytes() == b"\x00binary"
+            socket.send_text("hot update")
+            assert socket.receive_text() == "hot update"
+            socket.send_bytes(b"\x00binary")
+            assert socket.receive_bytes() == b"\x00binary"
             assert sent[0][0] == f"wss://3000-{job.sandbox.id}.e2b.app/hmr?token=app"
             assert sent[0][1]["additional_headers"]["e2b-traffic-access-token"] == "private-ingress-token"
             with db() as session:
-                session.delete(session.get(AppPreviewLease, lease["id"])); session.commit()
+                session.delete(session.get(AppPreviewLease, lease["id"]))
+                session.commit()
             socket.send_text("after revocation")
-            with pytest.raises(WebSocketDisconnect): socket.receive_text()
+            with pytest.raises(WebSocketDisconnect):
+                socket.receive_text()
         with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect(origin.replace("http:", "ws:") + "/hmr"): pass
+            with client.websocket_connect(origin.replace("http:", "ws:") + "/hmr"):
+                pass

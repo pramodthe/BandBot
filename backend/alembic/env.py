@@ -5,9 +5,16 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 import app.persistence.models  # noqa: F401  (register every table)
+from app.config import settings, sqlalchemy_url
 
 config = context.config
 target_metadata = SQLModel.metadata
+
+
+def _url() -> str:
+    # The alembic CLI migrates the configured DATABASE_URL, as API startup does.
+    # app.persistence.migrate passes its own connection instead.
+    return sqlalchemy_url(settings.database_url)
 
 
 def _run(connection) -> None:
@@ -17,7 +24,7 @@ def _run(connection) -> None:
 
 
 def run_migrations_offline() -> None:
-    context.configure(url=config.get_main_option("sqlalchemy.url"), target_metadata=target_metadata, literal_binds=True)
+    context.configure(url=_url(), target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 
@@ -27,7 +34,8 @@ def run_migrations_online() -> None:
     if connection is not None:
         _run(connection)
         return
-    connectable = engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
+    section = {**config.get_section(config.config_ini_section, {}), "sqlalchemy.url": _url()}
+    connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
         _run(connection)
 

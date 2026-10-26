@@ -14,7 +14,7 @@ from app.persistence.models import (AgentProfile, AgentTask, Channel, ChannelMem
                                     DirectMessage, Message, MessageComponent, User)
 from app.runtime.tools.generative import FormDefinition
 from app.tasks import channel_context
-from app.workspace.audit import record
+from app.workspace.audit import record_human
 
 
 class UIError(Exception):
@@ -141,7 +141,7 @@ def submit(session: Session, channel_id: int, component_id: int, user: User, act
                           context=channel_context(session, channel_id), reply_to=reply_to))
     if not session.get(ChannelMember, (channel_id, "agent", agent.id)):
         session.add(ChannelMember(channel_id=channel_id, member_type="agent", member_id=agent.id))
-    record("component_responded", actor_type="human", actor_id=user.id, actor_name=user.display_name,
-           channel_id=channel_id, session=session, detail={"component_id": component_id, "action_id": action.id})
+    record_human(user, "component_responded", channel_id=channel_id, session=session,
+                 component_id=component_id, action_id=action.id)
     session.commit()
     return Submitted(response, message, source, agent, True)

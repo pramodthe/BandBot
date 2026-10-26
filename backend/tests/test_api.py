@@ -12,20 +12,13 @@ from sqlmodel import select
 
 from app.persistence.models import (AgentProfile, AgentTask, BandAgentOwner, Channel, ChannelMember,
                                     DirectMessage, User, db)
-
-
-def _signup(client: TestClient, username: str, name: str) -> dict:
-    response = client.post(
-        "/api/auth/signup", json={"username": username, "display_name": name, "password": "secret123", "band_api_key": f"band_a_signup-{username}"}
-    )
-    assert response.status_code == 200, response.text
-    return response.json()
+from helpers import signup
 
 
 def test_humans_chat_with_their_saved_agent_api_connection_without_human_api():
     with TestClient(app) as client:
-        alice = _signup(client, "alice", "Alice")
-        bob = _signup(client, "bob", "Bob")
+        alice = signup(client, "alice", "Alice")
+        bob = signup(client, "bob", "Bob")
         auth_a = {"Authorization": f"Bearer {alice['token']}"}
         auth_b = {"Authorization": f"Bearer {bob['token']}"}
 
@@ -65,8 +58,8 @@ def test_humans_chat_with_their_saved_agent_api_connection_without_human_api():
 
 def test_direct_messages_are_visible_only_to_their_owner():
     with TestClient(app) as client:
-        dana = _signup(client, "dana", "Dana")
-        eli = _signup(client, "eli", "Eli")
+        dana = signup(client, "dana", "Dana")
+        eli = signup(client, "eli", "Eli")
         auth_d = {"Authorization": f"Bearer {dana['token']}"}
         auth_e = {"Authorization": f"Bearer {eli['token']}"}
         with db() as session:
@@ -150,7 +143,7 @@ def test_login_does_not_ask_for_a_band_key_or_list_server_agents(monkeypatch):
 
 def test_agent_model_update_rejects_a_missing_provider_revision():
     with TestClient(app) as client:
-        signed = _signup(client, "modeler", "Modeler")
+        signed = signup(client, "modeler", "Modeler")
         headers = {"Authorization": f"Bearer {signed['token']}"}
         user_id = signed["user"]["id"]
         with db() as session:

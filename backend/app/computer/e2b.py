@@ -15,7 +15,16 @@ from PIL import Image
 
 from app.auth import encrypt_secret
 from app.config import settings
+from app.computer.providers import TRANSFER_LIMIT
 from app.persistence.models import ComputerConnection, db
+
+
+def jpeg_base64(data: bytes) -> str:
+    """Re-encode a PNG screenshot as base64 JPEG for the model."""
+    with Image.open(io.BytesIO(data)) as screen:
+        buffer = io.BytesIO()
+        screen.convert("RGB").save(buffer, format="JPEG", quality=75)
+        return base64.b64encode(buffer.getvalue()).decode()
 
 
 @dataclass
@@ -72,6 +81,8 @@ class E2BDesktopClient:
 
 
 class DesktopSession:
+    display_number = 0
+
     def __init__(self, client, sandbox_id: str, labels: dict, state: str, sdk=None):
         self.client, self.id, self.labels, self.sdk = client, sandbox_id, labels, sdk
         self.config = getattr(client, "config", settings)
@@ -102,8 +113,8 @@ class DesktopSession:
         sdk = await self.connection()
         try:
             result = await sdk.commands.run(command, timeout=timeout, request_timeout=timeout + 5)
-        except CommandExitException as result:
-            return SimpleNamespace(exit_code=result.exit_code, result=result.stdout, stderr=result.stderr)
+        except CommandExitException as failed:
+            result = failed
         return SimpleNamespace(exit_code=result.exit_code, result=result.stdout, stderr=result.stderr)
 
     async def checked(self, command: str, timeout=20):
@@ -132,7 +143,7 @@ class DesktopSession:
         raise RuntimeError("Desktop session did not start")
 
     async def display_info(self, **kwargs):
-        output = await self.checked("DISPLAY=:0 xdotool getdisplaygeometry")
+        output = await self.checked(f"DISPLAY=:{self.display_number} xdotool getdisplaygeometry")
         width, height = map(int, output.split())
         return SimpleNamespace(displays=[SimpleNamespace(width=width, height=height, is_active=True)])
 
@@ -143,15 +154,10 @@ class DesktopSession:
         data = await sdk.files.read(path, format="bytes", user="user", request_timeout=20)
         if len(data) > 12_000_000:
             raise RuntimeError("Screenshot exceeds limit")
-        def jpeg():
-            with Image.open(io.BytesIO(data)) as screen:
-                buffer = io.BytesIO()
-                screen.convert("RGB").save(buffer, format="JPEG", quality=75)
-                return base64.b64encode(buffer.getvalue()).decode()
-        return SimpleNamespace(screenshot=await asyncio.to_thread(jpeg))
+        return SimpleNamespace(screenshot=await asyncio.to_thread(jpeg_base64, data))
 
     async def xdo(self, *args):
-        await self.checked("DISPLAY=:0 xdotool " + shlex.join([str(arg) for arg in args]))
+        await self.checked(f"DISPLAY=:{self.display_number} xdotool " + shlex.join([str(arg) for arg in args]))
 
     async def click(self, x, y, button="left", double=False, **kwargs):
         await self.xdo("mousemove", x, y, "click", "--repeat", 2 if double else 1,
@@ -211,7 +217,7 @@ class DesktopSession:
         async with stream:
             async for chunk in stream:
                 content.extend(chunk)
-                if len(content) > 25 * 1024 * 1024:
+                if len(content) > TRANSFER_LIMIT:
                     raise RuntimeError("Download exceeds limit")
         return bytes(content)
 
@@ -245,10 +251,7 @@ class DesktopSession:
         else:
             raise RuntimeError("Desktop viewer did not start")
         await sdk.set_timeout(max(self.config.e2b_timeout, expires_in_seconds), request_timeout=20)
-        with db() as session:
-            session.merge(ComputerConnection(sandbox_id=self.id, host=sdk.get_host(port),
-                                             access_token_enc=encrypt_secret(sdk.traffic_access_token)))
-            session.commit()
+        self._save_ingress(sdk, port)
         return SimpleNamespace(url=signed_viewer_url(task_id, user_id, self.id))
 
     async def prepare_app_connection(self, *, seconds: int):
@@ -257,7 +260,11 @@ class DesktopSession:
         if not sdk.traffic_access_token:
             raise RuntimeError("App traffic authentication is unavailable")
         await sdk.set_timeout(max(self.config.e2b_timeout, seconds), request_timeout=20)
+        self._save_ingress(sdk, 6080)
+
+    def _save_ingress(self, sdk, port: int) -> None:
+        """Store the encrypted traffic token; only the server-side proxy uses it."""
         with db() as session:
-            session.merge(ComputerConnection(sandbox_id=self.id, host=sdk.get_host(6080),
+            session.merge(ComputerConnection(sandbox_id=self.id, host=sdk.get_host(port),
                                              access_token_enc=encrypt_secret(sdk.traffic_access_token)))
             session.commit()

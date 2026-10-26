@@ -9,9 +9,10 @@ from sqlmodel import Session, select
 from sqlalchemy.orm import defer
 
 from app import documents
+from app.api.deps import read_limited
 from app.auth import current_user
 from app.persistence.models import Document, User, get_session, utcnow
-from app.workspace.audit import record
+from app.workspace.audit import record_human
 from app.workspace.events import bus
 from app.workspace.permissions import is_admin
 
@@ -32,18 +33,14 @@ def get_document(session, user, document_id):
 async def upload(channel_id: int, name: str, request: Request, user: User = Depends(current_user),
                  session: Session = Depends(get_session)):
     documents.authorize(session, channel_id, user.id)
-    data = bytearray()
-    async for chunk in request.stream():
-        data.extend(chunk)
-        if len(data) > documents.LIMIT:
-            raise HTTPException(413, "Maximum file size is 25 MiB")
-    name, media = documents.validate_file(name, bytes(data))
+    data = await read_limited(request, documents.LIMIT, "Maximum file size is 25 MiB")
+    name, media = documents.validate_file(name, data)
     doc = Document(id=uuid4().hex, channel_id=channel_id, uploaded_by=user.id, name=name, media_type=media, size=len(data))
-    file_written = documents.save_original(session, doc, bytes(data))
+    file_written = documents.save_original(session, doc, data)
     try:
         session.add(doc)
-        record("document_uploaded", actor_type="human", actor_id=user.id, actor_name=user.display_name,
-               channel_id=channel_id, detail={"document_id": doc.id, "size": doc.size}, session=session)
+        record_human(user, "document_uploaded", channel_id=channel_id, session=session,
+                     document_id=doc.id, size=doc.size)
         session.commit()
     except Exception:
         if file_written:
@@ -106,8 +103,7 @@ async def remove(document_id: str, user: User = Depends(current_user), session: 
         raise HTTPException(403, "Only the uploader or an admin can remove this document")
     doc.status, doc.updated_at = "deleting", utcnow()
     session.add(doc)
-    record("document_removed", actor_type="human", actor_id=user.id, actor_name=user.display_name,
-           channel_id=doc.channel_id, detail={"document_id": doc.id}, session=session)
+    record_human(user, "document_removed", channel_id=doc.channel_id, session=session, document_id=doc.id)
     session.commit()
     await bus.publish({"type": "document_removed", "channel_id": doc.channel_id, "document_id": doc.id})
     return {"removed": True}

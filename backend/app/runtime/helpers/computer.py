@@ -1,4 +1,4 @@
-"""Graphical E2B desktop for one task."""
+"""Graphical cloud desktop (E2B or Tenki) for one task."""
 from __future__ import annotations
 
 from langchain.agents.middleware import ModelCallLimitMiddleware

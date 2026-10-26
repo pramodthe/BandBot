@@ -1,7 +1,7 @@
 """Normalized research results independent of provider response formats."""
 from urllib.parse import urlsplit
 import httpx
-from app.providers.contracts import ProviderError
+from app.providers.contracts import CONFIRMED_REJECTIONS, ProviderError, failure_code
 
 async def request(connection, path, body):
     from app.providers.context import current_task_id
@@ -22,8 +22,8 @@ async def _request(connection, path, body):
             return result.json()
     except httpx.HTTPStatusError as error:
         status = error.response.status_code
-        failure = ProviderError("research", "authentication" if status in {401, 403} else "quota_or_rate_limit" if status == 429 else "unavailable", connection_id=connection.id)
-        failure.confirmed_rejection = status in {400, 401, 403, 404, 422, 429}
+        failure = ProviderError("research", failure_code(status), connection_id=connection.id)
+        failure.confirmed_rejection = status in CONFIRMED_REJECTIONS
         raise failure from None
     except Exception:
         raise ProviderError("research", "unavailable", connection_id=connection.id) from None

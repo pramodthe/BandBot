@@ -4,40 +4,40 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 from collections.abc import Sequence
 from uuid import uuid4
-from datetime import timezone
 from typing import Any
 
 from sqlalchemy import or_, func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.band.listener import AgentManager, describe_error, fetch_identity
+from app.band.listener import AgentManager, describe_error
+from app.band.platform import fetch_identity
 from app.auth import decrypt_secret, encrypt_secret
 from app.band.platform import AgentPlatformOrg, disconnected_status
 from app.band.platform_listener import PlatformListener
 from app.config import settings
 from app.agent_connections import runtime_for
-from app.persistence.models import AgentRuntime, AgentConnection
+from app.persistence.models import (AgentConnection, AgentMemory, AgentPersona, AgentPluginAccess, AgentProfile,
+                                    AgentRuntime, AgentSkill, AgentTask, AgentUISkills, BandAgentLink, BandAgentOwner,
+                                    BandPlatformRoom, Budget, Channel, ChannelMember, ClientMessage, ComponentResponse,
+                                    ComputerConnection, ComputerControl, ComputerControlContext, ComputerDisk,
+                                    ComputerDisplay, ComputerEndpoint, ComputerGateway, ComputerScope,
+                                    ComputerViewLease, DirectMessage, HumanDirectMessage, LocalTeammate, Message,
+                                    MessageComponent, MessageDraft, OutsideAgent, PlatformTeammate,
+                                    PrivateConversation, Schedule, TaskApproval, TaskInput, TaskSandbox,
+                                    TeammateRequest, User, UserBandAccount, UserBandConnection, as_utc, db)
 from app.openai_provider import configuration
 from app.documents import attachments_for, link_attachments
 from app.workspace.events import bus
-from app.persistence.models import (AgentMemory, AgentPersona, AgentPluginAccess, AgentSkill, AgentUISkills, AgentTask, AgentProfile, Budget, Channel, ChannelMember, ClientMessage, DirectMessage, Message,
-                                    MessageComponent, ComponentResponse, MessageDraft, OutsideAgent, Schedule, TaskApproval, TaskSandbox,
-                                    ComputerConnection, ComputerDisplay, ComputerViewLease, TeammateRequest, User, db)
 from app.computer import CONTROL_MINUTES, expire_controls
-from app.persistence.models import (ComputerDisk, ComputerEndpoint, ComputerGateway, ComputerScope, ComputerControl,
-                                    ComputerControlContext)
 from app.workspace.audit import record
 from app.workspace.permissions import policy_of, serialize_policy
 from app.runtime.tools.composio import plugin_slugs, set_plugin_access
-from app.workspace.roles import ROLES, role_label
-from app.persistence.models import (UserBandConnection, PrivateConversation, HumanDirectMessage,
-                                    BandAgentOwner, BandAgentLink, BandPlatformRoom, PlatformTeammate, LocalTeammate, ContactBlock)
-from app.workspace.access import channel_audience, agent_event_visible, agent_owner
+from app.workspace.roles import role_label
+from app.workspace.access import channel_audience, agent_event_visible, agent_owner, is_blocked
 from app.workspace.components import current_components
 from app.tasks import channel_context, display_names
 from app.tasks.teammates import settle_interrupted, outside_reply
@@ -166,7 +166,6 @@ def components_for(session: Session, message_ids: list[int]) -> dict[int, list[d
                                   .order_by(MessageComponent.id)).all()
         responses = {r.component_id: response_json(r) for r in session.exec(select(ComponentResponse).where(
             ComponentResponse.component_id.in_([c.id for c in components if c.kind in {"form", "input"}]))).all()}
-        from app.persistence.models import TaskInput
         from app.tasks.inputs import input_state
         requests = {r.component_id: input_state(session, r) for r in session.exec(select(TaskInput).where(
             TaskInput.component_id.in_([c.id for c in components if c.kind == "input"]))).all()}
@@ -196,22 +195,55 @@ def _mentioned(content: str, *names: str) -> bool:
     )
 
 
+def _agent_name(name: str) -> str:
+    name = name.strip()
+    if len(name) < 3:
+        raise ServiceError("Agent name needs at least 3 characters", 422)
+    return name
+
+
+def _check_new_agent_name(session: Session, name: str, owner: int | None, *, taken: str, outside_taken: str) -> None:
+    """Agents name teammates in ask_teammate, so a name must point at exactly one agent this owner can reach."""
+    named = session.exec(select(AgentProfile).where(func.lower(AgentProfile.name) == name.lower())).all()
+    if any(agent_owner(session, item) in {None, owner} for item in named):
+        raise ServiceError(taken, 409)
+    if session.exec(select(OutsideAgent.band_id).where(func.lower(OutsideAgent.name) == name.lower())).first():
+        raise ServiceError(outside_taken, 409)
+
+
+def _check_runtime_connection(session: Session, runtime: str, connection_id: str | None, owner: int | None) -> None:
+    if runtime == "deepagents":
+        return
+    connection = session.get(AgentConnection, connection_id)
+    if not connection or connection.created_by != owner or connection.provider != runtime:
+        raise ServiceError("Choose your authenticated provider connection", 422)
+
+
+def _management_account(user_id: int) -> UserBandAccount | None:
+    """The user's saved Band user key, which manages their native agents."""
+    with db() as session:
+        account = session.get(UserBandAccount, user_id)
+    return account if account and account.secret_enc else None
+
+
 class AppService:
     """Coordinates local work and per-user Band Agent API connections."""
 
     def __init__(self) -> None:
         self.agents = AgentManager(self)
-        self._room_to_channel: dict[str, int] = {}
         self._task_poller: asyncio.Task | None = None
         self._teammate_poller: asyncio.Task | None = None
         self._take_over_poller: asyncio.Task | None = None
-        self._dm_lock = asyncio.Lock()
+        # Serializes direct-message, contact and invitation changes across API requests.
+        self.people_lock = asyncio.Lock()
         self._register_lock = asyncio.Lock()
         self._platform_orgs: dict[int, tuple[str, AgentPlatformOrg]] = {}
         self._platform_listeners: dict[int, PlatformListener] = {}
         self._platform_locks: dict[int, asyncio.Lock] = {}
         self._room_locks: dict[int, asyncio.Lock] = {}
         self._band_room_locks: dict[int, asyncio.Lock] = {}
+        # Band relays run after the response; holding them keeps them from being garbage-collected mid-send.
+        self._relays: set[asyncio.Task] = set()
 
     def uses_agent_key(self, profile: AgentProfile) -> bool:
         # Previously registered identities can still use their own Agent API key.
@@ -222,12 +254,15 @@ class AppService:
             connection = session.get(UserBandConnection, user_id)
         return await self.platform_org(user_id) if connection else None
 
+    def platform_online(self) -> bool:
+        """Whether any user's Agent API connection is live."""
+        return any(org.online for _, org in self._platform_orgs.values())
+
     async def band_status(self, user_id: int) -> dict:
-        from app.persistence.models import UserBandAccount
         with db() as session:
             connection = session.get(UserBandConnection, user_id)
-            account = session.get(UserBandAccount, user_id)
-        can_manage = bool(account and account.secret_enc)
+        account = _management_account(user_id)
+        can_manage = account is not None
         if not connection:
             if can_manage:
                 return {"configured": True, "online": True, "api": "management", "personal": True,
@@ -253,7 +288,8 @@ class AppService:
             await self._close_platform(user_id)
             try:
                 key = decrypt_secret(connection.secret_enc)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Saved Band connection for user %s could not be decrypted: %s", user_id, type(exc).__name__)
                 raise ServiceError("Your Band connection needs to be updated in People", 409) from None
             org = AgentPlatformOrg(key, user_id=user_id, identity=connection.band_agent_id)
             await org.connect()
@@ -282,10 +318,7 @@ class AppService:
     async def platform_connection_failed(self, user_id, identity):
         cached = self._platform_orgs.get(user_id)
         if cached and cached[1].identity == identity:
-            from app.persistence.models import UserBandAccount
-            with db() as session:
-                account = session.get(UserBandAccount, user_id)
-                can_manage = bool(account and account.secret_enc)
+            can_manage = _management_account(user_id) is not None
             cached[1].error = "Band's live connection is unavailable. Reconnect in People."
             await bus.publish({"type": "band_status", "band": {**cached[1].status(), "online": False,
                               "can_manage_agents": can_manage}}, users={user_id})
@@ -306,7 +339,7 @@ class AppService:
             return await self.platform_org(scope.owner_id)
         raise ServiceError("Add your Band Agent API connection in People and create a channel to use Band", 409)
 
-    def message_reply_to(self, user_id: int, channel_id: int) -> str:
+    def message_reply_to(self, channel_id: int) -> str:
         with db() as session:
             platform = session.get(BandPlatformRoom, channel_id)
         return platform.band_agent_id if platform else ""
@@ -340,6 +373,9 @@ class AppService:
             if poller is not None:
                 poller.cancel()
                 await asyncio.gather(poller, return_exceptions=True)
+        for relay in list(self._relays):
+            relay.cancel()
+        await asyncio.gather(*self._relays, return_exceptions=True)
         await self.agents.stop_all()
         await asyncio.gather(*(self._close_platform(user_id) for user_id in list(self._platform_orgs)), return_exceptions=True)
 
@@ -482,10 +518,6 @@ class AppService:
             await self.system_message(request.channel_id, f"{requester.name if requester else 'An agent'} created "
                                       f"**{profile.name}** ({role_label(profile.role)}) as a teammate {location}.")
 
-    def master(self) -> AgentProfile | None:
-        with db() as session:
-            return session.exec(select(AgentProfile).where(AgentProfile.is_master == True)).first()  # noqa: E712
-
     # --- serialization ---
 
     def serialize_agent(self, profile: AgentProfile) -> dict[str, Any]:
@@ -524,7 +556,7 @@ class AppService:
             "created_by": profile.created_by,
             "owner_id": owner_id,
             "created_by_agent": profile.created_by_agent,
-            "created_at": profile.created_at.replace(tzinfo=timezone.utc).isoformat(),
+            "created_at": as_utc(profile.created_at).isoformat(),
             "plugins": plugin_slugs(profile.id) if profile.id else None,
         }
 
@@ -552,9 +584,7 @@ class AppService:
             "private": scope is not None or dm is not None,
             "dm_agent_id": dm.agent_id if dm else None,
             "policy": serialize_policy(policy_of(session, channel.id)),
-            "messaging_disabled": bool(human_dm and (
-                session.get(ContactBlock, (human_dm.first_user_id, human_dm.second_user_id))
-                or session.get(ContactBlock, (human_dm.second_user_id, human_dm.first_user_id)))),
+            "messaging_disabled": bool(human_dm and is_blocked(session, human_dm.first_user_id, human_dm.second_user_id)),
         }
 
     async def publish_channel(self, channel_id: int) -> None:
@@ -572,15 +602,6 @@ class AppService:
 
     # --- channels ---
 
-    def _channel_for_room(self, session: Session, room_id: str) -> Channel | None:
-        channel_id = self._room_to_channel.get(room_id)
-        if channel_id is not None:
-            return session.get(Channel, channel_id)
-        channel = session.exec(select(Channel).where(Channel.band_room_id == room_id)).first()
-        if channel:
-            self._room_to_channel[room_id] = channel.id
-        return channel
-
     async def create_channel(self, name: str, topic: str, creator: User) -> dict[str, Any]:
         org = await self.account_org(creator.id)
         with db() as session:
@@ -592,7 +613,8 @@ class AppService:
         if org and org.online:
             try:
                 room_id = await org.create_room(f"#{name}")
-            except Exception:
+            except Exception as exc:
+                logger.warning("Band could not create a channel room: %s", type(exc).__name__)
                 raise ServiceError("Band could not create this channel. Check your Band connection before retrying.", 502) from None
         with db() as session:
             channel = Channel(name=f"{name}-{uuid4().hex[:12]}", topic=topic, band_room_id=room_id, created_by=creator.id)
@@ -604,15 +626,13 @@ class AppService:
                 session.add(BandPlatformRoom(channel_id=channel.id, user_id=org.user_id, band_agent_id=org.identity))
             session.commit()
             channel_id = channel.id
-        if room_id:
-            self._room_to_channel[room_id] = channel_id
         await self.publish_channel(channel_id)
         with db() as session:
             return self.serialize_channel(session, session.get(Channel, channel_id))
 
     async def open_dm(self, user: User, profile: AgentProfile) -> dict[str, Any]:
         """The user's private channel with this agent, created with its own Band room on first use."""
-        async with self._dm_lock:
+        async with self.people_lock:
             with db() as session:
                 owner = agent_owner(session, profile)
                 if owner is not None and owner != user.id:
@@ -648,8 +668,6 @@ class AppService:
                     session.add(BandPlatformRoom(channel_id=channel.id, user_id=org.user_id, band_agent_id=org.identity))
                 session.commit()
                 channel_id = channel.id
-            if room_id:
-                self._room_to_channel[room_id] = channel_id
         await self.add_agent_to_channel(channel_id, profile)
         with db() as session:
             return self.serialize_channel(session, session.get(Channel, channel_id))
@@ -665,7 +683,8 @@ class AppService:
                 raise ServiceError("Reconnect your Band Agent API connection to add agents", 503)
             try:
                 room_id = await org.create_room(f"#{scope.title if scope and scope.title else channel.name}")
-            except Exception:
+            except Exception as exc:
+                logger.warning("Band could not create a room for channel %s: %s", channel_id, type(exc).__name__)
                 raise ServiceError("Band could not connect this channel for agents", 502) from None
             with db() as session:
                 stored = session.get(Channel, channel_id)
@@ -673,7 +692,6 @@ class AppService:
                 session.add(stored)
                 session.add(BandPlatformRoom(channel_id=channel_id, user_id=org.user_id, band_agent_id=org.identity))
                 session.commit()
-            self._room_to_channel[room_id] = channel_id
             return room_id
 
     async def add_agent_to_channel(self, channel_id: int, profile: AgentProfile, *, publish: bool = True) -> None:
@@ -744,7 +762,8 @@ class AppService:
         if scope and channel.band_room_id:
             try:
                 await org.remove_participant(channel.band_room_id, profile.band_agent_id)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Band could not remove %s from a channel room: %s", profile.name, type(exc).__name__)
                 raise ServiceError("Band could not remove this agent", 502) from None
             for _, account_org in self._platform_orgs.values():
                 account_org.forget_participant(channel.band_room_id, profile.band_agent_id)
@@ -899,10 +918,7 @@ class AppService:
                 owner_user_id = agent_owner(session, parent) if parent else None
         if owner_user_id is None:
             raise ServiceError("Choose an owner with a saved Band connection", 409)
-        from app.persistence.models import UserBandAccount
-        with db() as session:
-            account = session.get(UserBandAccount, owner_user_id)
-        if account and account.secret_enc:
+        if _management_account(owner_user_id):
             return await self._register_native_agent(name=name, role=role, instructions=instructions,
                 model=model, created_by=owner_user_id, created_by_agent=created_by_agent, plugins=plugins,
                 specialty=specialty, avatar=avatar, runtime=runtime, connection_id=connection_id)
@@ -938,12 +954,14 @@ class AppService:
                 profile = AgentProfile(name=request.name, role=request.role, model=request.model,
                     instructions=request.instructions, created_by=local.user_id, created_by_agent=parent.id,
                     band_agent_id=f"local-{uuid4().hex}", handle=f"app-{uuid4().hex[:12]}", band_api_key_enc="")
-                session.add(profile); session.flush()
+                session.add(profile)
+                session.flush()
                 session.add_all([LocalTeammate(agent_id=profile.id, user_id=local.user_id),
                     BandAgentOwner(agent_id=profile.id, user_id=local.user_id, band_user_id=""),
                     AgentPluginAccess(agent_id=profile.id, slugs=[]),
                     AgentPersona(agent_id=profile.id)])
-                session.commit(); session.refresh(profile)
+                session.commit()
+                session.refresh(profile)
         await self.start_agent(profile)
         await bus.publish({"type": "agent", "agent": self.serialize_agent(profile)}, users={local.user_id})
         return profile
@@ -952,20 +970,12 @@ class AppService:
                                      created_by_agent, plugins, specialty, avatar, runtime, connection_id):
         from app.band.accounts import register_agent
         from fastapi import HTTPException
-        name = name.strip()
-        if len(name) < 3:
-            raise ServiceError("Agent name needs at least 3 characters", 422)
+        name = _agent_name(name)
         async with self._register_lock:
             with db() as session:
-                named = session.exec(select(AgentProfile).where(func.lower(AgentProfile.name) == name.lower())).all()
-                if any(agent_owner(session, item) in {None, created_by} for item in named):
-                    raise ServiceError("You already have an agent with that name", 409)
-                if session.exec(select(OutsideAgent.band_id).where(func.lower(OutsideAgent.name) == name.lower())).first():
-                    raise ServiceError("An outside Band agent already uses that name", 409)
-                if runtime != "deepagents":
-                    connection = session.get(AgentConnection, connection_id)
-                    if not connection or connection.created_by != created_by or connection.provider != runtime:
-                        raise ServiceError("Choose your authenticated provider connection", 422)
+                _check_new_agent_name(session, name, created_by, taken="You already have an agent with that name",
+                                      outside_taken="An outside Band agent already uses that name")
+                _check_runtime_connection(session, runtime, connection_id, created_by)
             try:
                 band_id, key, owner = await register_agent(created_by, name, specialty.strip() or "AI teammate in BandBot")
             except HTTPException as error:
@@ -977,13 +987,16 @@ class AppService:
                     profile = AgentProfile(name=name, role=role, model=model,
                         instructions=instructions.strip(), band_agent_id=band_id, band_api_key_enc=encrypt_secret(key),
                         created_by=created_by, created_by_agent=created_by_agent)
-                    session.add(profile); session.flush()
+                    session.add(profile)
+                    session.flush()
                     session.add(BandAgentOwner(agent_id=profile.id, user_id=created_by, band_user_id=owner))
                     session.add(AgentPersona(agent_id=profile.id, specialty=specialty.strip(), avatar=avatar))
                     if runtime != "deepagents":
                         session.add(AgentRuntime(agent_id=profile.id, provider=runtime, connection_id=connection_id))
-                    session.commit(); session.refresh(profile)
-            except Exception:
+                    session.commit()
+                    session.refresh(profile)
+            except Exception as exc:
+                logger.warning("Saving registered Band agent %s failed: %s", band_id, type(exc).__name__)
                 raise ServiceError("Band created the agent, but the app could not connect it. Find the agent in Band and connect its Agent API key here; do not create it again.", 502) from None
         if plugins is not None:
             set_plugin_access(profile.id, plugins)
@@ -1009,32 +1022,27 @@ class AppService:
 
     async def _create_platform_teammate(self, *, org, name, role, instructions, model, created_by,
                                         created_by_agent, plugins, specialty, avatar, runtime, connection_id):
-        name = name.strip()
-        if len(name) < 3:
-            raise ServiceError("Agent name needs at least 3 characters", 422)
+        name = _agent_name(name)
         async with self._register_lock:
             with db() as session:
-                named = session.exec(select(AgentProfile).where(func.lower(AgentProfile.name) == name.lower())).all()
-                if any(agent_owner(session, profile) in {None, created_by} for profile in named):
-                    raise ServiceError("You already have a teammate with that name", 409)
-                if session.exec(select(OutsideAgent.band_id).where(func.lower(OutsideAgent.name) == name.lower())).first():
-                    raise ServiceError("An outside Band agent already uses that name", 409)
+                _check_new_agent_name(session, name, created_by, taken="You already have a teammate with that name",
+                                      outside_taken="An outside Band agent already uses that name")
+                _check_runtime_connection(session, runtime, connection_id, created_by)
                 profile = AgentProfile(name=name, role=role, model=model, instructions=instructions.strip(),
                     handle=f"app-{uuid4().hex[:12]}", band_agent_id=f"app-{uuid4().hex}", band_api_key_enc="",
                     created_by=created_by, created_by_agent=created_by_agent)
-                session.add(profile); session.flush()
+                session.add(profile)
+                session.flush()
                 session.add(BandAgentOwner(agent_id=profile.id, user_id=created_by, band_user_id=org.identity))
                 session.add(PlatformTeammate(agent_id=profile.id, user_id=created_by, band_agent_id=org.identity))
                 session.add(AgentPersona(agent_id=profile.id, specialty=specialty.strip(), avatar=avatar))
                 if runtime != "deepagents":
-                    connection = session.get(AgentConnection, connection_id)
-                    if not connection or connection.created_by != created_by or connection.provider != runtime:
-                        raise ServiceError("Choose your authenticated provider connection", 422)
                     session.add(AgentRuntime(agent_id=profile.id, provider=runtime, connection_id=connection_id))
-                session.commit(); session.refresh(profile)
+                session.commit()
+                session.refresh(profile)
         if plugins is not None:
             set_plugin_access(profile.id, plugins)
-        if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key:
+        if settings.e2e_fake_agent and not settings.openai_api_key:
             self.agents.status[profile.id] = {"state": "online", "error": None}
         else:
             await self.start_agent(profile)
@@ -1044,38 +1052,34 @@ class AppService:
     async def _connect_agent_key(self, *, key: str, name: str, role: str, instructions: str, model: str,
                                  created_by: int | None, plugins: list[str] | None, specialty: str,
                                  avatar: str | None, runtime: str, connection_id: str | None) -> AgentProfile:
-        key, name = key.strip(), name.strip()
-        if len(name) < 3:
-            raise ServiceError("Agent name needs at least 3 characters", 422)
+        key, name = key.strip(), _agent_name(name)
         if not created_by:
             raise ServiceError("Sign in to connect a Band agent", 403)
         if not key.startswith("band_a_"):
             raise ServiceError("Use this agent's Band API key (band_a_…), not a human or model-provider key.", 422)
         try:
             identity = await fetch_identity(key)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Band agent key authentication failed: %s", type(exc).__name__)
             raise ServiceError("Band could not authenticate this agent key. Check the key and connection, then retry.", 422) from None
         async with self._register_lock:
             with db() as session:
                 if session.exec(select(AgentProfile.id).where(AgentProfile.band_agent_id == identity.id)).first():
                     raise ServiceError("This Band agent is already connected to this workspace", 409)
-                named = session.exec(select(AgentProfile).where(func.lower(AgentProfile.name) == name.lower())).all()
-                if any(agent_owner(session, item) in {None, created_by} for item in named):
-                    raise ServiceError("You already have an agent with that display name", 409)
-                if session.exec(select(OutsideAgent.band_id).where(func.lower(OutsideAgent.name) == name.lower())).first():
-                    raise ServiceError("An outside agent already uses that display name", 409)
+                _check_new_agent_name(session, name, created_by, taken="You already have an agent with that display name",
+                                      outside_taken="An outside agent already uses that display name")
+                _check_runtime_connection(session, runtime, connection_id, created_by)
                 profile = AgentProfile(name=name, handle=identity.handle, role=role, instructions=instructions.strip(),
                     model=model, band_agent_id=identity.id, band_api_key_enc=encrypt_secret(key), created_by=created_by)
-                session.add(profile); session.flush()
+                session.add(profile)
+                session.flush()
                 session.add(BandAgentOwner(agent_id=profile.id, user_id=created_by, band_user_id=""))
                 session.add(BandAgentLink(agent_id=profile.id))
                 session.add(AgentPersona(agent_id=profile.id, specialty=specialty.strip(), avatar=avatar))
                 if runtime != "deepagents":
-                    connection = session.get(AgentConnection, connection_id)
-                    if not connection or connection.created_by != created_by or connection.provider != runtime:
-                        raise ServiceError("Choose your authenticated provider connection", 422)
                     session.add(AgentRuntime(agent_id=profile.id, provider=runtime, connection_id=connection_id))
-                session.commit(); session.refresh(profile)
+                session.commit()
+                session.refresh(profile)
         if plugins is not None:
             set_plugin_access(profile.id, plugins)
         await self.start_agent(profile)
@@ -1157,35 +1161,7 @@ class AppService:
             for schedule in session.exec(select(Schedule).where(Schedule.agent_id == profile.id)).all():
                 schedule.enabled = False
                 session.add(schedule)
-            for sandbox in session.exec(select(TaskSandbox).where(
-                    or_(TaskSandbox.task_id.startswith(f"agent-{profile.band_agent_id}-"),
-                        TaskSandbox.task_id.startswith(f"e2b-agent-{profile.band_agent_id}-"),
-                        TaskSandbox.task_id.startswith(f"tenki-agent-{profile.band_agent_id}-")))).all():
-                if sandbox.sandbox_id and (connection := session.get(ComputerConnection, sandbox.sandbox_id)):
-                    session.delete(connection)
-                if lease := session.get(ComputerViewLease, sandbox.task_id):
-                    session.delete(lease)
-                if display := session.get(ComputerDisplay, sandbox.task_id):
-                    session.delete(display)
-                for endpoint in session.exec(select(ComputerEndpoint).where(ComputerEndpoint.key == sandbox.task_id)).all():
-                    session.delete(endpoint)
-                if gateway := session.get(ComputerGateway, sandbox.task_id):
-                    session.delete(gateway)
-                if control := session.get(ComputerControl, sandbox.task_id):
-                    session.delete(control)
-                if sandbox.task_id.startswith("tenki-"):
-                    sandbox.status, sandbox.latest_image, sandbox.frame_id = "retired", "", ""
-                    sandbox.error = "Agent removed; cloud computer and saved disk require provider cleanup"
-                    session.add(sandbox)
-                else:
-                    session.delete(sandbox)
-            for scope in session.exec(select(ComputerScope).where(
-                    ComputerScope.key.startswith(f"agent-{profile.band_agent_id}-channel-"))).all():
-                session.delete(scope)
-            for disk in session.exec(select(ComputerDisk).where(
-                    ComputerDisk.key.contains(f":tenki-agent-{profile.band_agent_id}-channel-"))).all():
-                disk.state = "retired"
-                session.add(disk)
+            _retire_agent_computers(session, profile)
             if budget := session.get(Budget, ("agent", profile.id)):
                 session.delete(budget)
             if access := session.get(AgentPluginAccess, profile.id):
@@ -1219,6 +1195,13 @@ class AppService:
 
     # --- messages ---
 
+    async def _publish_updated(self, query) -> None:
+        """Re-send the messages `query` selects so open clients refresh them in place."""
+        with db() as session:
+            payloads = serialize_messages(session, session.exec(query).all())
+        for payload in payloads:
+            await bus.publish({"type": "message_updated", "message": payload})
+
     async def _store(self, message: Message) -> dict[str, Any] | None:
         """Stores and broadcasts a message; Band messages already stored are skipped."""
         with db() as session:
@@ -1234,29 +1217,17 @@ class AppService:
         return payload
 
     async def publish_components(self, task_ids: Sequence[str]) -> None:
-        with db() as session:
-            messages = session.exec(select(Message).join(MessageComponent, MessageComponent.message_id == Message.id)
-                                    .where(MessageComponent.task_id.in_(task_ids)).distinct()).all()
-            payloads = serialize_messages(session, messages)
-        for message in payloads:
-            await bus.publish({"type": "message_updated", "message": message})
+        await self._publish_updated(select(Message).join(MessageComponent, MessageComponent.message_id == Message.id)
+                                    .where(MessageComponent.task_id.in_(task_ids)).distinct())
 
     async def publish_inputs(self, task_id: str) -> None:
-        with db() as session:
-            messages = session.exec(select(Message).join(MessageComponent, MessageComponent.message_id == Message.id)
-                .where(MessageComponent.task_id == task_id, MessageComponent.kind == "input")).all()
-            payloads = serialize_messages(session, messages)
-        for message in payloads:
-            await bus.publish({"type": "message_updated", "message": message})
+        await self._publish_updated(select(Message).join(MessageComponent, MessageComponent.message_id == Message.id)
+                                    .where(MessageComponent.task_id == task_id, MessageComponent.kind == "input"))
 
     async def publish_approvals(self, approval_ids: Sequence[str]) -> None:
         """Re-send approval request messages so open clients swap the buttons for the decision."""
-        with db() as session:
-            messages = session.exec(select(Message).where(
-                Message.band_message_id.in_([f"approval:{a}" for a in approval_ids]))).all()
-            payloads = serialize_messages(session, messages)
-        for payload in payloads:
-            await bus.publish({"type": "message_updated", "message": payload})
+        await self._publish_updated(select(Message).where(
+            Message.band_message_id.in_([f"approval:{a}" for a in approval_ids])))
 
     async def system_message(self, channel_id: int, content: str) -> None:
         await self._store(
@@ -1290,7 +1261,7 @@ class AppService:
             allowed_agents = set(session.exec(select(ChannelMember.member_id).where(
                 ChannelMember.channel_id == channel_id, ChannelMember.member_type == "agent")).all())
             agents = [a for a in agents if agent_owner(session, a) in {None, user.id} or a.id in allowed_agents]
-            reply_to = self.message_reply_to(user.id, channel_id)
+            reply_to = self.message_reply_to(channel_id)
         if human_dm:
             mentioned_agents = []
         elif dm:
@@ -1355,19 +1326,24 @@ class AppService:
         await bus.publish({"type": "message", "message": payload})
         if mentioned_agents:
             await self.publish_channel(channel_id)
-        asyncio.create_task(self._relay(channel_id, message.id, user.display_name, content, mentioned_agents, user.id))
+        self.relay_later(channel_id, message.id, user.display_name, content, mentioned_agents)
         return payload
 
-    async def _relay(
-        self, channel_id: int, message_id: int, author: str, content: str, mentioned: list[AgentProfile], user_id: int | None = None
-    ) -> None:
+    def relay_later(self, channel_id: int, message_id: int, author: str, content: str,
+                    mentioned: list[AgentProfile]) -> None:
+        """Mirror a committed app message to Band without delaying the response."""
+        relay = asyncio.create_task(self._relay(channel_id, message_id, author, content, mentioned))
+        self._relays.add(relay)
+        relay.add_done_callback(self._relays.discard)
+
+    async def _relay(self, channel_id: int, message_id: int, author: str, content: str,
+                     mentioned: list[AgentProfile]) -> None:
         # A poll must not mirror an app send while its Band receipt is still being saved.
         async with self._room_locks.setdefault(channel_id, asyncio.Lock()):
-            await self._relay_unlocked(channel_id, message_id, author, content, mentioned, user_id)
+            await self._relay_unlocked(channel_id, message_id, author, content, mentioned)
 
-    async def _relay_unlocked(
-        self, channel_id: int, message_id: int, author: str, content: str, mentioned: list[AgentProfile], user_id: int | None
-    ) -> None:
+    async def _relay_unlocked(self, channel_id: int, message_id: int, author: str, content: str,
+                              mentioned: list[AgentProfile]) -> None:
         """Posts through the room's owning Band connection with the app author's name."""
         with db() as session:
             if session.get(HumanDirectMessage, channel_id):
@@ -1414,69 +1390,7 @@ class AppService:
                 session.add(stored)
                 session.commit()
 
-    def _resolve_agent_mentions(self, refs: list[str]) -> tuple[list[dict[str, Any]], bool]:
-        with db() as session:
-            agents = session.exec(select(AgentProfile)).all()
-        resolved = []
-        for ref in refs:
-            key = ref.strip().lstrip("@").lower()
-            for agent in agents:
-                if key in {agent.band_agent_id.lower(), agent.handle.lower(), agent.name.lower()}:
-                    resolved.append({"type": "agent", "id": agent.id, "name": agent.name})
-                    break
-        return resolved, not resolved
-
-    async def _store_agent_message(
-        self, channel_id: int, profile: AgentProfile, content: str, refs: list[str], band_message_id: str | None
-    ) -> None:
-        with db() as session:
-            is_member = session.get(ChannelMember, (channel_id, "agent", profile.id)) is not None
-            if not is_member and session.get(PrivateConversation, channel_id):
-                return
-            if not is_member:
-                session.add(ChannelMember(channel_id=channel_id, member_type="agent", member_id=profile.id))
-                session.commit()
-        if not is_member:
-            await self.publish_channel(channel_id)
-        resolved, to_humans = self._resolve_agent_mentions(refs)
-        await self._store(
-            Message(
-                channel_id=channel_id,
-                author_type="agent",
-                author_id=profile.id,
-                author_name=profile.name,
-                content=content,
-                mentions=resolved,
-                to_humans=to_humans,
-                band_message_id=band_message_id,
-            )
-        )
-
     # --- AgentSink ---
-
-    async def agent_message(
-        self,
-        profile_id: int,
-        room_id: str,
-        content: str,
-        mentions: list[str],
-        band_message_id: str | None,
-    ) -> None:
-        with db() as session:
-            channel = self._channel_for_room(session, room_id)
-            profile = session.get(AgentProfile, profile_id)
-        if channel is None or profile is None:
-            logger.info("Ignoring agent message for unmapped room %s", room_id)
-            return
-        await self._store_agent_message(channel.id, profile, content, mentions, band_message_id)
-
-    async def agent_typing(self, profile_id: int, room_id: str, active: bool) -> None:
-        with db() as session:
-            channel = self._channel_for_room(session, room_id)
-        if channel is not None:
-            await bus.publish(
-                {"type": "typing", "channel_id": channel.id, "agent_id": profile_id, "active": active}
-            )
 
     async def agent_status(self, profile_id: int, state: str, error: str | None) -> None:
         await bus.publish(
@@ -1517,8 +1431,8 @@ class AppService:
             # An outside hand-off reply returns to the exact teammate that asked it.
             for profile in teammates:
                 _, origin = outside_reply(session, profile.id, channel.id, incoming.sender_id, incoming.content)
-                if origin:
-                    if profile not in requested: requested.append(profile)
+                if origin and profile not in requested:
+                    requested.append(profile)
             if not requested and len(teammates) == 1:
                 requested = teammates
             content = display_names(session, incoming.content)
@@ -1537,7 +1451,8 @@ class AppService:
                 task = AgentTask(id=uuid4().hex, agent_id=profile.id, channel_id=channel.id, room_id=room_id,
                     source_key=f"{profile.id}:{room_id}:platform-{incoming.id}", prompt=prompt, context=context,
                     reply_to=incoming.sender_id)
-                session.add(task); session.flush()
+                session.add(task)
+                session.flush()
                 if origin:
                     from app.tasks.teammates import link_outside_reply_in_session
                     # Chain ownership is recorded in the same transaction as the inbound task.
@@ -1550,6 +1465,38 @@ class AppService:
             payload = serialize_messages(session, [message])[0]
         await bus.publish({"type": "message", "message": payload})
 
+
+def _retire_agent_computers(session: Session, profile: AgentProfile) -> None:
+    """Detach a deleted agent's computers. Tenki rows and disks are retired for provider cleanup, never destroyed."""
+    for sandbox in session.exec(select(TaskSandbox).where(
+            or_(TaskSandbox.task_id.startswith(f"agent-{profile.band_agent_id}-"),
+                TaskSandbox.task_id.startswith(f"e2b-agent-{profile.band_agent_id}-"),
+                TaskSandbox.task_id.startswith(f"tenki-agent-{profile.band_agent_id}-")))).all():
+        if sandbox.sandbox_id and (connection := session.get(ComputerConnection, sandbox.sandbox_id)):
+            session.delete(connection)
+        if lease := session.get(ComputerViewLease, sandbox.task_id):
+            session.delete(lease)
+        if display := session.get(ComputerDisplay, sandbox.task_id):
+            session.delete(display)
+        for endpoint in session.exec(select(ComputerEndpoint).where(ComputerEndpoint.key == sandbox.task_id)).all():
+            session.delete(endpoint)
+        if gateway := session.get(ComputerGateway, sandbox.task_id):
+            session.delete(gateway)
+        if control := session.get(ComputerControl, sandbox.task_id):
+            session.delete(control)
+        if sandbox.task_id.startswith("tenki-"):
+            sandbox.status, sandbox.latest_image, sandbox.frame_id = "retired", "", ""
+            sandbox.error = "Agent removed; cloud computer and saved disk require provider cleanup"
+            session.add(sandbox)
+        else:
+            session.delete(sandbox)
+    for scope in session.exec(select(ComputerScope).where(
+            ComputerScope.key.startswith(f"agent-{profile.band_agent_id}-channel-"))).all():
+        session.delete(scope)
+    for disk in session.exec(select(ComputerDisk).where(
+            ComputerDisk.key.contains(f":tenki-agent-{profile.band_agent_id}-channel-"))).all():
+        disk.state = "retired"
+        session.add(disk)
 
 
 service = AppService()

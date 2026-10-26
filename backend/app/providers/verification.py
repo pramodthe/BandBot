@@ -1,14 +1,11 @@
 """Explicit worker-side checks. Ordinary reads never allocate a computer."""
 import asyncio
-from dataclasses import replace
-import json
 import shlex
-from uuid import uuid4
 import httpx
 from sqlmodel import select
 from sqlalchemy import update
 from app.persistence.models import db, ComputerDisk
-from app.providers.models import ProviderOperation, ProviderRevision, ProviderConnection
+from app.providers.models import ProviderOperation, ProviderRevision
 from app.providers.connections import resolve
 from app.providers.contracts import ProviderError
 from app.providers.language_models import verify_models
@@ -17,7 +14,8 @@ def journal(identity: str, **values):
     with db() as session:
         row = session.get(ProviderOperation, identity)
         row.result = {**row.result, **values}
-        session.add(row); session.commit()
+        session.add(row)
+        session.commit()
 
 async def computer_access(connection):
     if connection.provider == "tenki":
@@ -35,7 +33,6 @@ async def computer_access(connection):
 async def cleanup_probe(operation):
     """Only resources named and journaled by this exact operation can be removed."""
     from app.providers.computers import config_from, client
-    from app.computer.identity import key_from_labels
     values = operation.result
     expected = "band-provider-check-" + operation.id
     if values.get("probe_name") != expected or values.get("probe_owner") != operation.id:
@@ -66,7 +63,8 @@ async def cleanup_probe(operation):
                 await driver.sdk.volumes.delete(volume.id)
                 with db() as session:
                     current = session.get(ComputerDisk, key)
-                    if current: session.delete(current)
+                    if current:
+                        session.delete(current)
                     session.commit()
         else:
             from e2b import AsyncSandbox, NotFoundException
@@ -93,7 +91,6 @@ async def cleanup_probe(operation):
         await driver.close()
 
 async def computer_probe(operation, connection):
-    from app.config import settings
     from app.providers.computers import config_from, client
     from app.computer.e2b import DesktopOptions
     from app.computer.identity import key_from_labels
@@ -219,19 +216,23 @@ async def process_one():
                 session.add(revision)
             row.status = "completed"
             row.result = {**row.result, "verification": verified}
-            session.add(row); session.commit()
+            session.add(row)
+            session.commit()
     except asyncio.CancelledError:
         with db() as session:
-            row = session.get(ProviderOperation, operation.id); row.status = "uncertain"
+            row = session.get(ProviderOperation, operation.id)
+            row.status = "uncertain"
             row.result = {**row.result, "error": "Verification was interrupted. Inspect or clean up its test resources before retrying."}
-            session.add(row); session.commit()
+            session.add(row)
+            session.commit()
         raise
     except Exception:
         with db() as session:
             row = session.get(ProviderOperation, operation.id)
             row.status = "uncertain" if row.result.get("cleanup") == "needs_attention" else "failed"
             row.result = {**row.result, "error": "Verification failed. Check credentials, model capabilities, billing, image access and network permissions."}
-            session.add(row); session.commit()
+            session.add(row)
+            session.commit()
     from app.workspace.events import bus
     await bus.publish({"type": "provider_settings_changed"})
     return True

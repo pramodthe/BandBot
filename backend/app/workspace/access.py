@@ -1,7 +1,7 @@
 """Application ownership and membership, independent of browser controls."""
 from sqlmodel import Session, select
 
-from app.persistence.models import (AgentProfile, BandAgentOwner, Channel, ChannelMember, DirectMessage,
+from app.persistence.models import (AgentProfile, BandAgentOwner, Channel, ChannelMember, ContactBlock, DirectMessage,
                                     PrivateConversation, db)
 
 
@@ -53,3 +53,8 @@ def channel_teammates(session: Session, channel_id: int) -> list[AgentProfile]:
     private = session.get(PrivateConversation, channel_id)
     return [a for a in session.exec(select(AgentProfile)).all()
             if a.id in members or (not private and agent_owner(session, a) is None)]
+
+
+def is_blocked(session: Session, first: int, second: int) -> bool:
+    """Whether either person has blocked the other."""
+    return session.get(ContactBlock, (first, second)) is not None or session.get(ContactBlock, (second, first)) is not None

@@ -9,23 +9,17 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from app.api.deps import NO_STORE, admin_user
 from app.auth import current_user
 from app.persistence.models import AgentProfile, AgentSkill, SkillDefinition, User, get_session, utcnow
-from app.workspace.audit import record
+from app.workspace.audit import record_human
 from app.workspace.events import bus
-from app.workspace.permissions import is_admin
 from app.workspace.access import agent_owner, agent_visible
 from app.workspace.skills import (MAX_UPLOAD, SkillContent, SkillError, check_install, create_skill, export_skill,
                                   parse_bundle, parse_upload, seed_library, serialize_skill, skill_or_error)
 
 router = APIRouter(prefix="/api", tags=["skills"])
-NO_STORE = {"Cache-Control": "no-store"}
-
-
-def manager(user: User = Depends(current_user), session: Session = Depends(get_session)) -> User:
-    if not is_admin(session, user.id):
-        raise HTTPException(403, "Only workspace admins can manage skills")
-    return user
+manager = admin_user("Only workspace admins can manage skills")
 
 
 def get_skill(session: Session, skill_id: str) -> SkillDefinition:
@@ -47,11 +41,6 @@ def commit(session: Session) -> None:
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(409, "A skill with that name already exists") from exc
-
-
-def audit(session: Session, user: User, action: str, skill: SkillDefinition, **details) -> None:
-    record(action, actor_type="human", actor_id=user.id, actor_name=user.display_name,
-           session=session, detail={"skill": skill.name, **details})
 
 
 async def changed() -> None:
@@ -85,7 +74,7 @@ async def add_skill(body: CreateBody, user: User = Depends(manager), session: Se
     check_agent_owner(session, body.agent_id, user)
     try:
         skill = create_skill(session, SkillContent(**body.model_dump()), user.id, agent_id=body.agent_id)
-        audit(session, user, "skill_created", skill, agent_id=body.agent_id)
+        record_human(user, "skill_created", session=session, skill=skill.name, agent_id=body.agent_id)
         commit(session)
     except SkillError as exc:
         raise HTTPException(exc.status, str(exc)) from exc
@@ -111,7 +100,7 @@ async def import_skill(request: Request, filename: str = "", agent_id: int | Non
         else:
             content, files = parse_upload(bytes(payload), filename)
         skill = create_skill(session, content, user.id, files=files, agent_id=agent_id)
-        audit(session, user, "skill_imported", skill, agent_id=agent_id, files=len(files) + 1)
+        record_human(user, "skill_imported", session=session, skill=skill.name, agent_id=agent_id, files=len(files) + 1)
         commit(session)
     except SkillError as exc:
         raise HTTPException(exc.status, str(exc)) from exc
@@ -139,7 +128,7 @@ async def edit_skill(skill_id: str, body: UpdateBody, user: User = Depends(manag
         setattr(skill, key, value)
     skill.updated_at = utcnow()
     session.add(skill)
-    audit(session, user, "skill_updated", skill)
+    record_human(user, "skill_updated", session=session, skill=skill.name)
     commit(session)
     await changed()
     return serialize_skill(session, skill, detail=True)
@@ -152,7 +141,7 @@ async def delete_skill(skill_id: str, user: User = Depends(manager), session: Se
         raise HTTPException(403, "Built-in skills stay in the library; remove them from an agent instead")
     for row in session.exec(select(AgentSkill).where(AgentSkill.skill_id == skill.id)).all():
         session.delete(row)
-    audit(session, user, "skill_deleted", skill)
+    record_human(user, "skill_deleted", session=session, skill=skill.name)
     session.delete(skill)
     session.commit()
     await changed()
@@ -181,7 +170,7 @@ async def install_skill(agent_id: int, body: InstallBody, user: User = Depends(m
         raise HTTPException(exc.status, str(exc)) from exc
     if session.get(AgentSkill, (agent_id, skill.id)) is None:
         session.add(AgentSkill(agent_id=agent_id, skill_id=skill.id))
-        audit(session, user, "skill_installed", skill, agent_id=agent_id)
+        record_human(user, "skill_installed", session=session, skill=skill.name, agent_id=agent_id)
         commit(session)
         await changed()
     return {"skill_id": skill.id, "enabled": session.get(AgentSkill, (agent_id, skill.id)).enabled}
@@ -201,7 +190,7 @@ async def enable_skill(agent_id: int, skill_id: str, body: EnableBody, user: Use
         raise HTTPException(404, "This skill is not installed on the agent")
     row.enabled = body.enabled
     session.add(row)
-    audit(session, user, "skill_enabled" if body.enabled else "skill_disabled", skill, agent_id=agent_id)
+    record_human(user, "skill_enabled" if body.enabled else "skill_disabled", session=session, skill=skill.name, agent_id=agent_id)
     session.commit()
     await changed()
     return {"skill_id": skill.id, "enabled": row.enabled}
@@ -216,7 +205,7 @@ async def uninstall_skill(agent_id: int, skill_id: str, user: User = Depends(man
     if row is None:
         raise HTTPException(404, "This skill is not installed on the agent")
     session.delete(row)
-    audit(session, user, "skill_removed", skill, agent_id=agent_id)
+    record_human(user, "skill_removed", session=session, skill=skill.name, agent_id=agent_id)
     session.commit()
     await changed()
     return {"ok": True}

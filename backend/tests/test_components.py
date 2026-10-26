@@ -8,7 +8,7 @@ from app.auth import issue_token
 from app.main import app
 from app.persistence.models import AgentTask, Message, MessageComponent, db
 from app.runtime.tools import tools_for
-from test_tasks import RecordingModel, ScriptedModel, job, run_attempt  # noqa: F401  (job is a fixture)
+from helpers import RecordingModel, ScriptedModel, run_attempt
 
 TABLE_ARGS = {
     "caption": "Laptops compared",

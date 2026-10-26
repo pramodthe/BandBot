@@ -1,4 +1,4 @@
-"""Exa web search and page fetch."""
+"""Web search and page fetch through the task's research binding (Exa or Tavily)."""
 from __future__ import annotations
 
 from urllib.parse import urlparse

@@ -18,7 +18,7 @@ from app.workspace.audit import summarize_args
 from app.workspace.sandbox_ui import followup
 from app.workspace.skills import enabled_skill_files, seed_library
 from app.workspace.service import components_for
-from test_tasks import ScriptedModel, job, run_attempt  # noqa: F401
+from helpers import ScriptedModel, run_attempt
 
 
 SPEC = {"initialHeight": 360, "placeholderMessages": ["Preparing a calculator"], "css": "output{font-weight:bold}",
@@ -111,8 +111,10 @@ def test_followups_enforce_membership_component_channel_and_private_ownership(tm
     with db() as session:
         outsider = User(username=uuid4().hex, display_name="Outsider", password_hash="unused")
         other = Channel(name=uuid4().hex)
-        session.add_all([outsider, other]); session.commit()
-        session.add(ChannelMember(channel_id=other.id, member_type="human", member_id=user.id)); session.commit()
+        session.add_all([outsider, other])
+        session.commit()
+        session.add(ChannelMember(channel_id=other.id, member_type="human", member_id=user.id))
+        session.commit()
     auth = {"Authorization": f"Bearer {issue_token(user.id)}"}
     body = {"request_id": uuid4().hex, "text": "Explain this"}
     with TestClient(app) as client:
@@ -120,7 +122,8 @@ def test_followups_enforce_membership_component_channel_and_private_ownership(tm
         assert client.post(path, json=body, headers={"Authorization": f"Bearer {issue_token(outsider.id)}"}).status_code == 403
         assert client.post(f"/api/channels/{other.id}/components/{component.id}/followup", json=body, headers=auth).status_code == 404
         with db() as session:
-            session.add(DirectMessage(channel_id=completed.channel_id, user_id=outsider.id)); session.commit()
+            session.add(DirectMessage(channel_id=completed.channel_id, user_id=outsider.id))
+            session.commit()
         assert client.post(path, json=body, headers=auth).status_code == 404
 
 
@@ -128,7 +131,7 @@ def test_followup_rolls_back_all_writes_if_audit_fails(tmp_path, job, monkeypatc
     completed, _, user, component = rendered(tmp_path, job)
     def fail(*_args, **_kwargs):
         raise RuntimeError("Simulated transaction failure")
-    monkeypatch.setattr("app.workspace.sandbox_ui.record", fail)
+    monkeypatch.setattr("app.workspace.sandbox_ui.record_human", fail)
     with pytest.raises(RuntimeError), db() as session:
         followup(session, completed.channel_id, component.id, user, "request-rollback", "Explain this")
     with db() as session:
@@ -142,7 +145,8 @@ def test_followup_cannot_target_a_replacement_agent_with_a_reused_row_id(tmp_pat
     with db() as session:
         replacement = session.get(AgentProfile, agent.id)
         replacement.band_agent_id = uuid4().hex
-        session.add(replacement); session.commit()
+        session.add(replacement)
+        session.commit()
     with db() as session, pytest.raises(UIError, match="no longer available"):
         followup(session, completed.channel_id, component.id, user, "replacement-test", "Explain this")
 
@@ -161,7 +165,8 @@ def test_ui_skills_are_opt_in_read_only_and_respect_admin_choices(job):
     with db() as session:
         for name in names:
             link = session.get(AgentSkill, (agent.id, f"builtin-{name}"))
-            link.enabled = True; session.add(link)
+            link.enabled = True
+            session.add(link)
         session.commit()
     backend = skills_backend(agent.id)
     for name in names:
@@ -170,7 +175,9 @@ def test_ui_skills_are_opt_in_read_only_and_respect_admin_choices(job):
         assert backend.write(f"/skills/{name}/SKILL.md", "bad").error
     with db() as session:
         session.delete(session.get(AgentSkill, (agent.id, "builtin-master-playbook")))
-        link = session.get(AgentSkill, (agent.id, "builtin-advanced-visualization")); link.enabled = False; session.add(link)
+        link = session.get(AgentSkill, (agent.id, "builtin-advanced-visualization"))
+        link.enabled = False
+        session.add(link)
         session.commit()
     skills_backend(agent.id)
     files = enabled_skill_files(agent.id)
@@ -214,7 +221,8 @@ def test_multiple_calls_revise_one_draft_and_older_replay_cannot_undo_it(tmp_pat
     with db() as session:
         stored = session.get(AgentTask, task.id)
         stored.prompt = task.prompt
-        session.add(stored); session.commit()
+        session.add(stored)
+        session.commit()
     model = ScriptedModel(responses=[
         AIMessage(content="", tool_calls=[{"name": "generate_sandboxed_ui", "args": SPEC, "id": "first"}]),
         AIMessage(content="", tool_calls=[{"name": "generate_sandboxed_ui", "args": {**SPEC, "title": "Revised calculator"}, "id": "second"}]),
@@ -239,7 +247,8 @@ def test_legacy_duplicate_versions_are_hidden_without_removing_native_cards(tmp_
                                   message_id=completed.reply_message_id, props={**original.props, "title": "Final version"})
         native = MessageComponent(task_id=completed.id, tool_call_id="native-card", kind="ui",
                                   message_id=completed.reply_message_id, props={"title": "Native report"})
-        session.add_all([latest, native]); session.commit()
+        session.add_all([latest, native])
+        session.commit()
         visible = components_for(session, [completed.reply_message_id])[completed.reply_message_id]
         assert [row["id"] for row in visible] == [latest.id, native.id]
         assert session.get(MessageComponent, original.id) is not None

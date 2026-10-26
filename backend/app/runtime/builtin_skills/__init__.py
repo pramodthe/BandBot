@@ -10,7 +10,8 @@ def _load(name: str) -> tuple[str, str, str]:
     source = (Path(__file__).parent / name / "SKILL.md").read_text(encoding="utf-8")
     _, metadata, instructions = source.split("---", 2)
     info = yaml.safe_load(metadata)
-    assert info["name"] == name
+    if info["name"] != name:
+        raise ValueError(f"Built-in skill {name!r} declares the name {info['name']!r}")
     return name, info["description"], instructions.strip()
 
 

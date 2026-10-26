@@ -1,7 +1,6 @@
 """Channel-scoped generated views and shared decision responses."""
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, select
 
+from app.api.deps import NO_STORE
 from app.auth import current_user
 from app.persistence.models import (AgentTask, ComponentResponse, Document, ImageGeneration, ImageGenerationDisplay,
                                     Message, MessageComponent, TaskInput, User, db, get_session)
@@ -86,7 +86,7 @@ def image_generations(channel_id: int, user: User = Depends(current_user), sessi
         .order_by(ProviderOperation.created_at).limit(20)).all()
     for receipt, display, task in rows:
         append(receipt.id, display, task, receipt.status, receipt.result.get("document_id"), receipt.binding.get("model", ""))
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    return JSONResponse(result, headers=NO_STORE)
 
 
 @router.get("/components/{component_id}")
@@ -117,13 +117,12 @@ async def sandbox_followup(channel_id: int, component_id: int, body: SandboxProm
     from app.workspace.service import serialize_messages, service
     with db() as session:
         result = check(followup, session, channel_id, component_id, user, body.request_id, body.text,
-                       service.message_reply_to(user.id, channel_id))
+                       service.message_reply_to(channel_id))
         message = serialize_messages(session, [result.message])[0]
         task_id = result.receipt.task_id
     await bus.publish({"type": "message", "message": message})
     if result.created:
-        asyncio.create_task(service._relay(channel_id, result.message.id, user.display_name,
-                                           result.message.content, [result.agent], user.id))
+        service.relay_later(channel_id, result.message.id, user.display_name, result.message.content, [result.agent])
     return {"message": message, "task_id": task_id}
 
 
@@ -151,13 +150,12 @@ async def respond(channel_id: int, component_id: int, body: ResponseBody, user: 
     from app.workspace.service import serialize_messages, service
     with db() as session:
         result = check(submit, session, channel_id, component_id, user, body.action_id, body.values,
-                       service.message_reply_to(user.id, channel_id))
+                       service.message_reply_to(channel_id))
         source, message = serialize_messages(session, [result.source, result.message])
     # Re-publish even on an idempotent retry, to repair clients after a lost HTTP/socket response.
     await bus.publish({"type": "message_updated", "message": source})
     await bus.publish({"type": "message", "message": message})
     if result.created:
         await service.publish_channel(channel_id)
-        asyncio.create_task(service._relay(channel_id, result.message.id, user.display_name,
-                                           result.message.content, [result.agent], user.id))
+        service.relay_later(channel_id, result.message.id, user.display_name, result.message.content, [result.agent])
     return {"response": response_json(result.response), "message": message}

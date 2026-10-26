@@ -52,12 +52,17 @@ def unavailable_message(request, error: ProviderError) -> ToolMessage:
                             "service": error.service, "code": "not_configured", "retryable": False}))
 
 
+def is_service_gap(error: ProviderError) -> bool:
+    """An optional service missing from the task's bindings, as opposed to a broken connection."""
+    return error.service in OPTIONAL_SERVICES and error.code == "not_configured"
+
+
 class OptionalServicesMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         try:
             return handler(request)
         except ProviderError as error:
-            if error.service not in OPTIONAL_SERVICES or error.code != "not_configured":
+            if not is_service_gap(error):
                 raise
             return unavailable_message(request, error)
 
@@ -65,6 +70,6 @@ class OptionalServicesMiddleware(AgentMiddleware):
         try:
             return await handler(request)
         except ProviderError as error:
-            if error.service not in OPTIONAL_SERVICES or error.code != "not_configured":
+            if not is_service_gap(error):
                 raise
             return unavailable_message(request, error)

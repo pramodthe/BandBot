@@ -1,13 +1,11 @@
 """Canonical chunks, local BM25 and account-scoped OpenAI indexes."""
 import asyncio
 from collections import Counter
-import hashlib
 import math
 import re
-from types import SimpleNamespace
 from sqlmodel import select
-from app.persistence.models import db, Document, DocumentCollection
-from app.providers.models import DocumentProviderIndex, ServiceChange, ServiceSelection
+from app.persistence.models import db, Document
+from app.providers.models import DocumentProviderIndex, ProviderDocumentCollection, ServiceChange
 from app.providers.management import binding_hash, apply_selection
 from app.providers.contracts import ProviderError
 from app.providers.openai_resources import resource_scope
@@ -20,9 +18,25 @@ def index_lock():
 def tokens(text):
     return re.findall(r"\w+", text.casefold())
 
+CHUNK_SIZE = 2400
+CHUNK_STRIDE = 2200
+
+def _chunks(docs):
+    """Split each document unit into overlapping windows for ranking."""
+    for doc in docs:
+        for unit in doc.units:
+            text = unit.get("text")
+            if not text:
+                continue
+            for offset in range(0, len(text), CHUNK_STRIDE):
+                location = unit.get("location", "")
+                if len(text) > CHUNK_SIZE:
+                    location += f" (characters {offset + 1}–{min(offset + CHUNK_SIZE, len(text))})"
+                yield doc, {"text": text[offset:offset + CHUNK_SIZE], "location": location}
+
 def local_search(docs, query, limit=8):
-    chunks = [(doc, {"text": unit["text"][offset:offset + 2400], "location": unit.get("location", "") + (f" (characters {offset + 1}–{min(offset + 2400, len(unit['text']))})" if len(unit["text"]) > 2400 else "")})
-        for doc in docs for unit in doc.units if unit.get("text") for offset in range(0, len(unit["text"]), 2200)]
+    """Rank document chunks with Okapi BM25 (k1=1.5, b=0.75)."""
+    chunks = list(_chunks(docs))
     if not chunks:
         return []
     words = [Counter(tokens(unit["text"])) for _, unit in chunks]
@@ -51,8 +65,6 @@ async def search(task, binding, query):
     if binding.get("provider") == "local":
         matches = local_search(docs, query)
     elif binding.get("provider") == "openai":
-        from app.providers.connections import resolve
-        resolve(binding, "retrieval")
         digest = binding_hash(binding)
         with db() as session:
             indexes = [session.get(DocumentProviderIndex, (doc.id, digest)) for doc in docs]
@@ -96,7 +108,8 @@ async def index_document(doc, binding):
         row = session.get(DocumentProviderIndex, (doc.id, digest))
         if row is None:
             row = DocumentProviderIndex(document_id=doc.id, binding_hash=digest, binding=binding)
-            session.add(row); session.commit()
+            session.add(row)
+            session.commit()
         if row.status == "ready":
             return
         original_id, index_id, store_id = row.file_id, row.index_file_id, row.store_id
@@ -104,25 +117,36 @@ async def index_document(doc, binding):
         intent = row.upload_intent
     if binding.get("provider") == "local":
         with db() as session:
-            row = session.get(DocumentProviderIndex, (doc.id, digest)); row.status = "ready"
-            session.add(row); session.commit()
+            row = session.get(DocumentProviderIndex, (doc.id, digest))
+            row.status = "ready"
+            session.add(row)
+            session.commit()
         return
     if binding.get("provider") != "openai":
         raise ProviderError("retrieval", "unsupported_provider")
     def save(**values):
         with db() as session:
             row = session.get(DocumentProviderIndex, (doc.id, digest))
-            for name, value in values.items(): setattr(row, name, value)
-            session.add(row); session.commit()
+            for name, value in values.items():
+                setattr(row, name, value)
+            session.add(row)
+            session.commit()
+
     def collection():
         # One remote collection per channel and connection revision.
-        from app.providers.models import ProviderDocumentCollection
         with db() as session:
             row = session.get(ProviderDocumentCollection, (doc.channel_id, digest))
             if row is None:
                 row = ProviderDocumentCollection(channel_id=doc.channel_id, binding_hash=digest, binding=binding)
-                session.add(row); session.commit()
+                session.add(row)
+                session.commit()
             return row
+
+    def save_collection(current):
+        with db() as session:
+            session.merge(current)
+            session.commit()
+
     try:
         with resource_scope(binding):
             async with documents.client() as sdk:
@@ -136,9 +160,10 @@ async def index_document(doc, binding):
                         found = [f async for f in sdk.files.list() if f.filename == name]
                         if len(found) > 1:
                             raise ProviderError("retrieval", "ambiguous_upload")
-                        if found:
-                            if kind == "original": original_id = found[0].id
-                            else: index_id = found[0].id
+                        if found and kind == "original":
+                            original_id = found[0].id
+                        elif found:
+                            index_id = found[0].id
                     if (intent == "original" and not original_id) or (intent == "index" and not index_id):
                         raise ProviderError("retrieval", "uncertain_upload", detail="An earlier document upload was not confirmed. Inspect its original provider account before retrying.")
                 if not original_id:
@@ -146,13 +171,15 @@ async def index_document(doc, binding):
                     name = f"band-{doc.id}-{digest}-original." + doc.name.rsplit(".", 1)[-1]
                     uploaded = await sdk.files.create(file=(name, documents.path_for(doc).read_bytes(), doc.media_type), purpose="user_data",
                         extra_headers={"Idempotency-Key": f"band-doc-{doc.id}-{digest}-original"})
-                    original_id = uploaded.id; save(file_id=original_id)
+                    original_id = uploaded.id
+                    save(file_id=original_id)
                 if not index_id:
                     save(status="uploading", upload_intent="index")
                     text = "\n\n".join(f"{u['location']}\n{u['text']}" for u in doc.units)
                     uploaded = await sdk.files.create(file=(f"band-{doc.id}-{digest}-index.txt", text.encode(), "text/plain"), purpose="assistants",
                         extra_headers={"Idempotency-Key": f"band-doc-{doc.id}-{digest}-index"})
-                    index_id = uploaded.id; save(index_file_id=index_id)
+                    index_id = uploaded.id
+                    save(index_file_id=index_id)
                 current = collection()
                 if not current.store_id:
                     from app.computer.identity import workspace_id
@@ -164,11 +191,11 @@ async def index_document(doc, binding):
                         current.store_id = stores[0].id
                     else:
                         current.state = "creating"
-                        with db() as session: session.merge(current); session.commit()
+                        save_collection(current)
                         created = await sdk.vector_stores.create(name=name, extra_headers={"Idempotency-Key": name})
                         current.store_id = created.id
                     current.state = "ready"
-                    with db() as session: session.merge(current); session.commit()
+                    save_collection(current)
                 store_id = current.store_id
                 save(file_id=original_id, index_file_id=index_id, store_id=store_id, status="indexing")
                 await sdk.vector_stores.files.create_and_poll(vector_store_id=store_id, file_id=index_id,
@@ -187,7 +214,6 @@ async def process_change():
         return await _process_change()
 
 async def _process_change():
-    from app.providers.models import ProviderDocumentCollection
     with db() as session:
         change = session.exec(select(ServiceChange).where(ServiceChange.status == "building").order_by(ServiceChange.created_at)).first()
         if not change:
@@ -208,26 +234,54 @@ async def _process_change():
                 current = session.get(ServiceChange, change.id)
                 apply_selection(session, scope=current.scope, expected_version=current.expected_version,
                     bindings=current.bindings, clear_computer_overrides=current.clear_computer_overrides)
-                current.status = "applied"; session.add(current); session.commit()
+                current.status = "applied"
+                session.add(current)
+                session.commit()
         elif doc and doc.status == "ready":
             await index_document(doc, binding)
         elif not doc or doc.status in {"deleted", "deleting"}:
             with db() as session:
                 current = session.get(DocumentProviderIndex, (pending.document_id, pending.binding_hash))
-                current.status = "deleted"; session.add(current); session.commit()
+                current.status = "deleted"
+                session.add(current)
+                session.commit()
     except Exception:
         if not change and pending:
             with db() as session:
                 row = session.get(DocumentProviderIndex, (pending.document_id, pending.binding_hash))
                 if row.status == "queued":
-                    row.status = "error"; row.error = "Index needs its original connection. Reconnect and explicitly retry."
-                    session.add(row); session.commit()
+                    row.status = "error"
+                    row.error = "Index needs its original connection. Reconnect and explicitly retry."
+                    session.add(row)
+                    session.commit()
         if change:
             with db() as session:
                 current = session.get(ServiceChange, change.id)
-                current.status = "failed"; current.error = "Index preparation failed or settings changed. Previous settings and indexes remain active."
-                session.add(current); session.commit()
+                current.status = "failed"
+                current.error = "Index preparation failed or settings changed. Previous settings and indexes remain active."
+                session.add(current)
+                session.commit()
     return True
+
+async def _delete_remote_files(row):
+    """Delete an index row's provider files; files that are already gone are fine."""
+    from openai import NotFoundError
+    from app import documents
+    with resource_scope(row.binding):
+        async with documents.client() as sdk:
+            for file_id in set(filter(None, [row.file_id, row.index_file_id])):
+                try:
+                    await sdk.files.delete(file_id)
+                except NotFoundError:
+                    pass
+
+def _mark_index_deleted(row):
+    with db() as session:
+        current = session.get(DocumentProviderIndex, (row.document_id, row.binding_hash))
+        current.file_id = current.index_file_id = current.store_id = ""
+        current.status = "deleted"
+        session.add(current)
+        session.commit()
 
 async def delete_resources(doc):
     from app import documents
@@ -235,23 +289,15 @@ async def delete_resources(doc):
         rows = session.exec(select(DocumentProviderIndex).where(DocumentProviderIndex.document_id == doc.id)).all()
     for row in rows:
         if any((row.file_id, row.index_file_id)) and row.binding.get("provider") == "openai":
-            with resource_scope(row.binding):
-                async with documents.client() as sdk:
-                    from openai import NotFoundError
-                    for identity in set(filter(None, [row.file_id, row.index_file_id])):
-                        try: await sdk.files.delete(identity)
-                        except NotFoundError: pass
-        with db() as session:
-            current = session.get(DocumentProviderIndex, (row.document_id, row.binding_hash))
-            current.file_id, current.index_file_id, current.store_id = "", "", ""
-            current.status = "deleted"; session.add(current); session.commit()
+            await _delete_remote_files(row)
+        _mark_index_deleted(row)
     await cleanup_empty_collections(connection_ids={r.binding.get("connection_id") for r in rows}, channel_id=doc.channel_id)
     documents.path_for(doc).unlink(missing_ok=True)
     documents.patch(doc.id, status="deleted", units=[], file_id="", index_file_id="")
 
 async def cleanup_empty_collections(*, connection_ids, channel_id=None):
+    from openai import NotFoundError
     from app import documents
-    from app.providers.models import ProviderDocumentCollection
     with db() as session:
         collections = session.exec(select(ProviderDocumentCollection).where(ProviderDocumentCollection.store_id != "")).all()
     for collection in collections:
@@ -260,20 +306,23 @@ async def cleanup_empty_collections(*, connection_ids, channel_id=None):
         with db() as session:
             active = session.exec(select(DocumentProviderIndex).where(DocumentProviderIndex.binding_hash == collection.binding_hash,
                 DocumentProviderIndex.store_id == collection.store_id, DocumentProviderIndex.status != "deleted")).first()
-        if active: continue
+        if active:
+            continue
         with resource_scope(collection.binding):
             async with documents.client() as sdk:
-                from openai import NotFoundError
-                try: await sdk.vector_stores.delete(collection.store_id)
-                except NotFoundError: pass
+                try:
+                    await sdk.vector_stores.delete(collection.store_id)
+                except NotFoundError:
+                    pass
         with db() as session:
             current = session.get(ProviderDocumentCollection, (collection.channel_id, collection.binding_hash))
-            current.store_id = ""; current.state = "deleted"
-            session.add(current); session.commit()
+            current.store_id = ""
+            current.state = "deleted"
+            session.add(current)
+            session.commit()
 
 async def release_connection_indexes(identity):
     """Explicitly release unused retired indexes; canonical documents stay readable."""
-    from app import documents
     from app.providers.management import dependencies
     with db() as session:
         usage = dependencies(session, identity)
@@ -284,14 +333,6 @@ async def release_connection_indexes(identity):
         if row.status in {"uploading", "uncertain"}:
             raise ValueError("Reconcile uncertain uploads in their original account before cleanup")
         if row.binding.get("provider") == "openai" and (row.file_id or row.index_file_id):
-            with resource_scope(row.binding):
-                async with documents.client() as sdk:
-                    from openai import NotFoundError
-                    for file_id in set(filter(None, [row.file_id, row.index_file_id])):
-                        try: await sdk.files.delete(file_id)
-                        except NotFoundError: pass
-        with db() as session:
-            current = session.get(DocumentProviderIndex, (row.document_id, row.binding_hash))
-            current.file_id = current.index_file_id = current.store_id = ""; current.status = "deleted"
-            session.add(current); session.commit()
+            await _delete_remote_files(row)
+        _mark_index_deleted(row)
     await cleanup_empty_collections(connection_ids={identity})

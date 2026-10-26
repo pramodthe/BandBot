@@ -21,16 +21,12 @@ from app.persistence.models import (AgentConnection, AgentProfile, AgentRuntime,
 from app.recovery import clear_outbox, outbox
 from app.workspace.health import beat, mark_api_started, remember_provider_state, service_status, worker_state
 from app.auth import encrypt_secret
+from helpers import bearer, signup
 
 
 def _signup(client: TestClient, username: str) -> dict:
-    response = client.post("/api/auth/signup", json={
-        "username": username, "display_name": username.title(), "password": "secret123",
-        "band_api_key": f"band_a_signup-{username}",
-    })
-    assert response.status_code == 200, response.text
-    body = response.json()
-    body["headers"] = {"Authorization": f"Bearer {body['token']}"}
+    body = signup(client, username, username.title())
+    body["headers"] = bearer(body["token"])
     return body
 
 

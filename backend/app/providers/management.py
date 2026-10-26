@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy import update
 from sqlmodel import select
 from app.auth import encrypt_secret
-from app.persistence.models import AgentTask, TaskComputerBinding, TaskSandbox, Document, db, utcnow
+from app.persistence.models import AgentTask, TaskComputerBinding, TaskSandbox, Document, utcnow
 from app.providers.models import (ProviderConnection, ProviderRevision, ServiceSelection, ServiceSelectionHistory,
                                   TaskServiceBinding, DocumentProviderIndex, ServiceChange)
 from app.providers.registry import SERVICES, manifest
@@ -24,7 +24,8 @@ def clean_config(provider: str, config: dict) -> dict:
     for name in set(definition.fields) - {"models", "context_window", "disk_gib", "timeout", "pause_retention"}:
         if name in value and (not isinstance(value[name], str) or len(value[name]) > 2048):
             raise ValueError(f"Enter a valid {name}")
-    if value.get("image_model") == "": value.pop("image_model")
+    if value.get("image_model") == "":
+        value.pop("image_model")
     if "image_model" in value and not re.fullmatch(r"[a-zA-Z0-9._:/-]{1,160}", value["image_model"]):
         raise ValueError("Enter a valid image model identifier")
     if "models" in value:
@@ -200,5 +201,7 @@ def clear_agent_overrides(session, profile):
     for row in session.exec(select(ServiceSelection)).all():
         if row.scope == f"agent:{profile.id}" or row.scope.startswith(f"computer:{profile.band_agent_id}:"):
             session.merge(ServiceSelectionHistory(scope=row.scope, version=row.version, bindings=row.bindings))
-            row.bindings = {}; row.version += 1; row.updated_at = utcnow()
+            row.bindings = {}
+            row.version += 1
+            row.updated_at = utcnow()
             session.add(row)

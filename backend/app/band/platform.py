@@ -2,8 +2,8 @@
 from dataclasses import dataclass
 import asyncio
 
-from band.client.rest import (AsyncRestClient, ChatMessageRequest, ChatMessageRequestMentionsItem,
-                              ParticipantRequest, aclose_rest_client)
+from band.client.rest import (DEFAULT_REQUEST_OPTIONS, AsyncRestClient, ChatMessageRequest,
+                              ChatMessageRequestMentionsItem, ParticipantRequest, aclose_rest_client)
 from band_rest.types import ChatRoomRequest, ChatEventRequest
 
 from app.config import settings
@@ -11,11 +11,21 @@ from app.config import settings
 NO_RETRY = {"max_retries": 0, "timeout_in_seconds": 30}
 
 
-@dataclass
-class Owner:
+@dataclass(frozen=True)
+class BandIdentity:
+    """A Band agent or user account as reported by Band."""
     id: str
     name: str
     handle: str
+
+
+async def fetch_identity(api_key: str) -> BandIdentity:
+    client = AsyncRestClient(api_key=api_key, base_url=settings.band_rest_url)
+    try:
+        me = (await client.agent_api_identity.get_agent_me(request_options=DEFAULT_REQUEST_OPTIONS)).data
+        return BandIdentity(id=me.id, name=me.name, handle=me.handle or "")
+    finally:
+        await aclose_rest_client(client)
 
 
 def disconnected_status():
@@ -29,7 +39,7 @@ class AgentPlatformOrg:
     def __init__(self, key: str, *, user_id: int, identity: str):
         self._api_key = key
         self.user_id, self.identity = user_id, identity
-        self.owner: Owner | None = None
+        self.owner: BandIdentity | None = None
         self.error: str | None = None
         self._rest: AsyncRestClient | None = None
         self._room_members: dict[str, set[str]] = {}
@@ -55,7 +65,7 @@ class AgentPlatformOrg:
             await aclose_rest_client(rest)
             self.error = "Your Band connection is unavailable. Check or update your Agent API key in People."
             return
-        self.owner = Owner(id=me.id, name=me.name, handle=me.handle or "")
+        self.owner = BandIdentity(id=me.id, name=me.name, handle=me.handle or "")
         self._rest, self.error = rest, None
 
     async def close(self):

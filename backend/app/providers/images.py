@@ -133,8 +133,6 @@ async def generate(task, binding, prompt, call_id, *, title="Generated image", s
             name="generated-image-" + document_id[:8] + ".png", media_type="image/png", size=len(data), status="ready")
         result = {"status": "completed", "document_id": document_id, "url": f"/api/documents/{document_id}/download", "name": artifact.name,
                   "provider": binding["provider"], "model": binding["model"], "usage": usage}
-        path = None
-        temporary = None
         with db() as session:
             require_active_task(session, task)
             if documents.database_files():

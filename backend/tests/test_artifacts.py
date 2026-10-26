@@ -8,7 +8,7 @@ from app.persistence.models import AgentTask, ChannelMember, DirectMessage, Mess
 from app.tasks import update_task
 from app.tasks.worker import complete
 from app.workspace.service import serialize_messages
-from test_tasks import job  # noqa: F401
+
 
 
 def export_reply(task):

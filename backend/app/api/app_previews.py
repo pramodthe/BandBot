@@ -8,17 +8,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
+from app.api.deps import NO_STORE, require_member
 from app.auth import current_user
 from app.computer import ComputerUnavailable, TaskComputer, sandbox_record
-from app.computer.app_previews import (LEASE_SECONDS, aware, create_lease, get_preview, prepare,
+from app.computer.app_previews import (LEASE_SECONDS, create_lease, get_preview, prepare,
                                       preview_base, publish, summary)
-from app.persistence.models import AgentTask, AppPreviewLease, ChannelMember, DirectMessage, User, get_session, utcnow
+from app.persistence.models import AgentTask, AppPreviewLease, DirectMessage, User, as_utc, get_session, utcnow
 from app.workspace.permissions import allowed
 
 router = APIRouter()
 computer_factory = TaskComputer
 logger = logging.getLogger(__name__)
-NO_STORE = {"Cache-Control": "no-store"}
 
 
 class PublishApp(BaseModel):
@@ -57,8 +57,7 @@ async def publish_app(task_id: str, body: PublishApp, user: User = Depends(curre
     dm = session.get(DirectMessage, task.channel_id) if task else None
     if not task or (dm and dm.user_id != user.id):
         raise HTTPException(404, "Task not found")
-    if not session.get(ChannelMember, (task.channel_id, "human", user.id)):
-        raise HTTPException(403, "Join the channel to publish an app preview")
+    require_member(session, task.channel_id, user, "Join the channel to publish an app preview")
     if not allowed(session, user.id, task.channel_id, "computer_control"):
         raise HTTPException(403, "Only workspace admins can publish app previews in this channel")
     preview_base()
@@ -99,7 +98,7 @@ def viewer_lease(session, lease_id: str, user: User):
 async def renew_app(lease_id: str, response: Response, user: User = Depends(current_user), session: Session = Depends(get_session)):
     response.headers.update(NO_STORE)
     lease, preview, task = viewer_lease(session, lease_id, user)
-    if aware(lease.until) <= utcnow():
+    if as_utc(lease.until) <= utcnow():
         raise HTTPException(410, "Preview session expired. Reconnect from chat.")
     record = sandbox_record(preview.computer_key)
     if not record or record.sandbox_id != preview.sandbox_id or record.status != "running":

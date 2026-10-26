@@ -20,15 +20,16 @@ from sqlalchemy import update
 from sqlmodel import Session, select
 
 from app.agent_connections import (RESOURCE, TOKEN_URL, public_connection, runtime_available, save_connection, unexpired, validate_key)
+from app.api.deps import NO_STORE
 from app.auth import current_user, decrypt_secret, encrypt_secret
 from app.config import settings
 from app.openai_provider import model_catalog
 from app.openclaw_gateway import gateway_urls, validate_gateway
 from app.persistence.models import AgentConnection, AgentHost, AgentOAuthAttempt, AgentRuntime, User, db, get_session, utcnow
-from app.workspace.audit import record
-from app.workspace.permissions import can_connect_agents
+from app.workspace.audit import record_human
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class OAuthAccessFilter(logging.Filter):
@@ -47,12 +48,6 @@ class OAuthAccessFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(OAuthAccessFilter())
 
 
-def connection_user(user: User = Depends(current_user), session: Session = Depends(get_session)) -> User:
-    if not can_connect_agents(session, user.id):
-        raise HTTPException(403, "Sign in before adding agent connections")
-    return user
-
-
 class ConnectBody(BaseModel):
     provider: Literal["codex", "claude", "cursor", "openclaw"]
     label: str = Field(min_length=1, max_length=80)
@@ -62,7 +57,7 @@ class ConnectBody(BaseModel):
 
 
 @router.get("/api/agent-connections")
-def connections(request: Request, _user: User = Depends(connection_user), session: Session = Depends(get_session)):
+def connections(request: Request, _user: User = Depends(current_user), session: Session = Depends(get_session)):
     return {"connections": [public_connection(row) for row in session.exec(select(AgentConnection).where(
                 AgentConnection.created_by == _user.id)).all()],
             "codex_chatgpt_sign_in": settings.codex_chatgpt_sign_in,
@@ -72,7 +67,7 @@ def connections(request: Request, _user: User = Depends(connection_user), sessio
 
 
 @router.post("/api/agent-connections")
-async def connect(body: ConnectBody, user: User = Depends(connection_user)):
+async def connect(body: ConnectBody, user: User = Depends(current_user)):
     key = body.api_key.get_secret_value().strip()
     if not body.label.strip() or not key:
         raise HTTPException(422, "Enter a connection name and API key")
@@ -94,13 +89,12 @@ async def connect(body: ConnectBody, user: User = Depends(connection_user)):
             raise HTTPException(422, "Gateway connection failed. Check the token, approved URL, and dedicated agent setup in docs/connected-agents.md.") from None
         raise HTTPException(422, "Authentication failed. Check the API key and provider account access.") from None
     row = save_connection(body.provider, body.label, secret, user.id, method=method, models=models)
-    record("agent_connection_created", actor_type="human", actor_id=user.id, actor_name=user.display_name,
-           detail={"provider": body.provider, "connection_id": row.id})
+    record_human(user, "agent_connection_created", provider=body.provider, connection_id=row.id)
     return public_connection(row)
 
 
 @router.post("/api/agent-connections/codex/login")
-async def native_login(request: Request, user: User = Depends(connection_user)):
+async def native_login(request: Request, user: User = Depends(current_user)):
     if request.url.hostname not in {"localhost", "127.0.0.1"}:
         raise HTTPException(409, "Codex browser sign-in requires the app and browser on the same local computer")
     if not runtime_available("codex"):
@@ -113,12 +107,12 @@ async def native_login(request: Request, user: User = Depends(connection_user)):
 
 
 @router.get("/api/agent-connections/codex/login/{attempt_id}")
-def native_login_status(attempt_id: str, user: User = Depends(connection_user), session: Session = Depends(get_session)):
+def native_login_status(attempt_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     return sign_in_status(attempt_id, user, session)
 
 
 @router.delete("/api/agent-connections/codex/login/{attempt_id}")
-async def cancel_native_login(attempt_id: str, user: User = Depends(connection_user), session: Session = Depends(get_session)):
+async def cancel_native_login(attempt_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     row = session.get(AgentOAuthAttempt, attempt_id)
     if row is None or row.user_id != user.id or not row.state_hash.startswith("codex-native:"):
         raise HTTPException(404, "Sign-in attempt not found")
@@ -134,21 +128,20 @@ async def cancel_native_login(attempt_id: str, user: User = Depends(connection_u
 
 
 @router.delete("/api/agent-connections/{connection_id}")
-def disconnect(connection_id: str, user: User = Depends(connection_user), session: Session = Depends(get_session)):
+def disconnect(connection_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     row = session.get(AgentConnection, connection_id)
     if row is None or row.created_by != user.id:
         raise HTTPException(404, "Connection not found")
     if session.exec(select(AgentRuntime.agent_id).where(AgentRuntime.connection_id == connection_id)).first():
         raise HTTPException(409, "Remove agents using this connection before disconnecting it")
     session.delete(row)
-    record("agent_connection_deleted", actor_type="human", actor_id=user.id, actor_name=user.display_name,
-           detail={"provider": row.provider, "connection_id": row.id}, session=session)
+    record_human(user, "agent_connection_deleted", session=session, provider=row.provider, connection_id=row.id)
     session.commit()
     return {"disconnected": True}
 
 
 @router.post("/api/agent-connections/codex/sign-in")
-def sign_in(request: Request, user: User = Depends(connection_user), session: Session = Depends(get_session)):
+def sign_in(request: Request, user: User = Depends(current_user), session: Session = Depends(get_session)):
     redirect = urlsplit(settings.agent_oauth_redirect_uri)
     if not settings.codex_chatgpt_sign_in:
         raise HTTPException(409, "ChatGPT sign-in is not enabled for this deployment. Connect an API key instead.")
@@ -177,7 +170,7 @@ def sign_in(request: Request, user: User = Depends(connection_user), session: Se
 
 
 @router.get("/api/agent-connections/codex/sign-in/{attempt_id}")
-def sign_in_status(attempt_id: str, user: User = Depends(connection_user), session: Session = Depends(get_session)):
+def sign_in_status(attempt_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     attempt = session.get(AgentOAuthAttempt, attempt_id)
     if attempt is None or attempt.user_id != user.id:
         raise HTTPException(404, "Sign-in attempt not found")
@@ -186,7 +179,7 @@ def sign_in_status(attempt_id: str, user: User = Depends(connection_user), sessi
 
 
 @router.delete("/api/agent-connections/codex/sign-in/{attempt_id}")
-def cancel_sign_in(attempt_id: str, user: User = Depends(connection_user), session: Session = Depends(get_session)):
+def cancel_sign_in(attempt_id: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
     session.exec(update(AgentOAuthAttempt).where(AgentOAuthAttempt.id == attempt_id,
         AgentOAuthAttempt.user_id == user.id, AgentOAuthAttempt.status.in_(["pending", "exchanging"]))
         .values(status="cancelled", verifier_enc=""))
@@ -215,7 +208,7 @@ async def callback(state: str = "", code: str = "", client_id: str = "", error: 
             AgentOAuthAttempt.state_hash == hashlib.sha256(state.encode()).hexdigest())).first()
         if attempt is None or attempt.status != "pending" or not unexpired(attempt.created_at):
             raise HTTPException(400, "This sign-in attempt is invalid or expired")
-        if not can_connect_agents(session, attempt.user_id):
+        if session.get(User, attempt.user_id) is None:
             raise HTTPException(403, "This account can no longer connect agents")
         claimed = session.exec(update(AgentOAuthAttempt).where(AgentOAuthAttempt.id == attempt.id,
             AgentOAuthAttempt.status == "pending").values(status="exchanging"))
@@ -242,20 +235,21 @@ async def callback(state: str = "", code: str = "", client_id: str = "", error: 
             secret_enc=encrypt_secret(json.dumps(secret)), models=[m["id"] for m in model_catalog()])
         # Check cancellation/permissions and save the connection and success receipt atomically.
         with db() as session:
-            if not can_connect_agents(session, attempt.user_id):
+            owner = session.get(User, attempt.user_id)
+            if owner is None:
                 raise ValueError("Account is no longer available")
             claimed = session.exec(update(AgentOAuthAttempt).where(AgentOAuthAttempt.id == attempt.id,
                 AgentOAuthAttempt.status == "exchanging").values(status="connected", connection_id=connection.id, verifier_enc=""))
             if not claimed.rowcount:
                 raise ValueError("Sign-in was cancelled")
             session.add(connection)
-            record("agent_connection_created", actor_type="human", actor_id=attempt.user_id, actor_name="Workspace admin",
-                   detail={"provider": "codex", "connection_id": connection.id}, session=session)
+            record_human(owner, "agent_connection_created", session=session, provider="codex",
+                         connection_id=connection.id)
             session.commit()
         succeeded = True
-    except Exception:
-        # Callback URLs, tokens and provider errors must never appear in app logs or HTML.
-        pass
+    except Exception as exc:
+        # Callback URLs, tokens and provider errors must never appear in app logs or HTML; the type is safe.
+        logger.warning("ChatGPT sign-in did not complete: %s", type(exc).__name__)
     with db() as session:
         row = session.get(AgentOAuthAttempt, attempt.id)
         if row.status == "exchanging":
@@ -265,4 +259,4 @@ async def callback(state: str = "", code: str = "", client_id: str = "", error: 
     message = "Codex is connected. Return to BAND_BOTS to add your agent." if succeeded else (
         "Sign-in could not be completed. Return to BAND_BOTS and try again, or connect an API key.")
     return HTMLResponse(f"<!doctype html><html><head><title>BAND_BOTS connection</title></head><body><p>{message}</p></body></html>",
-                        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+                        headers={**NO_STORE, "Referrer-Policy": "no-referrer"})

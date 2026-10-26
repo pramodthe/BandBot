@@ -11,7 +11,7 @@ from app.auth import issue_token
 from app.main import app
 from app.persistence.models import AgentTask, Schedule, db
 from app.tasks.schedules import MAX_SCHEDULES_PER_CHANNEL, ScheduleError, create_schedule, fire_due, next_run
-from test_tasks import job  # noqa: F401  (fixture)
+
 
 UTC = timezone.utc
 

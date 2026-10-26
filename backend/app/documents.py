@@ -23,6 +23,13 @@ from app.persistence.models import (Budget, Channel, ChannelMember, DirectMessag
                                     DocumentUsage, MessageAttachment, TaskDocument, TaskDocumentSource, TaskUsage, db, utcnow)
 
 LIMIT = 25 * 1024 * 1024
+# Extraction caps keep one upload from exhausting memory, storage or model context.
+MAX_EXTRACTED_CHARACTERS = 3_000_000
+MAX_UNITS = 50_000
+MAX_VISION_BYTES = 64 * 1024 * 1024
+# Plain text is split into searchable units of this many characters.
+TEXT_UNIT_CHARACTERS = 12_000
+TOO_LARGE = "Extracted content exceeds the processing limit; split the file"
 TYPES = {".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
          ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".csv": "text/csv",
          ".txt": "text/plain", ".md": "text/markdown", ".png": "image/png", ".jpg": "image/jpeg",
@@ -261,8 +268,8 @@ def extract(doc: Document) -> list[dict[str, str]]:
         nonlocal characters, vision_bytes
         characters += len(unit["text"])
         vision_bytes += len(unit.get("vision", ""))
-        if characters > 3_000_000 or len(units) >= 50000 or vision_bytes > 64 * 1024 * 1024:
-            raise ValueError("Extracted content exceeds the processing limit; split the file")
+        if characters > MAX_EXTRACTED_CHARACTERS or len(units) >= MAX_UNITS or vision_bytes > MAX_VISION_BYTES:
+            raise ValueError(TOO_LARGE)
         units.append(unit)
     if suffix == ".pdf":
         import pypdfium2 as pdfium
@@ -329,8 +336,9 @@ def extract(doc: Document) -> list[dict[str, str]]:
             for i, row in enumerate(csv.reader(io.StringIO(text)), 1):
                 append({"location": f"Row {i}", "text": " | ".join(row)})
         else:
-            for start in range(0, len(text), 12000):
-                append({"location": f"Characters {start + 1}-{min(start + 12000, len(text))}", "text": text[start:start + 12000]})
+            for start in range(0, len(text), TEXT_UNIT_CHARACTERS):
+                end = min(start + TEXT_UNIT_CHARACTERS, len(text))
+                append({"location": f"Characters {start + 1}-{end}", "text": text[start:end]})
     return units
 
 
@@ -352,8 +360,8 @@ async def _legacy_ingest(document_id: str) -> None:
                         raise ValueError("Scan transcription was incomplete; split the document and retry")
                     unit["text"] = response.output_text
                     unit["derived"] = "OpenAI vision transcription; verify against the original"
-            if sum(len(u["text"]) for u in units) > 3_000_000:
-                raise ValueError("Extracted content exceeds the processing limit; split the file")
+            if sum(len(u["text"]) for u in units) > MAX_EXTRACTED_CHARACTERS:
+                raise ValueError(TOO_LARGE)
             doc = patch(doc.id, units=units)
         if not doc.file_id:
             uploaded = await sdk.files.create(file=(doc.name, read_original(doc), doc.media_type), purpose="user_data")
@@ -399,8 +407,8 @@ async def _ingest_bound(document_id: str) -> None:
         complete = []
         for unit in units:
             complete.append(await transcribe(bindings.get("document_analysis", {}), unit, doc.channel_id) if unit.get("vision") else unit)
-        if sum(len(u.get("text", "")) for u in complete) > 3000000:
-            raise ValueError("Extracted content exceeds the processing limit; split the file")
+        if sum(len(u.get("text", "")) for u in complete) > MAX_EXTRACTED_CHARACTERS:
+            raise ValueError(TOO_LARGE)
         doc = patch(document_id, units=complete)
     if not bindings.get("retrieval", {}).get("disabled"):
         await index_document(doc, bindings.get("retrieval", {}))
@@ -420,7 +428,8 @@ def recover_jobs() -> None:
             session.add(doc)
         from app.providers.models import DocumentProviderIndex
         for index in session.exec(select(DocumentProviderIndex).where(DocumentProviderIndex.status == "uploading")).all():
-            index.status = "uncertain"; session.add(index)
+            index.status = "uncertain"
+            session.add(index)
         session.commit()
 
 

@@ -18,10 +18,9 @@ from sqlmodel import select
 from app.agent_connections import MODEL_ID
 from app.auth import encrypt_secret
 from app.config import settings
-from app.persistence.models import AgentConnection, AgentOAuthAttempt, db
+from app.persistence.models import AgentConnection, AgentOAuthAttempt, User, db
 from app.runtime.connected_runner import codex_command
-from app.workspace.permissions import can_connect_agents
-from app.workspace.audit import record
+from app.workspace.audit import record_human
 
 _jobs: dict[str, asyncio.Task] = {}
 
@@ -153,7 +152,8 @@ async def _login(attempt_id: str, user_id: int, ready: asyncio.Future):
                         raise ValueError("Codex did not save a token session")
                     with db() as session:
                         row = session.get(AgentOAuthAttempt, attempt_id)
-                        if not row or row.status != "pending" or not can_connect_agents(session, user_id):
+                        owner = session.get(User, user_id)
+                        if not row or row.status != "pending" or owner is None:
                             raise ValueError("Sign-in was cancelled")
                         # This block contains no awaits: cancellation cannot interleave with the save.
                         connection = AgentConnection(id=uuid4().hex, provider="codex",
@@ -163,8 +163,8 @@ async def _login(attempt_id: str, user_id: int, ready: asyncio.Future):
                         session.add(connection)
                         row.status, row.connection_id = "connected", connection.id
                         session.add(row)
-                        record("agent_connection_created", actor_type="human", actor_id=user_id,
-                            actor_name="Workspace admin", detail={"provider": "codex", "connection_id": connection.id}, session=session)
+                        record_human(owner, "agent_connection_created", session=session, provider="codex",
+                                     connection_id=connection.id)
                         session.commit()
                     succeeded = True
             finally:

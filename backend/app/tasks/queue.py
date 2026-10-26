@@ -80,7 +80,11 @@ def recover_tasks() -> None:
             task.progress = "Recovered after worker restart; resuming checkpoint"
             task.updated_at = utcnow()
             session.add(task)
-        # An outside request interrupted mid-send may or may not have reached Band; it is never resent.
+        # A reply or outside request interrupted mid-send may or may not have reached Band; it is never resent.
+        for task in session.exec(select(AgentTask).where(AgentTask.delivery_status == "sending")).all():
+            task.delivery_status = "unknown"
+            task.updated_at = utcnow()
+            session.add(task)
         session.exec(update(OutsideHandoff).where(OutsideHandoff.status == "sending").values(status="unknown"))
         session.commit()
 
@@ -204,11 +208,12 @@ def hand_off(task: AgentTask, *, teammate: str, request: str, report_back: bool,
         if handoffs_used(session, root) >= MAX_HANDOFFS:
             return {"error": f"This request already used {MAX_HANDOFFS} teammate hand-offs. "
                              "Finish the work yourself and answer the humans."}
+        native = session.get(BandAgentLink, target.id) is not None
         child = AgentTask(id=uuid4().hex, source_key=source_key, channel_id=task.channel_id,
-                          agent_id=target.id, room_id="" if session.get(BandAgentLink, target.id) else task.room_id, prompt=f"**{sender.name}:** {request}",
+                          agent_id=target.id, room_id="" if native else task.room_id, prompt=f"**{sender.name}:** {request}",
                           context=channel_context(session, task.channel_id),
                           # A report-back answer goes to the requester, so it stays local instead of pinging Band.
-                          reply_to="" if report_back or session.get(BandAgentLink, target.id) else task.reply_to)
+                          reply_to="" if report_back or native else task.reply_to)
         session.add_all([
             Message(channel_id=task.channel_id, author_type="agent", author_id=sender.id,
                     author_name=sender.name, content=f"@{target.name} {request}", to_humans=False,

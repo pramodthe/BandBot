@@ -26,7 +26,8 @@ def register_access(agent_id: int, channel_id: int):
                 room_id=channel.band_room_id or "", prompt="Operator computer preparation; no model or message delivery",
                 status="completed", progress="Computer prepared by operator", delivery_status="sent")
             from app.workspace.access import agent_owner
-            session.add_all([task, TaskPrincipal(task_id=task.id, user_id=agent_owner(session, profile))]); session.commit()
+            session.add_all([task, TaskPrincipal(task_id=task.id, user_id=agent_owner(session, profile))])
+            session.commit()
     return task, profile, channel, provider
 
 
@@ -59,4 +60,4 @@ if __name__ == "__main__":
             asyncio.run(prepare(args.agent, args.channel))
     except Exception as exc:
         print("Computer preparation did not finish (" + type(exc).__name__ + "). Inspect its state before retrying.")
-        raise SystemExit(1)
+        raise SystemExit(1) from None

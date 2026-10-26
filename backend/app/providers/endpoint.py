@@ -12,7 +12,8 @@ def origin(url: str) -> str:
         raise ValueError("Enter a provider base URL without credentials, query parameters or fragments")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     host = parsed.hostname.lower()
-    if ":" in host: host = "[" + host + "]"
+    if ":" in host:
+        host = "[" + host + "]"
     return f"{parsed.scheme}://{host}:{port}"
 
 def approved(url: str) -> bool:
@@ -24,7 +25,7 @@ def network_address(value):
     return address.ipv4_mapped or address if isinstance(address, ipaddress.IPv6Address) else address
 
 def validate_base(url: str) -> str:
-    value = origin(url)
+    origin(url)  # Raises ValueError for credentials, queries and unsupported schemes.
     host = urlsplit(url).hostname
     try:
         address = network_address(host)

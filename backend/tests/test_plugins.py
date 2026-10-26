@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -17,11 +16,9 @@ import app.runtime.tools.mcp as integrations
 from app.auth import encrypt_secret
 from app.main import app
 from app.persistence.models import AgentProfile, ComposioSession, User, WorkspaceRole, db, init_db, utcnow
-from app.runtime.tools.composio import call_refusal, set_plugin_access, trusted_mcp_url
+from app.runtime.tools.composio import call_refusal, set_plugin_access, trusted_url
 from app.runtime.tools.mcp import integration_tools
-from test_api import _signup
-
-
+from helpers import signup
 SESSION = {
     "session_id": "sess_1",
     "mcp": {"type": "http", "url": "https://backend.composio.dev/mcp/sess_1"},
@@ -44,15 +41,14 @@ def _clear_session() -> None:
 def _enable(monkeypatch):
     monkeypatch.setattr(composio, "provider_api_key", lambda: "ak_test")
     monkeypatch.setattr(composio, "selected_composio", lambda: None)
-    monkeypatch.setattr(composio, "settings", replace(composio.settings, composio_api_key="ak_test"))
 
 
 def test_mcp_urls_must_be_composio_https():
-    assert trusted_mcp_url("https://backend.composio.dev/mcp/sess_1")
-    assert trusted_mcp_url("https://mcp.composio.dev/session")
-    assert not trusted_mcp_url("http://backend.composio.dev/mcp/sess_1")
-    assert not trusted_mcp_url("https://evil.example/mcp")
-    assert not trusted_mcp_url("https://composio.dev.evil.com/mcp")
+    assert trusted_url("https://backend.composio.dev/mcp/sess_1")
+    assert trusted_url("https://mcp.composio.dev/session")
+    assert not trusted_url("http://backend.composio.dev/mcp/sess_1")
+    assert not trusted_url("https://evil.example/mcp")
+    assert not trusted_url("https://composio.dev.evil.com/mcp")
 
 
 def test_session_is_reused_and_untrusted_urls_are_rejected(monkeypatch):
@@ -178,8 +174,8 @@ def test_discovery_metadata_scopes_external_apps_without_breaking_calls():
 
 def test_plugins_are_readable_by_members_and_connected_by_admins(monkeypatch):
     with TestClient(app) as client:
-        alice = _signup(client, "plugin-admin", "Ada")
-        bob = _signup(client, "plugin-member", "Bea")
+        alice = signup(client, "plugin-admin", "Ada")
+        bob = signup(client, "plugin-member", "Bea")
         with db() as session:
             account = session.exec(select(User).where(User.username == "plugin-admin")).one()
             session.merge(WorkspaceRole(user_id=account.id, role="admin", updated_at=utcnow()))
@@ -237,7 +233,7 @@ def test_plugins_are_readable_by_members_and_connected_by_admins(monkeypatch):
 
 def test_agent_plugin_selection_round_trips():
     with TestClient(app) as client:
-        alice = _signup(client, "plugin-editor", "Eden")
+        alice = signup(client, "plugin-editor", "Eden")
         auth = {"Authorization": f"Bearer {alice['token']}"}
         with db() as session:
             profile = AgentProfile(name="Mailer", handle="", band_agent_id="agent-mailer",

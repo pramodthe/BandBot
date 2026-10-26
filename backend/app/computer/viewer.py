@@ -1,4 +1,4 @@
-"""Short-lived, membership-checked WebSocket access to private E2B desktops."""
+"""Short-lived, membership-checked WebSocket access to private E2B and Tenki desktops."""
 from __future__ import annotations
 
 import asyncio

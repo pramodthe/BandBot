@@ -26,15 +26,18 @@ async def build(state_file: Path):
                 cpu_cores=2, memory_mb=4096, disk_size_gb=20, max_duration=1800,
                 pause_retention=3600, allow_inbound=False, allow_outbound=True,
                 metadata={"purpose": "band-desktop-image", "build_id": state["build_id"]})
-            state.update(sandbox_id=vm.id, status="installing"); save()
+            state.update(sandbox_id=vm.id, status="installing")
+            save()
             await vm.wait_ready(180)
             await vm.fs.write_bytes("/home/tenki/build.sh", Path(__file__).with_name("tenki_image.sh").read_bytes())
             result = await vm.exec("bash", "/home/tenki/build.sh", timeout=900)
             if not result.ok:
-                state.update(status="install_failed", output=result.stderr_text[-4000:]); save()
+                state.update(status="install_failed", output=result.stderr_text[-4000:])
+                save()
                 raise RuntimeError("Desktop image build failed; inspect the private build state")
             image = await vm.snapshot(name="band-clean-desktop")
-            state.update(snapshot_id=image.id, status="waiting_for_durability"); save()
+            state.update(snapshot_id=image.id, status="waiting_for_durability")
+            save()
             await client.snapshots.wait_durable(image.id, timeout=600)
             state["status"] = "ready"
         finally:
@@ -53,4 +56,4 @@ if __name__ == "__main__":
         asyncio.run(build(args.state_file))
     except Exception as exc:
         print("Image build did not complete (" + type(exc).__name__ + "). Inspect its state file before retrying.")
-        raise SystemExit(1)
+        raise SystemExit(1) from None

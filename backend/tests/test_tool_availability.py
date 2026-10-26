@@ -10,9 +10,7 @@ from app.providers.contracts import ProviderError
 from app.providers.models import ProviderBlock
 from app.persistence.models import ChannelMember, db
 from app.runtime.availability import OPTIONAL_SERVICES, OptionalServicesMiddleware, capability_note
-from test_tasks import ScriptedModel, job, run_attempt
-
-
+from helpers import ScriptedModel, run_attempt
 @pytest.mark.parametrize('service', list(OPTIONAL_SERVICES))
 def test_disabled_optional_services_return_actionable_tool_results(service):
     request = SimpleNamespace(tool_call={'id': 'call-1', 'name': 'optional_tool'})

@@ -7,10 +7,8 @@ from sqlmodel import select
 from app import documents
 from app.persistence.models import Document, MessageComponent, db
 from app.runtime.tools.documents import document_tools
-from test_documents import space, upload, publish, sdk_mock  # noqa: F401
-from test_tasks import ScriptedModel, run_attempt
-
-
+from helpers import upload, publish, sdk_mock
+from helpers import ScriptedModel, run_attempt
 def test_full_spreadsheet_calculation_reaches_native_chart_and_survives_recovery(space, monkeypatch, tmp_path):
     import app.runtime.tools.documents as tools
     values = [(row * 7) % 101 - 35 for row in range(1, 1501)]

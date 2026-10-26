@@ -28,7 +28,7 @@ from app.tasks.usage import UsageRecorder, task_usage
 from app.tasks.worker import execute, process, record_activity, server_action
 from app.workspace.audit import record, summarize, summarize_args
 from app.workspace.permissions import ensure_owner, role_of
-from test_tasks import ScriptedModel, isolate_queue, job, teammate  # noqa: F401  (job is a fixture)
+from helpers import ScriptedModel, isolate_queue, teammate
 
 
 def _person(name: str, role: str | None = None, channel_id: int | None = None) -> tuple[User, dict]:

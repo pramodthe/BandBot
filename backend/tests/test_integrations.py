@@ -15,7 +15,7 @@ import app.runtime.tools.mcp as integrations
 from app.runtime.tools.mcp import integration_tools, load_servers
 from app.persistence.models import TaskApproval, ChannelMember, db, init_db
 from app.tasks import decide_approval
-from test_tasks import RecordingModel, ScriptedModel, job, run_attempt  # noqa: F401  (job is a fixture)
+from helpers import RecordingModel, ScriptedModel, run_attempt
 
 SERVER = Path(__file__).with_name("mcp_test_server.py")
 

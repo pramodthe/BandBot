@@ -9,11 +9,11 @@ from datetime import timedelta
 from email.message import EmailMessage
 from urllib.parse import urlparse
 
-from sqlmodel import Session, select
+from sqlmodel import select
 
-from app.auth import _aware, hash_password, revoke_user_sessions
+from app.auth import hash_password, revoke_user_sessions
 from app.config import settings
-from app.persistence.models import PasswordReset, RecoveryAddress, User, db, utcnow
+from app.persistence.models import PasswordReset, RecoveryAddress, User, as_utc, db, utcnow
 
 RESET_MINUTES = 15
 VERIFY_MINUTES = 60
@@ -36,7 +36,7 @@ def _hash(token: str) -> str:
 
 def _current(value) -> bool:
     """True while a stored expiry is still in the future. Naive database values are UTC."""
-    return value is not None and _aware(value) > utcnow()
+    return value is not None and as_utc(value) > utcnow()
 
 
 def _deliver(to: str, subject: str, text: str) -> None:
@@ -125,10 +125,3 @@ def reset_password(token: str, password: str) -> bool:
         user_id = user.id
     revoke_user_sessions(user_id)
     return True
-
-
-def verified_email(session: Session, user_id: int) -> str | None:
-    row = session.get(RecoveryAddress, user_id)
-    if row is None or row.verified_at is None:
-        return None
-    return row.email

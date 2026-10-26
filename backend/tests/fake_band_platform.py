@@ -19,11 +19,13 @@ class OfflineBandNetwork:
         network = self
         async def close(): pass
         async def profile(**kwargs):
-            if api_key in network.rejected: raise ValueError('Credential revoked')
+            if api_key in network.rejected:
+                raise ValueError('Credential revoked')
             network.calls.append(('management_identity', api_key, None))
             return Obj(data=Obj(id=owner, first_name=owner.title(), last_name='', handle=owner))
         async def register(*, agent, request_options):
-            if api_key in network.rejected: raise ValueError('Credential revoked')
+            if api_key in network.rejected:
+                raise ValueError('Credential revoked')
             assert request_options['max_retries'] == 0
             identity = 'managed-' + owner + '-' + uuid4().hex
             key = 'band_a_' + identity
@@ -57,7 +59,8 @@ class OfflineBandNetwork:
                 network.rooms[room] = {'members': {identity}, 'messages': [], 'owner': identity}
             return network.rooms[room]
         async def me(**kwargs):
-            if api_key in network.rejected: raise ValueError('Credential revoked')
+            if api_key in network.rejected:
+                raise ValueError('Credential revoked')
             network.calls.append(('identity', api_key, None))
             return Obj(data=Obj(id=identity, name='Band connection', handle=identity, owner_uuid='human-' + identity))
         async def create(*, chat, **kwargs):

@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from app.persistence.models import AgentProfile, AgentTask, AuditEvent, db
+from app.persistence.models import AgentProfile, AgentTask, AuditEvent, User, db
 
 HIDDEN = "[hidden]"
 SECRET_WORDS = ("apikey", "accesskey", "privatekey", "secret", "token", "passw", "pwd", "authorization", "cookie",
@@ -99,6 +99,13 @@ def record(action: str, /, *, actor_type: str, actor_name: str, actor_id: int | 
             own.commit()
         except IntegrityError:
             own.rollback()
+
+
+def record_human(user: User, action: str, /, *, channel_id: int | None = None, task_id: str | None = None,
+                 session: Session | None = None, **detail: Any) -> None:
+    """Add an event done by a signed-in person; see `record` for `session`."""
+    record(action, actor_type="human", actor_id=user.id, actor_name=user.display_name, channel_id=channel_id,
+           task_id=task_id, detail=detail, session=session)
 
 
 def record_agent(task: AgentTask, action: str, /, *, session: Session | None = None, ref: str | None = None,

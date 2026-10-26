@@ -11,7 +11,8 @@ from app.computer.tenki_home import home_script
 @pytest.fixture
 def home_disk(tmp_path, monkeypatch):
     home, disk = tmp_path / "home", tmp_path / "disk"
-    home.mkdir(); disk.mkdir()
+    home.mkdir()
+    disk.mkdir()
     # Windows test hosts may lack the developer-mode symlink privilege.
     probe = tmp_path / "link"
     try:
@@ -38,7 +39,8 @@ def test_home_and_gui_files_survive_replacement_without_overwriting_saved_settin
     (home / "notes.txt").write_text("user notes")
     prepare(home, disk)
     assert (disk / ".home" / "notes.txt").read_text() == "user notes"
-    for entry in home.iterdir(): entry.unlink()
+    for entry in home.iterdir():
+        entry.unlink()
     (home / ".config").mkdir()
     (home / ".config" / "settings").write_text("replacement image defaults")
     (home / ".config" / "new-default").write_text("additional default")
@@ -63,7 +65,8 @@ def test_failed_copy_keeps_original_and_never_publishes_partial_durable_file(hom
         raise OSError("simulated interrupted transfer")
     with monkeypatch.context() as patch:
         patch.setattr(shutil, "copy2", fail_copy)
-        with pytest.raises(OSError): prepare(home, disk)
+        with pytest.raises(OSError):
+            prepare(home, disk)
     assert source.read_text() == "complete original"
     assert not (disk / ".home" / "valuable.txt").exists()
     prepare(home, disk)
@@ -74,7 +77,8 @@ def test_home_migration_refuses_another_owners_disk(home_disk):
     home, disk = home_disk
     (disk / ".band-owner").write_text("another owner")
     (home / "proof.txt").write_text("untouched")
-    with pytest.raises(AssertionError, match="owner mismatch"): prepare(home, disk)
+    with pytest.raises(AssertionError, match="owner mismatch"):
+        prepare(home, disk)
     assert not (home / "proof.txt").is_symlink()
     assert (home / "proof.txt").read_text() == "untouched"
 

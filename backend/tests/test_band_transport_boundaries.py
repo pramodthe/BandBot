@@ -7,11 +7,9 @@ from app.auth import encrypt_secret
 from app.persistence.models import (BandRoomAccount, Channel, Message, UserBandAccount,
                                     UserBandConnection, db)
 from app.workspace.service import ServiceError
-from test_service import svc, _user
-
-
+from helpers import make_alice
 def test_agent_transport_does_not_decrypt_management_credentials(svc):
-    user = _user()
+    user = make_alice()
     with db() as session:
         session.add(UserBandAccount(user_id=user.id, band_user_id="old-human", secret_enc="cannot-decrypt"))
         session.add(UserBandConnection(user_id=user.id, band_agent_id="alice",
@@ -24,16 +22,18 @@ def test_agent_transport_does_not_decrypt_management_credentials(svc):
 
 
 def test_old_room_keeps_history_and_cannot_select_a_different_transport(svc):
-    user = _user()
+    user = make_alice()
     with db() as session:
         session.add(UserBandConnection(user_id=user.id, band_agent_id="alice",
                                        secret_enc=encrypt_secret("band_a_alice")))
         channel = Channel(name="older-room", band_room_id="old-native-room", created_by=user.id)
-        session.add(channel); session.flush()
+        session.add(channel)
+        session.flush()
         session.add(BandRoomAccount(channel_id=channel.id, band_user_id="old-human", user_id=user.id))
         message = Message(channel_id=channel.id, author_type="human", author_id=user.id,
                           author_name="Alice", content="Keep this history")
-        session.add(message); session.commit()
+        session.add(message)
+        session.commit()
     with pytest.raises(ServiceError, match="older channel"):
         asyncio.run(svc.room_org(channel.id))
     with db() as session:

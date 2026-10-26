@@ -1,6 +1,5 @@
 """Snapshot all services within the task/document creation transaction."""
 from copy import deepcopy
-from sqlmodel import select
 from app.persistence.models import AgentProfile, AgentRuntime, AgentConnection, TaskModel, db
 from app.providers.models import ServiceSelection, TaskServiceBinding, DocumentServiceBinding
 

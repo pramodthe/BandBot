@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,9 +68,29 @@ class Settings:
     agent_oauth_redirect_uri: str = _env("AGENT_OAUTH_REDIRECT_URI", "http://127.0.0.1:8000/auth/callback")
     # JSON of USD per million tokens. Empty means prices are unknown, never free.
     model_prices: str = _env("MODEL_PRICES")
+    # Browser tests answer without a model provider. A real OpenAI key disables the shortcut.
+    e2e_fake_agent: bool = _env("E2E_FAKE_AGENT") == "1"
+
+    def __post_init__(self) -> None:
+        if "://" in self.checkpoint_path:
+            raise SystemExit("AGENT_CHECKPOINT_PATH must be a local SQLite file path. "
+                             "Checkpoints are not stored in DATABASE_URL.")
 
 
 settings = Settings()
+
+
+def configure_logging() -> None:
+    """Shared log format for the API and worker processes."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for noisy in ("httpx", "httpx2"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def state_dir(url) -> Path:
+    """Directory for cross-process lock files: beside a SQLite database, else beside the checkpoints."""
+    database = url.database if url.drivername.startswith("sqlite") else None
+    return Path(database or settings.checkpoint_path).resolve().parent
 
 
 def is_postgres(url: str) -> bool:
@@ -84,15 +105,6 @@ def sqlalchemy_url(url: str) -> str:
         return "postgresql+psycopg://" + url.removeprefix("postgres://")
     if url.startswith("postgresql://"):
         return "postgresql+psycopg://" + url.removeprefix("postgresql://")
-    return url
-
-
-def postgres_conninfo(url: str) -> str:
-    """psycopg accepts a libpq URL, including one copied from SQLAlchemy."""
-    if url.startswith("postgresql+psycopg://"):
-        return "postgresql://" + url.removeprefix("postgresql+psycopg://")
-    if url.startswith("postgres://"):
-        return "postgresql://" + url.removeprefix("postgres://")
     return url
 
 

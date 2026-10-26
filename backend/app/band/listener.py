@@ -7,7 +7,6 @@ from typing import Protocol
 
 from band import Agent
 from band.core.simple_adapter import SimpleAdapter
-from band.client.rest import DEFAULT_REQUEST_OPTIONS, AsyncRestClient, aclose_rest_client
 
 from app.auth import decrypt_secret
 from app.config import settings
@@ -20,17 +19,6 @@ from app.tasks.teammates import link_outside_reply, outside_reply
 logger = logging.getLogger(__name__)
 
 class AgentSink(Protocol):
-    async def agent_message(
-        self,
-        profile_id: int,
-        room_id: str,
-        content: str,
-        mentions: list[str],
-        band_message_id: str | None,
-    ) -> None: ...
-
-    async def agent_typing(self, profile_id: int, room_id: str, active: bool) -> None: ...
-
     async def agent_status(self, profile_id: int, state: str, error: str | None) -> None: ...
 
 
@@ -179,19 +167,3 @@ class AgentManager:
 
     async def stop_all(self) -> None:
         await asyncio.gather(*(self.stop(pid) for pid in list(self._running)))
-
-
-@dataclass
-class BandIdentity:
-    id: str
-    name: str
-    handle: str
-
-
-async def fetch_identity(api_key: str) -> BandIdentity:
-    client = AsyncRestClient(api_key=api_key, base_url=settings.band_rest_url)
-    try:
-        me = (await client.agent_api_identity.get_agent_me(request_options=DEFAULT_REQUEST_OPTIONS)).data
-        return BandIdentity(id=me.id, name=me.name, handle=me.handle or "")
-    finally:
-        await aclose_rest_client(client)

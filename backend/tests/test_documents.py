@@ -6,76 +6,16 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import select
 
 from app import documents
-from app.auth import encrypt_secret, issue_token
-from app.main import app
 from app.openai_provider import LegacyCheckpoint, configuration, migrate_profiles, pin_task
-from app.persistence.models import (AgentProfile, AgentTask, Budget, Channel, ChannelMember, DirectMessage, Document,
-    DocumentCollection, DocumentUsage, Message, OpenAISettings, TaskModel, User,
-    WorkspaceRole, db, init_db)
+from app.persistence.models import (AgentProfile, AgentTask, Budget, ChannelMember, DirectMessage, Document,
+    DocumentCollection, DocumentUsage, Message, OpenAISettings, TaskModel, db)
 from app.runtime.tools.documents import document_tools
 from app.tasks.usage import over_budget
-
-
-@pytest.fixture
-def space(monkeypatch):
-    init_db()
-    from app.providers.models import ServiceSelection
-    with db() as session:
-        selection = session.get(ServiceSelection, "workspace")
-        original_bindings = selection.bindings
-        selection.bindings = {**selection.bindings, "llm": {"legacy": True, "provider": "openai"}, "retrieval": {"legacy": True, "provider": "openai"},
-                              "document_analysis": {"legacy": True, "provider": "openai"}}
-        session.add(selection); session.commit()
-    uid = uuid4().hex
-    with db() as session:
-        for row in session.exec(select(OpenAISettings)).all():
-            session.delete(row)
-        user = User(username=uid, display_name="Document tester", password_hash="unused")
-        other = User(username=uid + "other", display_name="Other", password_hash="unused")
-        agent = AgentProfile(name="DocAgent" + uid[:6], band_agent_id=uid, band_api_key_enc=encrypt_secret("offline"))
-        channel = Channel(name=uid)
-        session.add_all([user, other, agent, channel])
-        session.flush()
-        session.add_all([ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id),
-                         ChannelMember(channel_id=channel.id, member_type="agent", member_id=agent.id),
-                         WorkspaceRole(user_id=user.id, role="admin")])
-        task = AgentTask(id=uid, source_key=uid, channel_id=channel.id, agent_id=agent.id, room_id="", prompt="Read files")
-        session.add(task)
-        session.commit()
-    with TestClient(app) as api:
-        yield NS(api=api, channel=channel, user=user, other=other, agent=agent, task=task,
-                 auth={"Authorization": "Bearer " + issue_token(user.id)},
-                 other_auth={"Authorization": "Bearer " + issue_token(other.id)})
-    with db() as session:
-        for doc in session.exec(select(Document).where(Document.channel_id == channel.id)).all():
-            documents.path_for(doc).unlink(missing_ok=True)
-            session.delete(doc)
-        selection = session.get(ServiceSelection, "workspace")
-        selection.bindings = original_bindings
-        session.add(selection)
-        session.delete(session.get(AgentTask, task.id))
-        for row in session.exec(select(OpenAISettings)).all():
-            session.delete(row)
-        session.commit()
-
-
-def upload(space, name="notes.txt", data=b"Project Amber: launch date is 12 December. Budget 1234."):
-    response = space.api.post(f"/api/channels/{space.channel.id}/documents", params={"name": name},
-                              content=data, headers=space.auth)
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def publish(space, doc):
-    response = space.api.post(f"/api/channels/{space.channel.id}/messages", headers=space.auth,
-                             json={"content": "", "attachment_ids": [doc["id"]]})
-    assert response.status_code == 200, response.text
-    return response.json()
+from helpers import publish, sdk_mock, upload
 
 
 def test_staged_upload_publish_is_atomic_and_files_only_messages_work(space):
@@ -162,22 +102,6 @@ def test_word_and_spreadsheet_extraction_has_source_locations(space):
     with db() as session:
         units = documents.extract(session.get(Document, doc["id"]))
     assert "1500" in units[-1]["text"] and units[-1]["location"].startswith("Sales, rows")
-
-
-def sdk_mock():
-    sdk = NS()
-    sdk.files = NS(create=AsyncMock(side_effect=[NS(id="original"), NS(id="index")]), delete=AsyncMock())
-    sdk.vector_stores = NS(create=AsyncMock(return_value=NS(id="vector")), files=NS(
-        create_and_poll=AsyncMock(), retrieve=AsyncMock(return_value=NS(status="completed"))), search=AsyncMock())
-    sdk.responses = NS(create=AsyncMock(return_value=NS(id="response", output_text="SCANNED INVOICE TOTAL 1234",
-        usage=NS(input_tokens=30, output_tokens=10, total_tokens=40), status="completed", output=[])))
-    wrapper = NS()
-    class Context:
-        async def __aenter__(self): return sdk
-        async def __aexit__(self, *args): pass
-    wrapper.client = Context
-    wrapper.sdk = sdk
-    return wrapper
 
 
 def test_scan_ingestion_retries_reuse_file_ids_and_count_usage(space, monkeypatch):

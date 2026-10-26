@@ -16,7 +16,7 @@ from app.auth import encrypt_secret
 from app.computer import release_control, save_sandbox, take_control
 from app.main import app
 from app.persistence.models import ChannelMember, ChannelPolicy, ComputerConnection, DirectMessage, db
-from test_computer import desktop_job  # noqa: F401 - shared isolated task fixture
+
 
 
 def test_e2b_create_is_private_internet_enabled_and_pauses_on_timeout(monkeypatch):

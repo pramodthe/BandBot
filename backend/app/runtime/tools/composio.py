@@ -10,7 +10,6 @@ from uuid import uuid4
 import httpx
 from sqlmodel import select
 
-from app.config import settings
 from app.providers.integrations import api_key as provider_api_key, selected_composio
 from app.persistence.models import AgentPluginAccess, ComposioSession, db
 
@@ -58,8 +57,14 @@ def configured() -> bool:
     return bool(provider_api_key())
 
 
-def trusted_mcp_url(value: str) -> bool:
-    return _trusted(value)
+def trusted_url(value: str) -> bool:
+    """Only HTTPS URLs on composio.dev may receive the workspace's Composio key."""
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and (host == "composio.dev" or host.endswith(".composio.dev"))
 
 
 def normalize_slugs(slugs: list[str]) -> list[str]:
@@ -208,7 +213,7 @@ async def authorization_link(slug: str) -> str:
                            json_body={"toolkit": slug})
     body = _json(response, "Composio authorization failed")
     url = body.get("redirect_url") if isinstance(body, dict) else None
-    if not isinstance(url, str) or not _trusted(url):
+    if not isinstance(url, str) or not trusted_url(url):
         raise ComposioError("Composio returned an untrusted authorization link")
     return url
 
@@ -305,7 +310,7 @@ def _session_body(body: Any) -> dict[str, str] | None:
     session_id = body.get("session_id")
     mcp = body.get("mcp") if isinstance(body.get("mcp"), dict) else {}
     url = mcp.get("url")
-    if not isinstance(session_id, str) or not session_id or not isinstance(url, str) or not trusted_mcp_url(url):
+    if not isinstance(session_id, str) or not session_id or not isinstance(url, str) or not trusted_url(url):
         return None
     config = body.get("config") if isinstance(body.get("config"), dict) else {}
     user_id = config.get("user_id")
@@ -406,13 +411,6 @@ def _check_slug(slug: str) -> None:
         raise ComposioError("Unknown plugin", 422)
 
 
-def _trusted(value: str) -> bool:
-    try:
-        parsed = urlparse(value)
-    except ValueError:
-        return False
-    host = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and (host == "composio.dev" or host.endswith(".composio.dev"))
 
 
 def _public(text: str) -> str:

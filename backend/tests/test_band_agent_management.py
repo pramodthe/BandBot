@@ -8,13 +8,10 @@ import app.api.http as http
 import app.api.people as people
 import app.workspace.service as service_module
 from app.auth import decrypt_secret
-from app.band.listener import BandIdentity
-from app.persistence.models import (AgentProfile, AgentTask, BandAgentOwner, Channel, Message,
-                                    User, UserBandAccount, UserBandConnection, db)
+from app.band.platform import BandIdentity
+from app.persistence.models import (AgentProfile, AgentTask, BandAgentOwner, User, UserBandAccount, UserBandConnection, db)
 from app.tasks.queue import next_task
 from app.tasks.worker import deliver, process
-from test_service import svc
-
 
 @pytest.fixture
 def management_app(svc, monkeypatch, offline_band_platform):
@@ -61,7 +58,8 @@ def test_local_signup_and_shared_human_chat_need_no_band_key(management_app):
         sent = client.post(f"/api/channels/{channel['id']}/messages", headers=a, json={'content': 'Hello Bob'})
         assert sent.status_code == 200
         event = socket.receive_json()
-        while event['type'] != 'message': event = socket.receive_json()
+        while event['type'] != 'message':
+            event = socket.receive_json()
         assert event['message']['content'] == 'Hello Bob'
     assert network.calls == []
     assert 'Hello Bob' in client.get(f"/api/channels/{channel['id']}/messages", headers=b).text
@@ -109,7 +107,8 @@ def test_native_agent_works_in_local_channel_without_exporting_human_chat(manage
     assert task.agent_id == created.json()['id'] and task.room_id == ''
     async def execute(task, saver): return 'A local draft.'
     asyncio.run(process(task, None, executor=execute))
-    with db() as session: finished = session.get(AgentTask, task.id)
+    with db() as session:
+        finished = session.get(AgentTask, task.id)
     asyncio.run(deliver(finished))
     assert 'A local draft.' in client.get(f"/api/channels/{channel['id']}/messages", headers=headers).text
     assert all(call[0] in {'management_identity', 'register'} for call in network.calls)

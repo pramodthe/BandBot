@@ -5,15 +5,14 @@ import asyncio
 import json
 import re
 import shutil
-from datetime import timedelta, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 import httpx
-from sqlmodel import select
 
 from app.auth import decrypt_secret, encrypt_secret
 from app.config import settings
-from app.persistence.models import AgentConnection, AgentRuntime, AgentTask, TaskModel, db, utcnow
+from app.persistence.models import AgentConnection, AgentRuntime, AgentTask, TaskModel, as_utc, db, utcnow
 
 TOKEN_URL = "https://auth.openai.com/api/accounts/oauth/token"
 RESOURCE = "https://api.openai.com/v1"
@@ -140,4 +139,4 @@ def pin_runtime(task: AgentTask, profile, runtime: AgentRuntime) -> str:
 
 
 def unexpired(at) -> bool:
-    return at.replace(tzinfo=timezone.utc) > utcnow() - timedelta(minutes=10)
+    return as_utc(at) > utcnow() - timedelta(minutes=10)

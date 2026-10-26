@@ -17,10 +17,8 @@ from app.persistence.models import ChannelMember, Document, TaskDocument, TaskDo
 from app.runtime.generated_files import GeneratedFilesMiddleware
 from app.runtime.harness import build_harness
 from app.tasks.worker import execute
-from test_documents import space, sdk_mock, upload, publish  # noqa: F401
-from test_tasks import ScriptedModel
-
-
+from helpers import sdk_mock, upload, publish
+from helpers import ScriptedModel
 ANNOTATION = {"type": "container_file_citation", "container_id": "private-container",
               "file_id": "private-file", "filename": "sales-chart.png", "start_index": 0, "end_index": 0}
 

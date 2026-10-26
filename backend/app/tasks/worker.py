@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import sys
 from pathlib import Path
@@ -16,12 +15,14 @@ from sqlmodel import select
 from sqlalchemy import delete, update
 
 from app.auth import decrypt_secret
-from app.config import settings
+from app.band.platform import NO_RETRY
+from app.config import configure_logging, settings
 from app import documents
 from app.openai_provider import LegacyCheckpoint, migrate_profiles, pin_task
 from app.runtime.harness import build_harness
 from app.runtime.tools.mcp import integration_tools
 from app.computer import TaskComputer
+from app.providers.contracts import ProviderError
 from app.persistence.models import (AgentProfile, AgentTask, Message, MessageComponent, MessageDraft, db, init_db,
                                     utcnow)
 from app.tasks.drafts import Draft, answer_text, clear_draft
@@ -99,8 +100,7 @@ def config_for(task: AgentTask) -> dict:
 
 
 async def execute(task: AgentTask, checkpointer, *, factory=build_harness, computer: TaskComputer | None = None) -> str:
-    # Browser tests answer without a model provider. A real key disables the shortcut.
-    if os.getenv("E2E_FAKE_AGENT") == "1" and not settings.openai_api_key:
+    if settings.e2e_fake_agent and not settings.openai_api_key:
         return "I can help with that."
     from app.providers.context import task_services
     computer = computer or TaskComputer(task)
@@ -116,14 +116,13 @@ async def _execute_on_computer(task: AgentTask, checkpointer, *, factory, comput
     if profile is None:
         raise ValueError("Agent was deleted before this task could finish")
     from app.providers.bindings import bindings_for
-    identity = bindings_for(task).get("_agent", {}).get("band_id")
+    task_bindings = bindings_for(task)
+    identity = task_bindings.get("_agent", {}).get("band_id")
     if identity and identity != profile.band_agent_id:
-        from app.providers.contracts import ProviderError
         raise ProviderError("llm", "agent_identity", detail="This task belongs to a removed teammate. Its saved progress cannot run under another teammate's identity.")
     if factory is build_harness:
         from app.agent_connections import pin_runtime, runtime_for
-        from app.providers.bindings import bindings_for
-        binding = bindings_for(task).get("llm", {})
+        binding = task_bindings.get("llm", {})
         runtime = runtime_for(profile.id)
         if binding and not binding.get("legacy"):
             if binding.get("unresolved"):
@@ -233,6 +232,26 @@ def complete(task: AgentTask, result: str) -> None:
         session.commit()
 
 
+def _claim_delivery(task_id: str) -> bool:
+    """Move a completed reply from pending to sending; only one sender can win the claim."""
+    with db() as session:
+        claimed = session.exec(update(AgentTask).where(AgentTask.id == task_id,
+            AgentTask.status == "completed", AgentTask.delivery_status == "pending")
+            .values(delivery_status="sending", updated_at=utcnow()))
+        session.commit()
+        return bool(claimed.rowcount)
+
+
+def _record_band_id(task_id: str, band_message_id: str) -> None:
+    """Replace the local reply's placeholder id with its confirmed Band message id."""
+    with db() as session:
+        message = session.exec(select(Message).where(Message.band_message_id == f"task:{task_id}")).first()
+        if message:
+            message.band_message_id = band_message_id
+            session.add(message)
+            session.commit()
+
+
 async def deliver(task: AgentTask) -> None:
     """At-most-once send attempt; ambiguous sends require human review, never blind retry."""
     with db() as session:
@@ -260,25 +279,15 @@ async def deliver(task: AgentTask) -> None:
     if profile is None:
         update_task(task.id, delivery_status="agent_deleted")
         return
-    with db() as session:
-        claimed = session.exec(update(AgentTask).where(AgentTask.id == task.id,
-            AgentTask.status == "completed", AgentTask.delivery_status == "pending")
-            .values(delivery_status="sending", updated_at=utcnow()))
-        session.commit()
-        if not claimed.rowcount:
-            return
+    if not _claim_delivery(task.id):
+        return
     client = None
     try:
         client = AsyncRestClient(api_key=decrypt_secret(profile.band_api_key_enc), base_url=settings.band_rest_url)
         response = await client.agent_api_messages.create_agent_chat_message(
             task.room_id, message=ChatMessageRequest(content=task.result[:8000], mentions=[
-                ChatMessageRequestMentionsItem(id=task.reply_to)]), request_options={"max_retries": 0, "timeout_in_seconds": 30})
-        with db() as session:
-            message = session.exec(select(Message).where(Message.band_message_id == f"task:{task.id}")).first()
-            if message:
-                message.band_message_id = response.data.id
-                session.add(message)
-                session.commit()
+                ChatMessageRequestMentionsItem(id=task.reply_to)]), request_options=NO_RETRY)
+        _record_band_id(task.id, response.data.id)
         update_task(task.id, delivery_status="sent")
     except Exception:
         logger.exception("Band delivery outcome uncertain for task %s; local answer retained", task.id)
@@ -291,27 +300,18 @@ async def deliver(task: AgentTask) -> None:
 async def deliver_platform(task, profile, platform):
     from app.band.connections import platform_client
     from band_rest.types import ChatEventRequest
-    with db() as session:
-        claimed = session.exec(update(AgentTask).where(AgentTask.id == task.id,
-            AgentTask.status == "completed", AgentTask.delivery_status == "pending").values(delivery_status="sending", updated_at=utcnow()))
-        session.commit()
-        if not claimed.rowcount:
-            return
+    if not _claim_delivery(task.id):
+        return
     try:
         async with platform_client(platform.user_id, identity=platform.band_agent_id) as client:
             content = f"**{profile.name}:** {task.result[:8000]}"
-            options = {"max_retries": 0, "timeout_in_seconds": 30}
             if task.reply_to and task.reply_to != platform.band_agent_id:
                 response = await client.agent_api_messages.create_agent_chat_message(task.room_id,
-                    message=ChatMessageRequest(content=content, mentions=[ChatMessageRequestMentionsItem(id=task.reply_to)]), request_options=options)
+                    message=ChatMessageRequest(content=content, mentions=[ChatMessageRequestMentionsItem(id=task.reply_to)]), request_options=NO_RETRY)
             else:
                 response = await client.agent_api_events.create_agent_chat_event(task.room_id,
-                    event=ChatEventRequest(content=content, message_type="task", metadata={"source": "band_bots", "task_id": task.id}), request_options=options)
-        with db() as session:
-            message = session.exec(select(Message).where(Message.band_message_id == f"task:{task.id}")).first()
-            if message:
-                message.band_message_id = response.data.id
-                session.add(message); session.commit()
+                    event=ChatEventRequest(content=content, message_type="task", metadata={"source": "band_bots", "task_id": task.id}), request_options=NO_RETRY)
+        _record_band_id(task.id, response.data.id)
         update_task(task.id, delivery_status="sent")
     except Exception:
         # Preserve the committed app result and never silently select another account.
@@ -348,7 +348,6 @@ async def process(task: AgentTask, saver, *, executor=execute) -> None:
         clear_draft(task.id)
         stop_for_budget(task, spent.reason)
     except LegacyCheckpoint:
-        from app.providers.contracts import ProviderError
         from app.providers.errors import block
         block(task, ProviderError("llm", "legacy_checkpoint", detail="The original provider binding is ambiguous. Start a linked new task; saved progress is preserved."))
         clear_draft(task.id)
@@ -385,7 +384,7 @@ def _lock_exclusively(lock) -> None:
 
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        raise SystemExit("A worker already owns this checkpoint file")
+        raise SystemExit("A worker already owns this checkpoint file") from None
 
 
 async def work() -> None:
@@ -403,13 +402,6 @@ async def work() -> None:
         recover_tasks()
         documents.recover_jobs()
         clear_draft()
-        # A crash between send and receipt cannot safely be retried.
-        with db() as session:
-            for task in session.exec(select(AgentTask).where(AgentTask.delivery_status == "sending")).all():
-                task.delivery_status = "unknown"
-                task.updated_at = utcnow()
-                session.add(task)
-            session.commit()
         async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
             await saver.setup()
             logger.info("Deep Agents worker ready (up to %d concurrent tasks)", settings.worker_concurrency)
@@ -482,8 +474,8 @@ async def run_queue(saver, *, concurrency: int, executor=execute, stop_when_idle
         await asyncio.gather(*jobs, return_exceptions=True)
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+def main() -> None:
+    configure_logging()
     try:
         asyncio.run(work())
     except (KeyboardInterrupt, asyncio.CancelledError):

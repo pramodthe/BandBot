@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace as Obj
 from uuid import uuid4
-from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,13 +12,12 @@ import app.api.http as http
 import app.api.people as people
 import app.workspace.service as service_module
 from app.auth import decrypt_secret, encrypt_secret
-from app.band.listener import BandIdentity, QueuedAgentAdapter
-from app.band.platform import AgentPlatformOrg, Owner
-from app.persistence.models import (AgentConnection, AgentProfile, AgentTask, BandAgentOwner, ChannelMember, User,
-                                    Message, UserBandAccount, UserBandConnection, BandPlatformRoom, PlatformTeammate, db)
+from app.band.platform import BandIdentity
+from app.band.platform import AgentPlatformOrg
+from app.persistence.models import (AgentConnection, AgentProfile, AgentTask, BandAgentOwner, ChannelMember, UserBandAccount, UserBandConnection, db)
 from app.tasks.queue import hand_off
 from app.workspace.events import EventBus
-from test_service import svc  # Reuse the isolated offline service/database fixture.
+
 
 
 @pytest.fixture
@@ -29,7 +27,7 @@ def social(svc, monkeypatch):
     class PersonalOrg(AgentPlatformOrg):
         async def connect(self):
             identity = self.identity
-            self.owner = Owner(id=identity, name=identity.title(), handle=identity)
+            self.owner = BandIdentity(id=identity, name=identity.title(), handle=identity)
             self._rest = object()
 
         async def close(self):
@@ -98,7 +96,7 @@ def test_agent_management_account_is_separate_from_agent_transport(social):
     with db() as session:
         assert session.get(UserBandAccount, alice) is None
     channel = client.post("/api/channels", json={"name": "personal-replies"}, headers=a).json()
-    assert svc.message_reply_to(alice, channel["id"]) == "alice"
+    assert svc.message_reply_to(channel["id"]) == "alice"
     assert asyncio.run(svc.room_org(channel["id"])).identity == "alice"
 
 

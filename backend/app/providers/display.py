@@ -7,7 +7,7 @@ def model_reference(agent_id=None):
         reference = deepcopy(selected(session, agent_id).get("llm"))
         if not reference or reference.get("disabled"):
             return None
-        if reference and agent_id and reference.get("provider") == "openai":
+        if agent_id and reference.get("provider") == "openai":
             from app.persistence.models import AgentProfile
             from app.providers.models import ProviderRevision, ServiceSelection
             revision = session.get(ProviderRevision, (reference.get("connection_id"), reference.get("revision")))
@@ -21,7 +21,8 @@ def configured():
     from app.providers.connections import resolve
     try:
         binding = model_reference()
-        if not binding: return False
+        if not binding:
+            return False
         resolve(binding, "llm")
         return True
     except Exception:
@@ -46,7 +47,8 @@ def model_catalog():
     from app.providers.models import ProviderRevision
     with db() as session:
         revision = session.get(ProviderRevision, (reference["connection_id"], reference["revision"]))
-    if not revision: return []
+    if not revision:
+        return []
     models = revision.verification.get("models", {})
     return [{"id": name, "label": name, "default": name == reference.get("model"), "provider": reference["provider"]}
         for name, capabilities in models.items() if capabilities.get("tools") and capabilities.get("vision")]

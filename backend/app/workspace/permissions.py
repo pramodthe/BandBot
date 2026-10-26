@@ -8,7 +8,6 @@ from sqlmodel import Session, select
 from app.persistence.models import ChannelPolicy, User, WorkspaceRole, utcnow
 
 ADMIN_ROLES = ("owner", "admin")
-POLICY_VALUES = ("members", "admins")
 
 
 def ensure_owner(session: Session) -> None:
@@ -30,10 +29,6 @@ def role_of(session: Session, user_id: int) -> str:
 
 def is_admin(session: Session, user_id: int) -> bool:
     return role_of(session, user_id) in ADMIN_ROLES
-
-
-def can_connect_agents(session: Session, user_id: int) -> bool:
-    return session.get(User, user_id) is not None
 
 
 def workspace_roles(session: Session) -> dict[int, str]:

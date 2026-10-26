@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from app.auth import decrypt_secret
+from app.band.platform import NO_RETRY
 from app.config import settings
 from app.openai_provider import configuration
 from app.persistence.models import (AgentProfile, AgentTask, BandAgentOwner, DirectMessage, LocalTeammate, Message, OutsideAgent, OutsideHandoff,
@@ -249,7 +250,7 @@ async def ask_outside(task: AgentTask, outside: OutsideAgent, request: str, call
         response = await client.agent_api_messages.create_agent_chat_message(
             task.room_id, message=ChatMessageRequest(content=content, mentions=[
                 ChatMessageRequestMentionsItem(id=outside.band_id)]),
-            request_options={"max_retries": 0, "timeout_in_seconds": 30})
+            request_options=NO_RETRY)
         status, band_message_id = "sent", response.data.id
     except Exception:
         logger.exception("Outside hand-off from task %s may not have reached Band", task.id)

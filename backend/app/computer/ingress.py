@@ -1,19 +1,18 @@
 """Resolve only encrypted, provider-created endpoints. Never accept a client host."""
 import json
 import re
-from datetime import timezone
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from app.auth import decrypt_secret
-from app.persistence.models import ComputerConnection, ComputerEndpoint, db, utcnow
+from app.persistence.models import ComputerConnection, ComputerEndpoint, as_utc, db, utcnow
 
 
 def endpoint(key: str, sandbox_id: str, port: int):
     with db() as session:
         if key.startswith("tenki-"):
             row = session.get(ComputerEndpoint, (key, port))
-            if not row or row.sandbox_id != sandbox_id or row.expires_at.replace(tzinfo=timezone.utc) <= utcnow():
+            if not row or row.sandbox_id != sandbox_id or as_utc(row.expires_at) <= utcnow():
                 raise HTTPException(409, "Computer connection expired. Reconnect from the computer panel.")
             try:
                 data = json.loads(decrypt_secret(row.endpoint_enc))

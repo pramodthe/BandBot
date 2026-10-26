@@ -11,6 +11,7 @@ from app.auth import current_user
 from app.persistence.models import (Channel, ChannelInvitation, ChannelMember, ContactBlock, HumanDirectMessage,
                                     AppContact, AppContactRequest, PrivateConversation, User,
                                     db, get_session, utcnow)
+from app.workspace.access import is_blocked
 from app.workspace.events import bus
 from app.workspace.service import service
 
@@ -87,10 +88,6 @@ def require_app_contact(session: Session, first: int, second: int) -> None:
         raise HTTPException(403, "Send a contact request and wait for acceptance first")
 
 
-def is_blocked(session: Session, first: int, second: int) -> bool:
-    return session.get(ContactBlock, (first, second)) is not None or session.get(ContactBlock, (second, first)) is not None
-
-
 def messaging_blocked(session: Session, channel_id: int, user_id: int) -> bool:
     """Human direct messages stop when either person has blocked the other. Shared channels do not."""
     dm = session.get(HumanDirectMessage, channel_id)
@@ -103,6 +100,16 @@ def messaging_blocked(session: Session, channel_id: int, user_id: int) -> bool:
 def _refuse_blocked(session: Session, first: int, second: int) -> None:
     if is_blocked(session, first, second):
         raise HTTPException(403, "You can't contact this person")
+
+
+def _cancel_pending_requests(session: Session, first: int, second: int) -> None:
+    """Cancel contact requests still pending in either direction between two people."""
+    for row in session.exec(select(AppContactRequest).where(
+            ((AppContactRequest.requester_id == first) & (AppContactRequest.recipient_id == second))
+            | ((AppContactRequest.requester_id == second) & (AppContactRequest.recipient_id == first)),
+            AppContactRequest.status == "pending")).all():
+        row.status = "cancelled"
+        session.add(row)
 
 
 async def _notify(*user_ids: int) -> None:
@@ -144,7 +151,7 @@ def people(user: User = Depends(current_user), session: Session = Depends(get_se
 
 @router.post("/api/people/requests")
 async def request_contact(body: ContactBody, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             target = session.exec(select(User).where(User.username == body.handle.lstrip("@").lower())).first()
             if not target:
@@ -173,7 +180,7 @@ async def request_contact(body: ContactBody, user: User = Depends(current_user))
 
 @router.post("/api/people/requests/{request_id}/decision")
 async def decide_contact(request_id: str, body: DecisionBody, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             row = session.get(AppContactRequest, request_id)
             if not row or row.recipient_id != user.id:
@@ -193,7 +200,7 @@ async def decide_contact(request_id: str, body: DecisionBody, user: User = Depen
 
 @router.post("/api/people/requests/{request_id}/cancel")
 async def cancel_contact(request_id: str, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             row = session.get(AppContactRequest, request_id)
             if not row or row.requester_id != user.id:
@@ -213,7 +220,7 @@ async def human_dm(person_id: int, user: User = Depends(current_user)):
     if person_id == user.id:
         raise HTTPException(422, "Choose another person")
     pair = sorted([user.id, person_id])
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             target = session.get(User, person_id)
             if not target:
@@ -242,7 +249,7 @@ class InviteBody(BaseModel):
 
 @router.post("/api/channels/{channel_id}/invitations")
 async def invite_person(channel_id: int, body: InviteBody, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             scope = session.get(PrivateConversation, channel_id)
             if not scope or scope.owner_id != user.id or scope.kind != "channel":
@@ -291,7 +298,7 @@ def invitations(user: User = Depends(current_user), session: Session = Depends(g
 
 @router.post("/api/people/invitations/{invitation_id}/decision")
 async def decide_invitation(invitation_id: str, body: DecisionBody, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             row = session.get(ChannelInvitation, invitation_id)
             if not row or row.recipient_id != user.id:
@@ -316,7 +323,7 @@ async def decide_invitation(invitation_id: str, body: DecisionBody, user: User =
 
 @router.post("/api/people/invitations/{invitation_id}/withdraw")
 async def withdraw_invitation(invitation_id: str, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             row = session.get(ChannelInvitation, invitation_id)
             if not row or row.inviter_id != user.id:
@@ -333,19 +340,14 @@ async def withdraw_invitation(invitation_id: str, user: User = Depends(current_u
 
 @router.delete("/api/people/{person_id}")
 async def remove_contact(person_id: int, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             pair = tuple(sorted([user.id, person_id]))
             contact = session.get(AppContact, pair)
             if contact is None:
                 raise HTTPException(404, "Contact not found")
             session.delete(contact)
-            for row in session.exec(select(AppContactRequest).where(
-                    ((AppContactRequest.requester_id == user.id) & (AppContactRequest.recipient_id == person_id))
-                    | ((AppContactRequest.requester_id == person_id) & (AppContactRequest.recipient_id == user.id)),
-                    AppContactRequest.status == "pending")).all():
-                row.status = "cancelled"
-                session.add(row)
+            _cancel_pending_requests(session, user.id, person_id)
             session.commit()
         await _notify(user.id, person_id)
     return {"ok": True}
@@ -355,18 +357,13 @@ async def remove_contact(person_id: int, user: User = Depends(current_user)):
 async def block_person(person_id: int, user: User = Depends(current_user)):
     if person_id == user.id:
         raise HTTPException(422, "Choose another person")
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             if session.get(User, person_id) is None:
                 raise HTTPException(404, "Person not found")
             if session.get(ContactBlock, (user.id, person_id)) is None:
                 session.add(ContactBlock(blocker_id=user.id, blocked_id=person_id))
-            for row in session.exec(select(AppContactRequest).where(
-                    ((AppContactRequest.requester_id == user.id) & (AppContactRequest.recipient_id == person_id))
-                    | ((AppContactRequest.requester_id == person_id) & (AppContactRequest.recipient_id == user.id)),
-                    AppContactRequest.status == "pending")).all():
-                row.status = "cancelled"
-                session.add(row)
+            _cancel_pending_requests(session, user.id, person_id)
             session.commit()
         await _notify(user.id, person_id)
     return {"ok": True}
@@ -374,7 +371,7 @@ async def block_person(person_id: int, user: User = Depends(current_user)):
 
 @router.post("/api/people/{person_id}/unblock")
 async def unblock_person(person_id: int, user: User = Depends(current_user)):
-    async with service._dm_lock:
+    async with service.people_lock:
         with db() as session:
             row = session.get(ContactBlock, (user.id, person_id))
             if row is not None:

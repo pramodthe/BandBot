@@ -24,7 +24,7 @@ from app.runtime.tools import hosted
 from app.tasks import enqueue, hand_off, update_task
 from app.tasks.drafts import Draft, answer_text, save_draft
 from app.tasks.worker import complete, execute, process
-from test_tasks import ScriptedModel, job, teammate  # noqa: F401  (job is a fixture)
+from helpers import ScriptedModel, teammate
 
 CODE_BLOCKS = [
     {"type": "text", "text": "Let me compute that."},
@@ -281,7 +281,8 @@ def test_openai_code_interpreter_is_bound_when_enabled(tmp_path, monkeypatch, jo
                 with db() as session:
                     binding = session.get(TaskServiceBinding, attempt.id)
                     binding.bindings = {**binding.bindings, "llm": {"legacy": True, "provider": "openai"}}
-                    session.add(binding); session.commit()
+                    session.add(binding)
+                    session.commit()
                 return await run(attempt, saver, model)
         assert asyncio.run(scenario()) == "397.8"
         return model.bound

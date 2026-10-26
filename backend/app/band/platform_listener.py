@@ -1,8 +1,12 @@
 """One Agent SDK subscription per user's app connection; execution stays in the worker."""
 import asyncio
+import logging
+
 from band import Agent
 from band.core.simple_adapter import SimpleAdapter
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class PlatformAdapter(SimpleAdapter):
@@ -32,7 +36,7 @@ class PlatformListener:
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            logger.exception("Band platform listener for user %s stopped", self.user_id)
         if not self.closing:
             await self.service.platform_connection_failed(self.user_id, self.identity)
 

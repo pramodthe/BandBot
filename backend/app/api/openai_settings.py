@@ -1,24 +1,21 @@
 from __future__ import annotations
 
-import base64
-import io
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from openai import AsyncOpenAI
-from PIL import Image
 from pydantic import BaseModel, Field, SecretStr
 from sqlmodel import Session, select
 
+from app.api.deps import require_admin
 from app.auth import current_user, encrypt_secret
 from app.config import MODELS
 from app.openai_provider import configuration, model_catalog
 from app.persistence.models import AgentProfile, OpenAISettings, User, get_session
-from app.workspace.audit import record
+from app.workspace.audit import record_human
 from app.workspace.events import bus
-from app.workspace.permissions import is_admin
 
 router = APIRouter(prefix="/api/settings/openai")
+ADMIN_ONLY = "Only workspace admins can configure OpenAI"
 
 
 class SettingsBody(BaseModel):
@@ -27,14 +24,9 @@ class SettingsBody(BaseModel):
     default_model: str
 
 
-def require_admin(session, user):
-    if not is_admin(session, user.id):
-        raise HTTPException(403, "Only workspace admins can configure OpenAI")
-
-
 @router.get("")
 def get_settings(user: User = Depends(current_user), session: Session = Depends(get_session)):
-    require_admin(session, user)
+    require_admin(session, user, ADMIN_ONLY)
     key, models, default = configuration()
     return {"configured": bool(key), "models": models, "default_model": default, "suggested_models": MODELS}
 
@@ -51,7 +43,7 @@ async def validate_models(key: str, models: list[str]) -> None:
 
 @router.put("")
 async def save_settings(body: SettingsBody, user: User = Depends(current_user), session: Session = Depends(get_session)):
-    require_admin(session, user)
+    require_admin(session, user, ADMIN_ONLY)
     models = list(dict.fromkeys(m.strip() for m in body.models))
     if any(not re.fullmatch(r"[a-zA-Z0-9._:-]{1,120}", m) for m in models) or body.default_model not in models:
         raise HTTPException(422, "Choose a default from the allowed OpenAI models")
@@ -59,13 +51,13 @@ async def save_settings(body: SettingsBody, user: User = Depends(current_user), 
     key = body.api_key.get_secret_value().strip() if body.api_key else old_key
     if not key:
         raise HTTPException(422, "An OpenAI API key is required")
-    from app.providers.models import ServiceSelection
+    from app.providers.bindings import workspace_bindings
+    from app.providers.management import ConfigurationConflict, apply_selection, create_connection, rotate, validate_bindings
+    from app.providers.models import ProviderConnection, ProviderRevision, ServiceChange, ServiceSelection
+    from app.persistence.models import Document
     original_selection = session.get(ServiceSelection, "workspace")
     expected_version = original_selection.version if original_selection else 0
     await validate_models(key, models)
-    from app.providers.management import create_connection, rotate, apply_selection
-    from app.providers.models import ProviderConnection, ProviderRevision, ServiceSelection
-    from app.providers.bindings import workspace_bindings
     bindings = workspace_bindings(session)
     identity = bindings.get("llm", {}).get("connection_id")
     row = session.get(ProviderConnection, identity) if identity else None
@@ -83,11 +75,8 @@ async def save_settings(body: SettingsBody, user: User = Depends(current_user), 
     for service in ("llm", "document_analysis", "retrieval"):
         previous = bindings.get(service, {})
         if not previous or previous.get("connection_id") == row.id or previous.get("legacy"):
-            bindings[service] = reference if service != "retrieval" else {k:v for k,v in reference.items() if k != "model"}
+            bindings[service] = reference if service != "retrieval" else {k: v for k, v in reference.items() if k != "model"}
     current = session.get(ServiceSelection, "workspace")
-    from app.providers.management import ConfigurationConflict, validate_bindings
-    from app.providers.models import ServiceChange
-    from app.persistence.models import Document
     try:
         if (current.version if current else 0) != expected_version:
             raise ConfigurationConflict("Settings changed during verification. Reload and try again.")
@@ -103,8 +92,7 @@ async def save_settings(body: SettingsBody, user: User = Depends(current_user), 
         session.rollback()
         raise HTTPException(409 if isinstance(error, ConfigurationConflict) else 422, str(error)) from None
     session.merge(OpenAISettings(id=1, api_key_enc=encrypt_secret(key), models=models, default_model=body.default_model))
-    record("openai_settings_updated", actor_type="human", actor_id=user.id, actor_name=user.display_name,
-           detail={"models": models, "default_model": body.default_model}, session=session)
+    record_human(user, "openai_settings_updated", session=session, models=models, default_model=body.default_model)
     session.commit()
     await bus.publish({"type": "provider_settings_changed"})
     await bus.publish({"type": "openai_settings", "models": model_catalog(), "configured": True})

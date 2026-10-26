@@ -207,7 +207,8 @@ def document_tools(task):
                 return {"error": "Some documents are still processing"}
             from app.providers.document_analysis import analyze
             result = await analyze(task, docs, binding, question, calculate)
-            for doc in docs: source_used(doc.id)
+            for doc in docs:
+                source_used(doc.id)
             return result
         if any(not d.file_id for d in docs):
             return {"error": "Some documents are still processing or failed. Check their status first."}

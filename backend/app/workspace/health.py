@@ -1,13 +1,13 @@
 """Worker heartbeat and authenticated service status. Public health stays minimal."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlmodel import select
 
 from app.agent_connections import runtime_available
 from app.config import settings
-from app.persistence.models import (AgentConnection, AgentProfile, AgentRuntime, ConnectionHealth, User,
+from app.persistence.models import (as_utc, AgentConnection, AgentProfile, AgentRuntime, ConnectionHealth, User,
                                     WorkerHeartbeat, db, utcnow)
 
 _api_started_at: datetime | None = None
@@ -16,10 +16,6 @@ _api_started_at: datetime | None = None
 def mark_api_started() -> None:
     global _api_started_at
     _api_started_at = utcnow()
-
-
-def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def beat(status: str) -> None:
@@ -38,9 +34,9 @@ def worker_state(*, now: datetime | None = None, stale_seconds: int | None = Non
     grace = settings.worker_startup_grace if grace_seconds is None else grace_seconds
     with db() as session:
         row = session.get(WorkerHeartbeat, 1)
-    if row is not None and (moment - _aware(row.beat_at)).total_seconds() <= stale:
+    if row is not None and (moment - as_utc(row.beat_at)).total_seconds() <= stale:
         return "busy" if row.status == "busy" else "ready"
-    if _api_started_at is not None and (moment - _aware(_api_started_at)).total_seconds() <= grace:
+    if _api_started_at is not None and (moment - as_utc(_api_started_at)).total_seconds() <= grace:
         return "starting"
     return "unavailable"
 

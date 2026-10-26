@@ -24,14 +24,12 @@ from app.config import settings
 from app.main import app
 from app.persistence.models import (AgentProfile, AgentTask, Channel, ChannelMember, ComputerDisk,
                                     ComputerScope, ComputerEndpoint, DirectMessage, PrivateConversation,
-                                    TaskComputerBinding, db, utcnow)
+                                    db, utcnow)
 from app.tasks import enqueue
-from test_computer import desktop_job
+
 from app.computer.e2b import DesktopOptions
 from app.computer.tenki import TenkiDesktopClient, WORKSPACE
-from test_tenki import fake_sdk, fake_remote, config
-
-
+from helpers import fake_tenki_sdk, fake_tenki_remote, tenki_config
 @pytest.fixture
 def shared_jobs(desktop_job, monkeypatch):
     import app.computer.desktop as desktop
@@ -46,14 +44,17 @@ def shared_jobs(desktop_job, monkeypatch):
     with db() as session:
         other = AgentProfile(name="Other", band_agent_id=uuid4().hex, band_api_key_enc=encrypt_secret("offline"))
         channel = Channel(name=uuid4().hex)
-        session.add_all([other, channel]); session.commit()
+        session.add_all([other, channel])
+        session.commit()
         session.add_all([
             ChannelMember(channel_id=task.channel_id, member_type="agent", member_id=agent.id),
             ChannelMember(channel_id=channel.id, member_type="agent", member_id=other.id),
             ChannelMember(channel_id=channel.id, member_type="human", member_id=user.id),
         ])
         scope = session.get(ComputerScope, f"agent-{agent.band_agent_id}-channel-{task.channel_id}")
-        scope.provider = "tenki"; session.add(scope); session.commit()
+        scope.provider = "tenki"
+        session.add(scope)
+        session.commit()
     first = enqueue(agent_id=agent.id, channel_id=task.channel_id, room_id=task.room_id,
                     source_id=uuid4().hex, prompt="First shared task")
     second = enqueue(agent_id=other.id, channel_id=channel.id, room_id="offline",
@@ -74,13 +75,19 @@ def test_agents_across_channels_reuse_one_vm_and_disk_identity(shared_jobs):
         assert a.sandbox.id == b.sandbox.id == sandbox.id
         # A finishing task must not pause another agent's running task.
         with db() as session:
-            row = session.get(AgentTask, second.id); row.status = "running"; session.add(row); session.commit()
+            row = session.get(AgentTask, second.id)
+            row.status = "running"
+            session.add(row)
+            session.commit()
         await a.close()
         sandbox.stop.assert_not_awaited()
         with pytest.raises(ComputerUnavailable, match="using the shared computer"):
             await a.close(force=True)
         with db() as session:
-            row = session.get(AgentTask, second.id); row.status = "completed"; session.add(row); session.commit()
+            row = session.get(AgentTask, second.id)
+            row.status = "completed"
+            session.add(row)
+            session.commit()
         await b.close()
         sandbox.stop.assert_awaited_once()
     asyncio.run(scenario())
@@ -96,7 +103,8 @@ def test_simultaneous_agents_cannot_replay_the_same_desktop_frame(shared_jobs):
             b.action(screen_id=frame, action="type", text="second"), return_exceptions=True)
         assert sum(isinstance(result, ComputerUnavailable) for result in results) == 1
         assert sandbox.computer_use.keyboard.type.await_count == 1
-        await a.detach(); await b.detach()
+        await a.detach()
+        await b.detach()
     asyncio.run(scenario())
 
 
@@ -135,17 +143,21 @@ def test_another_agents_file_read_does_not_disconnect_live_viewer(shared_jobs, m
         sandbox.start.side_effect = reconnect
         await b.list_files("/")
         assert viewer.resolve_viewer(token)[0] == "shared.example"
-        await a.detach(); await b.detach()
+        await a.detach()
+        await b.detach()
     asyncio.run(scenario())
 
 
 def test_private_conversations_never_bind_to_workspace_computer(shared_jobs):
     first, _, a, _, _, _, user = shared_jobs
     with db() as session:
-        dm = Channel(name=uuid4().hex); private = Channel(name=uuid4().hex)
-        session.add_all([dm, private]); session.commit()
+        dm = Channel(name=uuid4().hex)
+        private = Channel(name=uuid4().hex)
+        session.add_all([dm, private])
+        session.commit()
         session.add(DirectMessage(channel_id=dm.id, agent_id=first.agent_id, user_id=user.id))
-        session.add(PrivateConversation(channel_id=private.id, owner_id=user.id)); session.commit()
+        session.add(PrivateConversation(channel_id=private.id, owner_id=user.id))
+        session.commit()
     for channel in (dm, private):
         task = enqueue(agent_id=first.agent_id, channel_id=channel.id, room_id="offline",
                        source_id=uuid4().hex, prompt="Private work")
@@ -158,12 +170,14 @@ def test_private_marker_and_task_created_atomically_never_use_shared_computer(sh
     first, _, shared, _, _, _, user = shared_jobs
     with db() as session:
         channel = Channel(name=uuid4().hex)
-        session.add(channel); session.commit()
+        session.add(channel)
+        session.commit()
         marker = (DirectMessage(channel_id=channel.id, agent_id=first.agent_id, user_id=user.id)
                   if kind == "dm" else PrivateConversation(channel_id=channel.id, owner_id=user.id))
         task = AgentTask(id=uuid4().hex, source_key=uuid4().hex, agent_id=first.agent_id,
                          channel_id=channel.id, room_id="offline", prompt="Atomic private task")
-        session.add_all([marker, task]); session.commit()
+        session.add_all([marker, task])
+        session.commit()
     assert computer_key(task) != shared.key
     assert computer_key(task).startswith("tenki-agent-")
 
@@ -171,17 +185,18 @@ def test_private_marker_and_task_created_atomically_never_use_shared_computer(sh
 def test_membership_removal_blocks_shared_computer_attachment(shared_jobs):
     first, _, a, _, client, _, _ = shared_jobs
     with db() as session:
-        session.delete(session.get(ChannelMember, (first.channel_id, "agent", first.agent_id))); session.commit()
+        session.delete(session.get(ChannelMember, (first.channel_id, "agent", first.agent_id)))
+        session.commit()
     with pytest.raises(ComputerUnavailable):
         asyncio.run(a.screenshot())
     client.create.assert_not_awaited()
 
 
 def test_profiles_show_same_shared_computer_and_historical_task_stays_e2b(shared_jobs):
-    import app.api.http as http
     first, second, a, b, _, _, user = shared_jobs
     async def scenario():
-        await a.screenshot(); await a.detach()
+        await a.screenshot()
+        await a.detach()
     asyncio.run(scenario())
     with TestClient(app) as client:
         auth = {"Authorization": "Bearer " + issue_token(user.id)}
@@ -214,8 +229,9 @@ def test_register_access_creates_only_completed_tasks_and_deduplicates(shared_jo
 
 def test_shared_provider_mounts_workspace_owned_volume_without_agent_identity(shared_jobs):
     _, _, a, b, _, _, _ = shared_jobs
-    sdk = fake_sdk(); sdk.create.return_value = fake_remote()
-    driver = TenkiDesktopClient(config=config(), sdk=sdk)
+    sdk = fake_tenki_sdk()
+    sdk.create.return_value = fake_tenki_remote()
+    driver = TenkiDesktopClient(config=tenki_config(), sdk=sdk)
     driver.volume = AsyncMock(return_value=SimpleNamespace(id="shared-disk", active_attachments=[]))
     asyncio.run(driver.create(DesktopOptions(a.sandbox_name(), "unused", a.labels(), 1200)))
     driver.volume.assert_awaited_once_with(a.labels()["workspace"] + ":" + a.key)
@@ -231,7 +247,8 @@ def test_removing_one_teammate_keeps_workspace_computer_and_disk(shared_jobs):
     from app.computer.desktop import workspace_id
     _, second, a, b, _, _, _ = shared_jobs
     async def scenario():
-        await a.screenshot(); await a.detach()
+        await a.screenshot()
+        await a.detach()
         with db() as session:
             agent = session.get(AgentProfile, second.agent_id)
             disk_key = workspace_id() + ":" + a.key
@@ -244,7 +261,8 @@ def test_removing_one_teammate_keeps_workspace_computer_and_disk(shared_jobs):
         with pytest.raises(ComputerUnavailable):
             await b.screenshot()
         # An existing teammate still attaches to the same workspace computer.
-        await a.screenshot(); await a.detach()
+        await a.screenshot()
+        await a.detach()
     asyncio.run(scenario())
 
 
@@ -273,14 +291,16 @@ sys.stdin.read()
                 async with lock:
                     pytest.fail("A second process acquired the occupied computer")
         asyncio.run(blocked())
-        child.kill(); child.wait(timeout=5)
+        child.kill()
+        child.wait(timeout=5)
         async def available():
             async with lock:
                 pass
         asyncio.run(available())
     finally:
         if child.poll() is None:
-            child.kill(); child.wait(timeout=5)
+            child.kill()
+            child.wait(timeout=5)
         child.communicate(timeout=5)
 
 

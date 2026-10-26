@@ -18,7 +18,7 @@ from app.persistence.models import AuditEvent, WorkspaceRole, db
 from app.runtime.harness import build_harness
 from app.runtime.skills import ReadOnlySkillsBackend, skills_backend
 from app.workspace.skills import SkillContent, SkillError, create_skill, enabled_skill_files, parse_bundle, parse_upload
-from test_tasks import RecordingModel, job  # noqa: F401
+from helpers import RecordingModel
 
 
 @pytest.fixture

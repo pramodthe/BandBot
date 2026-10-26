@@ -8,11 +8,11 @@ from sqlmodel import select
 import app.runtime.harness as harness
 from app.auth import issue_token, encrypt_secret
 from app.main import app
-from app.persistence.models import AgentPersona, AgentProfile, AgentTask, Channel, ChannelMember, User, UserBandConnection, PlatformTeammate, WorkspaceRole, db, init_db
+from app.persistence.models import AgentPersona, AgentProfile, AgentTask, Channel, ChannelMember, User, UserBandConnection, WorkspaceRole, db, init_db
 from app.runtime.tools.composio import plugin_slugs
 from app.workspace.service import service
-from test_service import FakeOrg
-from app.band.listener import BandIdentity
+from helpers import FakeOrg
+from app.band.platform import BandIdentity
 
 
 def test_create_edit_and_delete_agent_identity_without_preset_or_implicit_membership(monkeypatch):

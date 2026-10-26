@@ -10,24 +10,13 @@ from app.auth import encrypt_secret
 from app.main import app
 from app.persistence.models import AgentProfile, AgentTask, ChannelMember, Message, User, db
 from app.workspace.service import service
-
-
-def _signup(client: TestClient, username: str, name: str) -> dict:
-    response = client.post("/api/auth/signup", json={
-        "username": username, "display_name": name, "password": "secret123", "band_api_key": f"band_a_signup-{username}",
-    })
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def _auth(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}"}
+from helpers import bearer, signup
 
 
 def test_retry_returns_the_original_message_and_one_task():
     with TestClient(app) as client:
-        alice = _signup(client, "retry-alice", "Retry Alice")
-        auth = _auth(alice["token"])
+        alice = signup(client, "retry-alice", "Retry Alice")
+        auth = bearer(alice["token"])
         channel = client.post("/api/channels", json={"name": "retry-room"}, headers=auth).json()
         with db() as session:
             agent = AgentProfile(name="QuillRetry", handle="quill-retry", band_agent_id="agent-quill-retry",
@@ -67,9 +56,9 @@ def test_retry_returns_the_original_message_and_one_task():
 
 def test_same_client_id_cannot_read_someone_elses_message_or_skip_membership():
     with TestClient(app) as client:
-        alice = _signup(client, "scope-alice", "Scope Alice")
-        bob = _signup(client, "scope-bob", "Scope Bob")
-        auth_a, auth_b = _auth(alice["token"]), _auth(bob["token"])
+        alice = signup(client, "scope-alice", "Scope Alice")
+        bob = signup(client, "scope-bob", "Scope Bob")
+        auth_a, auth_b = bearer(alice["token"]), bearer(bob["token"])
         client.post("/api/people/requests", json={"handle": "scope-bob"}, headers=auth_a)
         request_id = client.get("/api/people", headers=auth_b).json()["requests"][0]["id"]
         assert client.post(f"/api/people/requests/{request_id}/decision", json={"accept": True}, headers=auth_b).status_code == 200
@@ -123,8 +112,8 @@ def test_same_client_id_cannot_read_someone_elses_message_or_skip_membership():
 
 def test_message_events_carry_a_cursor_the_snapshot_has_passed():
     with TestClient(app) as client:
-        alice = _signup(client, "cursor-alice", "Cursor Alice")
-        auth = _auth(alice["token"])
+        alice = signup(client, "cursor-alice", "Cursor Alice")
+        auth = bearer(alice["token"])
         channel = client.post("/api/channels", json={"name": "cursor-room"}, headers=auth).json()
         with client.websocket_connect(f"/ws?token={alice['token']}") as ws:
             posted = client.post(f"/api/channels/{channel['id']}/messages",
@@ -141,8 +130,8 @@ def test_message_events_carry_a_cursor_the_snapshot_has_passed():
 
 def test_concurrent_retries_create_one_message():
     with TestClient(app) as client:
-        alice = _signup(client, "race-alice", "Race Alice")
-        channel = client.post("/api/channels", json={"name": "race-room"}, headers=_auth(alice["token"])).json()
+        alice = signup(client, "race-alice", "Race Alice")
+        channel = client.post("/api/channels", json={"name": "race-room"}, headers=bearer(alice["token"])).json()
         with db() as session:
             user = session.get(User, alice["user"]["id"])
 

@@ -17,7 +17,7 @@ from app.runtime.tools import tools_for
 from app.runtime.tools.generative import FormDefinition, ShowView
 from app.workspace.generative import UIError, submit, validate_values
 from app.workspace.service import service
-from test_tasks import ScriptedModel, job, run_attempt  # noqa: F401
+from helpers import ScriptedModel, run_attempt
 
 FORM = {
     "title": "Plan the next release",

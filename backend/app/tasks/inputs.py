@@ -10,7 +10,7 @@ from sqlmodel import select
 from app.persistence.models import (AgentProfile, AgentTask, ComponentResponse, Message, MessageComponent,
                                     TaskApproval, TaskInput, utcnow)
 from app.runtime.ui import validate_answer, validate_ui
-from app.workspace.audit import record, record_agent
+from app.workspace.audit import record_agent, record_human
 
 
 def pending_inputs(session, task_id: str) -> bool:
@@ -110,7 +110,7 @@ def answer_input(session, channel_id: int, component_id: int, user, values: dict
     session.add_all([request, response])
     session.flush()
     requeue_if_ready(session, task.id)
-    record("input_answered", actor_type="human", actor_id=user.id, actor_name=user.display_name,
-           channel_id=channel_id, task_id=task.id, session=session, detail={"component_id": component_id})
+    record_human(user, "input_answered", channel_id=channel_id, task_id=task.id, session=session,
+                 component_id=component_id)
     session.commit()
     return component, response, True

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
-from datetime import timedelta, timezone
+from datetime import timedelta
 
 import bcrypt
 from cryptography.fernet import Fernet
@@ -12,7 +12,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlmodel import Session, select
 
 from app.config import settings
-from app.persistence.models import AuthSession, User, get_session, utcnow
+from app.persistence.models import AuthSession, User, as_utc, db, get_session, utcnow
 
 TOKEN_MAX_AGE = 60 * 60 * 24 * 30
 _PASSWORD_HASH_PREFIX = "bcrypt-sha256$"
@@ -30,10 +30,6 @@ def require_production_secret() -> None:
         raise SystemExit("Refusing to start: APP_SECRET is missing or unsafe for production.")
     if settings.recovery_delivery == "memory":
         raise SystemExit("Refusing to start: recovery email cannot use memory delivery in production.")
-
-
-def _aware(value):
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def hash_password(password: str) -> str:
@@ -59,10 +55,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def issue_token(user_id: int) -> str:
     """Create a server-side session and return the browser token that names it."""
-    from app.persistence.migrate import upgrade_database
-    upgrade_database()
     session_id = secrets.token_urlsafe(18)
-    from app.persistence.models import db
     with db() as session:
         session.add(AuthSession(id=session_id, user_id=user_id, expires_at=utcnow() + timedelta(seconds=TOKEN_MAX_AGE)))
         session.commit()
@@ -95,13 +88,12 @@ def authenticate(token: str, session: Session) -> tuple[User, str] | None:
     row = session.get(AuthSession, sid)
     if user is None or row is None or row.user_id != user.id or row.revoked_at is not None:
         return None
-    if _aware(row.expires_at) <= utcnow():
+    if as_utc(row.expires_at) <= utcnow():
         return None
     return user, sid
 
 
 def revoke_session(session_id: str) -> None:
-    from app.persistence.models import db
     with db() as session:
         row = session.get(AuthSession, session_id)
         if row and row.revoked_at is None:
@@ -111,7 +103,6 @@ def revoke_session(session_id: str) -> None:
 
 
 def revoke_user_sessions(user_id: int) -> None:
-    from app.persistence.models import db
     with db() as session:
         rows = session.exec(select(AuthSession).where(AuthSession.user_id == user_id, AuthSession.revoked_at == None)).all()  # noqa: E711
         now = utcnow()
@@ -129,23 +120,23 @@ def decrypt_secret(value: str) -> str:
     return _fernet.decrypt(value.encode()).decode()
 
 
-def current_user(
-    authorization: str = Header(default=""),
-    session: Session = Depends(get_session),
-) -> User:
+def _principal(authorization: str, session: Session) -> tuple[User, str]:
     token = authorization.removeprefix("Bearer ").strip()
     principal = authenticate(token, session) if token else None
     if principal is None:
         raise HTTPException(status_code=401, detail="Not signed in")
-    return principal[0]
+    return principal
+
+
+def current_user(
+    authorization: str = Header(default=""),
+    session: Session = Depends(get_session),
+) -> User:
+    return _principal(authorization, session)[0]
 
 
 def current_session_id(
     authorization: str = Header(default=""),
     session: Session = Depends(get_session),
 ) -> str:
-    token = authorization.removeprefix("Bearer ").strip()
-    principal = authenticate(token, session) if token else None
-    if principal is None:
-        raise HTTPException(status_code=401, detail="Not signed in")
-    return principal[1]
+    return _principal(authorization, session)[1]

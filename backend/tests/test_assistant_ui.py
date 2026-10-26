@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from pydantic import Field
 from sqlmodel import select
 
 from app.auth import issue_token
@@ -18,7 +17,7 @@ from app.persistence.models import (AgentTask, Channel, ChannelMember, Component
 from app.runtime.ui import CATALOG, validate_answer, validate_ui
 from app.tasks import approval_decisions, decide_approval, enqueue, recover_tasks
 from app.tasks.worker import run_queue
-from test_tasks import ScriptedModel, approval_call, job, run_attempt  # noqa: F401
+from helpers import RecordingModel, ScriptedModel, approval_call, run_attempt
 
 UI = {"_type": "Col", "gap": 4, "children": [
     {"_type": "Text", "value": "A few details will help me make the plan."},
@@ -49,14 +48,6 @@ def answer(client, task, component, user, **changes):
                        headers={"Authorization": f"Bearer {issue_token(user.id)}"},
                        json={"values": {"scope": "small", "budget": "1500.5", "work": ["docs"]},
                              "steering": "Draft only. Keep the plan under one week.", **changes})
-
-
-class RecordingModel(ScriptedModel):
-    seen: list = Field(default_factory=list)
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        self.seen.append(messages)
-        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
 def test_input_interrupt_resumes_same_graph_after_restart_and_can_ask_again(tmp_path, job):
@@ -226,10 +217,10 @@ def test_input_response_rollback_and_shared_winner_are_atomic(tmp_path, job, mon
     task, _, user = job
     assert run_attempt(tmp_path, task, ScriptedModel(responses=[ask()])).status == "waiting"
     request, component = pending(task.id)
-    original_record = inputs.record
+    original_record = inputs.record_human
     def fail(*_args, **_kwargs):
         raise RuntimeError("simulated transaction failure")
-    monkeypatch.setattr(inputs, "record", fail)
+    monkeypatch.setattr(inputs, "record_human", fail)
     with pytest.raises(RuntimeError), db() as session:
         inputs.answer_input(session, task.channel_id, component.id, user, {"scope": "small"}, "draft only")
     with db() as session:
@@ -242,7 +233,7 @@ def test_input_response_rollback_and_shared_winner_are_atomic(tmp_path, job, mon
         session.flush()
         session.add(ChannelMember(channel_id=task.channel_id, member_type="human", member_id=other.id))
         session.commit()
-    monkeypatch.setattr(inputs, "record", original_record)
+    monkeypatch.setattr(inputs, "record_human", original_record)
     with TestClient(app) as client:
         assert answer(client, task, component, user).status_code == 200
         assert answer(client, task, component, other).status_code == 409

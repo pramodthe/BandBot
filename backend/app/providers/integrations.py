@@ -12,5 +12,6 @@ def selected_composio():
 
 def api_key():
     connection = selected_composio()
-    if connection is False: return ""
+    if connection is False:
+        return ""
     return connection.secret["api_key"] if connection else settings.composio_api_key

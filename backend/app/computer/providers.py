@@ -3,6 +3,9 @@ from app.config import settings
 from app.persistence.models import AgentProfile, ComputerScope, TaskComputerBinding, db
 
 
+TRANSFER_LIMIT = 25 * 1024 * 1024  # largest file copied to or from a computer
+
+
 class ComputerProviderError(RuntimeError):
     """Provider details must never reach user-visible errors."""
 

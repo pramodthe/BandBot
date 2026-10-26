@@ -10,12 +10,11 @@ from sqlalchemy import text
 from langchain_core.messages import HumanMessage
 from app.persistence.models import (db, Document, AgentTask, TaskModel, AgentProfile)
 from app.providers.models import (ProviderRevision, ProviderConnection, TaskServiceBinding, ProviderBlock,
-    DocumentProviderIndex, ProviderDocumentCollection, ServiceChange, ServiceSelection, ProviderOperation)
+    DocumentProviderIndex, ProviderDocumentCollection, ServiceChange, ServiceSelection)
 from app.providers.management import apply_selection, binding_hash
 from app.providers.contracts import ProviderError
-from test_provider_settings import provider_scope, connection, job
-from test_provider_contracts import admin_space
-from test_computer import desktop_job
+from helpers import connection, make_task
+
 
 def test_configuration_is_encrypted_at_rest_and_invalid_key_input_is_masked(admin_space):
     s = admin_space
@@ -39,10 +38,13 @@ def test_ambiguous_old_checkpoint_is_blocked_and_effective_claude_model_is_prese
         reference = connection(session, "anthropic", "claude-new-default")
         selection = session.get(ServiceSelection, "workspace")
         apply_selection(session, scope="workspace", expected_version=selection.version, bindings={"llm": reference})
-        task = job(session, provider_scope); session.commit()
+        task = make_task(session, provider_scope)
+        session.commit()
         session.delete(session.get(TaskServiceBinding, task.id))
         session.delete(session.get(TaskModel, task.id))
-        task.attempts = 2; session.add(task); session.commit()
+        task.attempts = 2
+        session.add(task)
+        session.commit()
     bootstrap()
     with db() as session:
         saved = session.get(TaskServiceBinding, task.id)
@@ -65,7 +67,8 @@ def test_provider_failure_keeps_binding_and_exposes_safe_needs_connection(provid
         reference = connection(session)
         selection = session.get(ServiceSelection, "workspace")
         apply_selection(session, scope="workspace", expected_version=selection.version, bindings={"llm": reference})
-        task = job(session, provider_scope); session.commit()
+        task = make_task(session, provider_scope)
+        session.commit()
         before = deepcopy(session.get(TaskServiceBinding, task.id).bindings)
     error_type = type("SDKError", (Exception,), {"__module__": "anthropic", "status_code": status})
     async def fail(*args): raise error_type("Authorization: Bearer private-upstream-secret")
@@ -81,16 +84,22 @@ def test_cancelled_model_dispatch_is_uncertain_and_cannot_be_repeated(provider_s
     from app.providers.model_dispatch import DurableModel
     with db() as session:
         reference = connection(session)
-        task = job(session, provider_scope); session.commit()
+        task = make_task(session, provider_scope)
+        session.commit()
     async def scenario():
         entered = asyncio.Event()
-        async def wait(*a, **kw): entered.set(); await asyncio.Event().wait()
+        async def wait(*a, **kw):
+            entered.set()
+            await asyncio.Event().wait()
         inner = NS(ainvoke=AsyncMock(side_effect=wait))
         model = DurableModel(inner=inner, binding=reference, task_id=task.id)
         call = asyncio.create_task(model.ainvoke([HumanMessage(content="Request")]))
-        await entered.wait(); call.cancel()
-        with pytest.raises(asyncio.CancelledError): await call
-        with pytest.raises(ProviderError, match="interrupted"): await model.ainvoke([HumanMessage(content="Request")])
+        await entered.wait()
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        with pytest.raises(ProviderError, match="interrupted"):
+            await model.ainvoke([HumanMessage(content="Request")])
         assert inner.ainvoke.await_count == 1
     asyncio.run(scenario())
 
@@ -104,10 +113,13 @@ def test_reindex_does_not_overwrite_an_administrator_change(provider_scope, monk
         document = Document(id=uuid4().hex, channel_id=provider_scope[1].id, uploaded_by=1, name="index.txt", media_type="text/plain", size=4,
             status="ready", units=[{"location": "Line 1", "text": "Test"}])
         change = ServiceChange(id=uuid4().hex, expected_version=selection.version, bindings={"retrieval": retrieval_binding})
-        session.add_all([document, change]); session.commit()
+        session.add_all([document, change])
+        session.commit()
     async def scenario():
         entered, release = asyncio.Event(), asyncio.Event()
-        async def build(*a): entered.set(); await release.wait()
+        async def build(*a):
+            entered.set()
+            await release.wait()
         monkeypatch.setattr(retrieval, "index_document", build)
         operation = asyncio.create_task(retrieval.process_change())
         await entered.wait()
@@ -116,7 +128,8 @@ def test_reindex_does_not_overwrite_an_administrator_change(provider_scope, monk
             assert selection.bindings == before
             apply_selection(session, scope="workspace", expected_version=selection.version, bindings={"llm": reference})
             session.commit()
-        release.set(); await operation
+        release.set()
+        await operation
     asyncio.run(scenario())
     with db() as session:
         assert session.get(ServiceChange, change.id).status == "failed"
@@ -127,7 +140,8 @@ def test_document_cleanup_uses_each_original_account_after_switch(provider_scope
     from app.providers import retrieval, openai_resources
     from app.providers.connections import resolve
     with db() as session:
-        first = connection(session); second = connection(session)
+        first = connection(session)
+        second = connection(session)
         owners = [{k:v for k,v in b.items() if k != "model"} for b in (first, second)]
         document = Document(id=uuid4().hex, channel_id=provider_scope[1].id, uploaded_by=1, name="delete.txt", media_type="text/plain", size=4, status="deleting")
         session.add(document)
@@ -144,7 +158,9 @@ def test_document_cleanup_uses_each_original_account_after_switch(provider_scope
         async def delete_store(identity): actions.append((owner.id, "store", identity))
         yield NS(files=NS(delete=delete_file), vector_stores=NS(delete=delete_store))
     monkeypatch.setattr(documents, "client", client)
-    path = documents.path_for(document); path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(b"Test")
+    path = documents.path_for(document)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"Test")
     asyncio.run(retrieval.delete_resources(document))
     assert len(actions) == 6
     for number, owner in enumerate(owners):
@@ -160,7 +176,7 @@ def test_portable_document_calculation_starts_computer_and_saves_durable_export(
     from app.computer import TaskComputer
     from app.persistence.models import ChannelMember
     from app.providers.management import create_connection
-    from test_tasks import ScriptedModel
+    from helpers import ScriptedModel
     from langchain_core.messages import AIMessage
     original, agent, user, _, client, sandbox = desktop_job
     with db() as session:
@@ -168,15 +184,19 @@ def test_portable_document_calculation_starts_computer_and_saves_durable_export(
         computer_connection = create_connection(session, provider="e2b", label="Calculation computer", key="offline", config={}, user_id=1)
         computer_binding = {"connection_id": computer_connection.id, "revision": 1, "provider": "e2b"}
         revision = session.get(ProviderRevision, (computer_connection.id, 1))
-        revision.verification = {"passed": True, "pause_resume": True}; session.add(revision)
+        revision.verification = {"passed": True, "pause_resume": True}
+        session.add(revision)
         selection = session.get(ServiceSelection, "workspace")
         apply_selection(session, scope="workspace", expected_version=selection.version, bindings={"llm": reference, "computer": computer_binding, "document_analysis": reference})
         session.add(ChannelMember(channel_id=original.channel_id, member_type="agent", member_id=agent.id))
-        task = job(session, (agent, NS(id=original.channel_id)))
+        task = make_task(session, (agent, NS(id=original.channel_id)))
         document = Document(id=uuid4().hex, channel_id=original.channel_id, uploaded_by=user.id, name="source.csv", media_type="text/csv", size=12, status="ready",
             units=[{"location": "Rows 1–3", "text": "amount,2,2"}])
-        session.add(document); session.commit()
-    source = documents.path_for(document); source.parent.mkdir(parents=True, exist_ok=True); source.write_bytes(b"amount\n2\n2\n")
+        session.add(document)
+        session.commit()
+    source = documents.path_for(document)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"amount\n2\n2\n")
     model = ScriptedModel(responses=[AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": "print(2 + 2)"}, "id": "calculate"}]),
         AIMessage(content="", tool_calls=[{"name": "save_analysis_file", "args": {"path": "/home/user/result.csv"}, "id": "export"}]), AIMessage(content="The total is 4.")])
     monkeypatch.setattr(analysis, "for_binding", lambda *a: model)
@@ -201,7 +221,9 @@ def test_billable_research_replays_completed_requests_and_blocks_uncertain_retry
     from app.providers import research
     from app.providers.context import task_services
     from app.providers.contracts import ResolvedConnection
-    with db() as session: task = job(session, provider_scope); session.commit()
+    with db() as session:
+        task = make_task(session, provider_scope)
+        session.commit()
     upstream = AsyncMock(side_effect=[{"results": []}, ProviderError("research")])
     monkeypatch.setattr(research, "_request", upstream)
     connection = ResolvedConnection("offline-research", 1, "tavily", {}, {"api_key": "offline"})
@@ -210,8 +232,10 @@ def test_billable_research_replays_completed_requests_and_blocks_uncertain_retry
             assert await research.search(connection, "first") == {"results": []}
             assert await research.search(connection, "first") == {"results": []}
             assert upstream.await_count == 1
-            with pytest.raises(ProviderError): await research.search(connection, "second")
-            with pytest.raises(ProviderError, match="previous service request"): await research.search(connection, "second")
+            with pytest.raises(ProviderError):
+                await research.search(connection, "second")
+            with pytest.raises(ProviderError, match="previous service request"):
+                await research.search(connection, "second")
             assert upstream.await_count == 2
     asyncio.run(scenario())
 
@@ -224,18 +248,22 @@ def test_switching_computer_connections_preserves_original_vm_and_disk(provider_
         bindings = []
         for provider in (original_provider, destination_provider):
             row = create_connection(session, provider=provider, label="Separate computer account", key="offline", config={"image": "offline", "sharing": "workspace"} if provider == "tenki" else {}, user_id=1)
-            revision = session.get(ProviderRevision, (row.id, 1)); revision.verification = {"passed": True, "pause_resume": True}; session.add(revision)
+            revision = session.get(ProviderRevision, (row.id, 1))
+            revision.verification = {"passed": True, "pause_resume": True}
+            session.add(revision)
             bindings.append({"connection_id": row.id, "revision": 1, "provider": provider})
         selection = session.get(ServiceSelection, "workspace")
         apply_selection(session, scope="workspace", expected_version=selection.version, bindings={"computer": bindings[0]})
-        original = job(session, provider_scope); session.commit()
+        original = make_task(session, provider_scope)
+        session.commit()
         binding = session.get(TaskComputerBinding, original.id)
         original_key = binding.computer_key
         session.add(TaskSandbox(task_id=original_key, name="Original computer-" + original.id, sandbox_id="vm-original", status="stopped"))
         session.add(ComputerDisk(key="test-disk-" + original.id, name="original-owned-disk-" + original.id, volume_id="vol-original", state="ready"))
         session.refresh(selection)
         apply_selection(session, scope="workspace", expected_version=selection.version, bindings={"computer": bindings[1]})
-        destination = job(session, provider_scope); session.commit()
+        destination = make_task(session, provider_scope)
+        session.commit()
         assert session.get(TaskComputerBinding, destination.id).computer_key != original_key
         assert session.get(TaskComputerBinding, original.id).computer_key == original_key
         assert session.get(TaskServiceBinding, original.id).bindings["computer"] == bindings[0]
@@ -246,10 +274,12 @@ def test_reused_agent_row_cannot_resume_another_teammates_saved_task(provider_sc
     from app.tasks.worker import execute
     agent, _ = provider_scope
     with db() as session:
-        task = job(session, provider_scope); session.commit()
+        task = make_task(session, provider_scope)
+        session.commit()
         current = session.get(AgentProfile, agent.id)
         current.band_agent_id = "replacement-" + uuid4().hex
-        session.add(current); session.commit()
+        session.add(current)
+        session.commit()
     def forbidden(*a, **kw): pytest.fail("A replaced identity reached the agent harness")
     with pytest.raises(ProviderError, match="removed teammate"):
         asyncio.run(execute(task, None, factory=forbidden))
@@ -261,7 +291,8 @@ def test_removed_agents_overrides_clear_without_resetting_revisions_or_workspace
         reference = connection(session)
         apply_selection(session, scope=f"agent:{agent.id}", expected_version=0, bindings={"llm": reference})
         original = deepcopy(session.get(ServiceSelection, "workspace").bindings)
-        clear_agent_overrides(session, agent); session.commit()
+        clear_agent_overrides(session, agent)
+        session.commit()
         cleared = session.get(ServiceSelection, f"agent:{agent.id}")
         assert cleared.bindings == {} and cleared.version == 2
         assert session.get(ServiceSelection, "workspace").bindings == original
@@ -278,13 +309,15 @@ def test_queued_upload_prepares_active_index_without_changing_saved_binding(prov
         for label in ("Original retrieval", "Replacement retrieval"):
             row = create_connection(session, provider="local", label=label, key="", config={}, user_id=1)
             revision = session.get(ProviderRevision, (row.id, 1))
-            revision.verification = {"passed": True}; session.add(revision)
+            revision.verification = {"passed": True}
+            session.add(revision)
             bindings.append({"connection_id": row.id, "revision": 1, "provider": "local"})
         workspace = session.get(ServiceSelection, "workspace")
         apply_selection(session, scope="workspace", expected_version=workspace.version, bindings={"retrieval": bindings[0]})
         document = Document(id=uuid4().hex, channel_id=provider_scope[1].id, uploaded_by=1, name="queued.txt",
             media_type="text/plain", size=5, status="queued", units=[{"location": "Line 1", "text": "hello"}])
-        session.add(document); session.commit()
+        session.add(document)
+        session.commit()
         session.refresh(workspace)
         apply_selection(session, scope="workspace", expected_version=workspace.version, bindings={"retrieval": bindings[1]})
         session.commit()

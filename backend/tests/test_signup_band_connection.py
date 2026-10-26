@@ -6,7 +6,7 @@ from sqlmodel import select
 
 import app.band.connections as connections
 from app.auth import decrypt_secret
-from app.band.listener import BandIdentity
+from app.band.platform import BandIdentity
 from app.main import app
 from app.persistence.models import AgentProfile, User, UserBandAccount, UserBandConnection, db, init_db
 
@@ -33,7 +33,8 @@ def test_signup_redacts_invalid_optional_credentials(key):
     assert result.status_code == 422
     assert result.json()['field'] == 'band_api_key'
     assert body['password'] not in result.text
-    if key: assert key not in result.text
+    if key:
+        assert key not in result.text
     assert not user_exists(body['username'])
 
 
@@ -150,6 +151,7 @@ def test_platform_client_uses_the_requesting_accounts_credential(monkeypatch):
     monkeypatch.setattr(connections, 'AsyncRestClient', Client)
     monkeypatch.setattr(connections, 'aclose_rest_client', close)
     async def use():
-        async with connections.platform_client(result['user']['id']): pass
+        async with connections.platform_client(result['user']['id']):
+            pass
     asyncio.run(use())
     assert seen == [key, 'closed']

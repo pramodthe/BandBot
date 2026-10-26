@@ -9,18 +9,16 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import select
 
 from app.auth import issue_token
-from app.computer import ComputerUnavailable, TaskComputer, sandbox_record, take_control
-from app.computer.identity import selected_key
+from app.computer import ComputerUnavailable, TaskComputer, take_control
 from app.computer.providers import ComputerMissing
 from app.config import settings
 from app.main import app
 from app.persistence.models import (AgentProfile, AgentTask, BandAgentOwner, Channel, ChannelMember,
-    ComputerPublishApproval, DirectMessage, Message, TaskApproval, TaskComputerBinding, TaskPrincipal, User, UserDesktop, db)
+    DirectMessage, Message, TaskComputerBinding, TaskPrincipal, User, db)
 from app.tasks.queue import await_approval, hand_off
-from test_service import svc  # noqa: F401
+
 
 
 class Remote:
@@ -95,12 +93,16 @@ def crew(svc, monkeypatch):  # noqa: F811
         selected.bindings = {**selected.bindings, "computer": {"legacy": True}}
         session.add(selected)
         users = [User(username=name, display_name=name, password_hash="unused") for name in ("alice", "bob")]
-        session.add_all(users); session.flush()
+        session.add_all(users)
+        session.flush()
         agents = [AgentProfile(name=name, band_agent_id=uuid4().hex, band_api_key_enc="") for name in ("A1", "A2", "B1")]
-        session.add_all(agents); session.flush()
+        session.add_all(agents)
+        session.flush()
         for agent, user in zip(agents, (users[0], users[0], users[1])):
             session.add(BandAgentOwner(agent_id=agent.id, user_id=user.id, band_user_id=""))
-        group = Channel(name="shared"); session.add(group); session.flush()
+        group = Channel(name="shared")
+        session.add(group)
+        session.flush()
         for user in users:
             session.add(ChannelMember(channel_id=group.id, member_type="human", member_id=user.id))
         for agent in agents:
@@ -111,17 +113,21 @@ def crew(svc, monkeypatch):  # noqa: F811
     def task(agent, requester, channel_id=None):
         with db() as session:
             if channel_id is None:
-                channel = Channel(name=uuid4().hex); session.add(channel); session.flush()
+                channel = Channel(name=uuid4().hex)
+                session.add(channel)
+                session.flush()
                 session.add_all([DirectMessage(channel_id=channel.id, user_id=requester.id, agent_id=agent.id),
                     ChannelMember(channel_id=channel.id, member_type="human", member_id=requester.id),
                     ChannelMember(channel_id=channel.id, member_type="agent", member_id=agent.id)])
                 channel_id = channel.id
             message = Message(channel_id=channel_id, author_type="human", author_id=requester.id,
                               author_name=requester.display_name, content="Use the computer")
-            session.add(message); session.flush()
+            session.add(message)
+            session.flush()
             task = AgentTask(id=uuid4().hex, source_key=f"{agent.id}::app-message-{message.id}",
                              agent_id=agent.id, channel_id=channel_id, room_id="", prompt="Use the computer")
-            session.add(task); session.commit()
+            session.add(task)
+            session.commit()
             return task
     return SimpleNamespace(users=users, agents=agents, group=group, client=client, task=task, config=config)
 
@@ -152,7 +158,8 @@ def test_user_agents_share_host_files_but_not_screens_and_other_user_is_separate
         await cb.action(screen_id=frame_b, action="click", x=1, y=1)
         assert cb.sandbox.host.inputs[-1][0] == cb.sandbox.number
         assert not cc.sandbox.host.inputs
-        for computer in (ca, cb, cc): await computer.detach()
+        for computer in (ca, cb, cc):
+            await computer.detach()
     asyncio.run(scenario())
 
 
@@ -165,11 +172,16 @@ def test_same_agent_reuses_desktop_across_private_and_group_channels(crew):
 
 def test_takeover_is_per_desktop_and_finishing_agent_cannot_pause_sibling(crew):
     a = controller(crew, crew.task(crew.agents[0], crew.users[0]))
-    b_task = crew.task(crew.agents[1], crew.users[0]); b = controller(crew, b_task)
+    b_task = crew.task(crew.agents[1], crew.users[0])
+    b = controller(crew, b_task)
     async def scenario():
-        await a.screenshot(); await b.screenshot()
+        await a.screenshot()
+        await b.screenshot()
         with db() as session:
-            task = session.get(AgentTask, b_task.id); task.status = "running"; session.add(task); session.commit()
+            task = session.get(AgentTask, b_task.id)
+            task.status = "running"
+            session.add(task)
+            session.commit()
         await a.close()
         assert all(host.pauses == 0 for host in crew.client.hosts.values())
         take_control(a.key, user_id=crew.users[0].id, user_name="Alice")
@@ -209,7 +221,10 @@ def test_cross_user_computer_endpoints_and_export_approval_are_denied(crew):
         assert client.post(f"/api/tasks/{task.id}/computer/live", json={"control": True}, headers=auth_b).status_code == 403
         assert client.get(f"/api/channels/{crew.group.id}/computers", headers=auth_a).json() == []
         with db() as session:
-            row = session.get(AgentTask, task.id); row.status = "running"; session.add(row); session.commit()
+            row = session.get(AgentTask, task.id)
+            row.status = "running"
+            session.add(row)
+            session.commit()
         await_approval(task, [("private-export", {"kind": "private_computer_export", "action": "Publish file"})])
         assert client.post("/api/approvals/private-export", json={"approve": True}, headers=auth_b).status_code == 403
         assert client.post("/api/approvals/private-export", json={"approve": True}, headers=auth_a).status_code == 200
@@ -271,7 +286,8 @@ def test_new_defaults_and_desktop_ports_are_bounded(crew):
     assert "Xvfb :2" in script and "-display :2" in script and "-viewonly" in script
     assert profile_root("desktop-one") != profile_root("desktop-two")
     assert ports(1) != ports(2)
-    with pytest.raises(ValueError): setup_script(0, "invalid")
+    with pytest.raises(ValueError):
+        setup_script(0, "invalid")
 
 
 def test_private_computer_workflow_approval_requires_owner(crew):
@@ -279,7 +295,8 @@ def test_private_computer_workflow_approval_requires_owner(crew):
     with db() as session:
         row = session.get(AgentTask, task.id)
         row.status = "running"
-        session.add(row); session.commit()
+        session.add(row)
+        session.commit()
     await_approval(task, [("owner-browser-action", {"action": "Submit a form in the owner's browser"})])
     with TestClient(app) as client:
         for user, expected in ((crew.users[1], 403), (crew.users[0], 200)):
@@ -294,7 +311,8 @@ def test_private_computer_workflow_input_requires_owner(crew):
     with db() as session:
         row = session.get(AgentTask, task.id)
         row.status = "running"
-        session.add(row); session.commit()
+        session.add(row)
+        session.commit()
     await_approval(task, [("owner-input", {"kind": "user_input", "tool_call_id": "choose-scope", "props": {
         "title": "Choose the work", "ui": {"_type": "Input", "name": "scope", "label": "Scope"},
         "required": ["scope"]}})])

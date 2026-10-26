@@ -22,10 +22,8 @@ from app.providers.management import create_connection
 from app.providers.bindings import bindings_for
 from app.providers.contracts import ProviderError
 from app.tasks.usage import BudgetExceeded
-from test_documents import space  # noqa: F401
-from test_tasks import ScriptedModel, run_attempt
 
-
+from helpers import ScriptedModel, run_attempt
 @pytest.fixture
 def image_provider(space, monkeypatch):
     import app.providers.images as module
@@ -137,7 +135,8 @@ def test_disabled_image_service_and_budget_prevent_paid_calls(space, image_provi
         snapshot = session.get(TaskServiceBinding, space.task.id)
         original = snapshot.bindings
         snapshot.bindings = {**original, "images": {"disabled": True}}
-        session.add(snapshot); session.commit()
+        session.add(snapshot)
+        session.commit()
     with pytest.raises(ProviderError):
         invoke(space.task)
     with db() as session:
@@ -191,7 +190,8 @@ def test_image_loading_lifecycle_is_scoped_and_published_reply_removes_activity(
     with db() as session:
         task = session.get(AgentTask, space.task.id)
         task.status = "running"
-        session.add(task); session.commit()
+        session.add(task)
+        session.commit()
     url = f"/api/channels/{space.channel.id}/image-generations"
     response = sdk.images.generate.return_value
     async def pending(*_args, **_kwargs):
@@ -212,7 +212,8 @@ def test_image_loading_lifecycle_is_scoped_and_published_reply_removes_activity(
     with db() as session:
         task = session.get(AgentTask, space.task.id)
         task.reply_message_id = 123456
-        session.add(task); session.commit()
+        session.add(task)
+        session.commit()
     assert space.api.get(url, headers=space.auth).json() == []
 
 
@@ -229,8 +230,12 @@ def test_loading_stops_on_failure_pause_cancel_and_private_scope(space, image_pr
     for task_status, receipt_status, expected in [("running", "failed", "error"), ("waiting", "pending", "error"),
                                                  ("cancelled", "pending", None), ("failed", "pending", None)]:
         with db() as session:
-            task = session.get(AgentTask, space.task.id); task.status = task_status; session.add(task)
-            receipt = session.get(ImageGeneration, "loading-test"); receipt.status = receipt_status; session.add(receipt)
+            task = session.get(AgentTask, space.task.id)
+            task.status = task_status
+            session.add(task)
+            receipt = session.get(ImageGeneration, "loading-test")
+            receipt.status = receipt_status
+            session.add(receipt)
             session.commit()
         rows = space.api.get(url, headers=space.auth).json()
         assert (rows[0]["status"] if rows else None) == expected
@@ -266,7 +271,8 @@ def test_cancelled_task_cannot_publish_or_start_an_image(space, image_provider):
     with db() as session:
         task = session.get(AgentTask, space.task.id)
         task.cancel_requested = True
-        session.add(task); session.commit()
+        session.add(task)
+        session.commit()
     with pytest.raises(ProviderError):
         invoke(space.task)
     sdk.images.generate.assert_not_awaited()
